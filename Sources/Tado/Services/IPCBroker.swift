@@ -9,6 +9,7 @@ final class IPCBroker {
     private var fileDescriptors: [UUID: Int32] = [:]
     private var externalWatcher: DispatchSourceFileSystemObject?
     private var externalFd: Int32?
+    private var externalPollTimer: Timer?
     private weak var terminalManager: TerminalManager?
     private var processedFiles: Set<String> = []
 
@@ -211,12 +212,18 @@ final class IPCBroker {
           exit 1
         fi
 
-        RESOLVED=$(python3 - "$TARGET" "$TADO_IPC_ROOT/registry.json" "$TADO_SESSION_ID" <<'PYEOF'
+        # Fall back to stable symlink when env vars are missing
+        # (Codex CLI may strip custom env vars from subprocesses)
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SESSION_NAME="${TADO_SESSION_NAME:-unknown}"
+
+        RESOLVED=$(python3 - "$TARGET" "$IPC_ROOT/registry.json" "$SESSION_ID" <<'PYEOF'
         import json, sys
         target, registry, self_id = sys.argv[1], sys.argv[2], sys.argv[3].lower()
         with open(registry) as f:
             entries = json.load(f)
-        others = [e for e in entries if e['sessionID'].lower() != self_id]
+        others = [e for e in entries if e['sessionID'].lower() != self_id] if self_id else entries
         t = target.lower()
         # Try exact UUID
         if len(t) == 36:
@@ -249,21 +256,42 @@ final class IPCBroker {
         export TADO_MSGID=$(uuidgen | tr '[:upper:]' '[:lower:]')
         export TADO_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-        python3 - "$MESSAGE" "$RESOLVED" <<'PYEOF'
-        import json, sys, os
+        # If we have a session ID, write to our outbox; otherwise use a2a-inbox
+        if [ -n "$SESSION_ID" ]; then
+          python3 - "$MESSAGE" "$RESOLVED" "$IPC_ROOT" "$SESSION_ID" "$SESSION_NAME" <<'PYEOF'
+        import json, sys, os, uuid
         msg = {
             'id': os.environ['TADO_MSGID'],
-            'from': os.environ['TADO_SESSION_ID'],
-            'fromName': os.environ.get('TADO_SESSION_NAME', 'unknown'),
+            'from': sys.argv[4],
+            'fromName': sys.argv[5],
             'to': sys.argv[2],
             'timestamp': os.environ['TADO_TIMESTAMP'],
             'body': sys.argv[1],
             'status': 'pending'
         }
-        outbox = os.path.join(os.environ['TADO_IPC_ROOT'], 'sessions', os.environ['TADO_SESSION_ID'], 'outbox')
+        outbox = os.path.join(sys.argv[3], 'sessions', sys.argv[4], 'outbox')
         with open(os.path.join(outbox, os.environ['TADO_MSGID'] + '.msg'), 'w') as f:
             json.dump(msg, f, indent=2)
         PYEOF
+        else
+          # No session ID — fall back to external a2a-inbox
+          python3 - "$MESSAGE" "$RESOLVED" "$IPC_ROOT/a2a-inbox" <<'PYEOF'
+        import json, sys, os, uuid
+        from datetime import datetime, timezone
+        msg_id = str(uuid.uuid4())
+        msg = {
+            'id': msg_id,
+            'from': '00000000-0000-0000-0000-000000000000',
+            'fromName': 'external',
+            'to': sys.argv[2],
+            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'body': sys.argv[1],
+            'status': 'pending'
+        }
+        with open(os.path.join(sys.argv[3], msg_id + '.msg'), 'w') as f:
+            json.dump(msg, f, indent=2)
+        PYEOF
+        fi
 
         echo "Message sent to $RESOLVED"
         """
@@ -374,6 +402,14 @@ final class IPCBroker {
         source.resume()
         externalWatcher = source
         externalFd = fd
+
+        // Polling fallback: DispatchSource can miss vnode events,
+        // so poll every 2 seconds to catch stranded messages
+        externalPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scanExternalInbox(at: externalInboxURL)
+            }
+        }
     }
 
     private func scanExternalInbox(at inboxURL: URL) {
@@ -721,6 +757,8 @@ final class IPCBroker {
     // MARK: - Cleanup
 
     func cleanup() {
+        externalPollTimer?.invalidate()
+        externalPollTimer = nil
         externalWatcher?.cancel()
         externalWatcher = nil
         externalFd = nil

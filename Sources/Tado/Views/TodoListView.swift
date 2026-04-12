@@ -9,13 +9,17 @@ struct TodoListView: View {
     @State private var inputText: String = ""
     @FocusState private var isInputFocused: Bool
 
+    private var activeTodos: [TodoItem] {
+        todos.filter { $0.listState == .active }
+    }
+
     private var isForwarding: Bool {
         appState.forwardTargetTodoID != nil
     }
 
     private var forwardTargetText: String? {
         guard let targetID = appState.forwardTargetTodoID else { return nil }
-        return todos.first(where: { $0.id == targetID })?.text
+        return activeTodos.first(where: { $0.id == targetID })?.text
     }
 
     var body: some View {
@@ -73,7 +77,7 @@ struct TodoListView: View {
             Divider()
 
             // Todo list
-            if todos.isEmpty {
+            if activeTodos.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Text("No todos yet")
@@ -87,7 +91,7 @@ struct TodoListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(todos) { todo in
+                        ForEach(activeTodos) { todo in
                             TodoRowView(todo: todo)
                             Divider().padding(.leading, 44)
                         }
@@ -116,39 +120,24 @@ struct TodoListView: View {
     }
 
     private func submitNewTodo(_ text: String) {
-        let index = todos.count
+        let index = nextAvailableGridIndex()
         let settings = fetchOrCreateSettings()
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
         let todo = TodoItem(text: text, gridIndex: index, canvasPosition: position)
         modelContext.insert(todo)
 
-        let session = terminalManager.spawnSession(
-            todoID: todo.id,
-            todoText: text,
-            canvasPosition: position,
-            gridIndex: index,
-            engine: settings.engine
-        )
-        todo.terminalSessionID = session.id
-        todo.status = .running
-
-        session.onStatusChange = { [weak todo] newStatus in
-            todo?.status = newStatus
-        }
-        session.onCwdChange = { [weak todo] dir in
-            todo?.cwd = dir
-        }
-        session.onLogFlush = { [weak todo] chunk in
-            guard let todo else { return }
-            todo.terminalLog.append(chunk)
-            if todo.terminalLog.count > TodoItem.maxLogSize {
-                todo.terminalLog.removeFirst(todo.terminalLog.count - TodoItem.maxLogSize)
-            }
-        }
+        terminalManager.spawnAndWire(todo: todo, engine: settings.engine)
 
         try? modelContext.save()
         inputText = ""
+    }
+
+    private func nextAvailableGridIndex() -> Int {
+        let usedIndices = Set(activeTodos.map(\.gridIndex))
+        var index = 0
+        while usedIndices.contains(index) { index += 1 }
+        return index
     }
 
     private func fetchOrCreateSettings() -> AppSettings {

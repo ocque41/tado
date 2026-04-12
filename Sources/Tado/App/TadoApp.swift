@@ -42,6 +42,17 @@ struct TadoApp: App {
                 }
                 .keyboardShortcut("b", modifiers: .command)
             }
+            CommandMenu("Lists") {
+                Button("Done List") {
+                    appState.showDoneList.toggle()
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
+                Button("Trash") {
+                    appState.showTrashList.toggle()
+                }
+                .keyboardShortcut("t", modifiers: .command)
+            }
         }
     }
 }

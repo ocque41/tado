@@ -4,10 +4,65 @@ import SwiftData
 
 class LoggingTerminalView: LocalProcessTerminalView {
     var onDataReceived: ((ArraySlice<UInt8>) -> Void)?
+    private var dropHighlightView: NSView?
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)
         onDataReceived?(slice)
+    }
+
+    // MARK: - File drag-and-drop
+
+    func setupDragAndDrop() {
+        registerForDraggedTypes([.fileURL])
+
+        let overlay = NSView(frame: bounds)
+        overlay.wantsLayer = true
+        overlay.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.15).cgColor
+        overlay.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.5).cgColor
+        overlay.layer?.borderWidth = 2
+        overlay.layer?.cornerRadius = 4
+        overlay.autoresizingMask = [.width, .height]
+        overlay.isHidden = true
+        addSubview(overlay)
+        dropHighlightView = overlay
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else {
+            return super.draggingEntered(sender)
+        }
+        dropHighlightView?.isHidden = false
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else {
+            return super.draggingUpdated(sender)
+        }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        dropHighlightView?.isHidden = true
+        super.draggingExited(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dropHighlightView?.isHidden = true
+
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              !urls.isEmpty else {
+            return false
+        }
+
+        let text = urls.map(\.path).joined(separator: " ")
+        send(txt: text)
+        return true
     }
 }
 
@@ -15,6 +70,8 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
     let session: TerminalSession
     let engine: TerminalEngine
     let ipcRoot: URL?
+    let modeFlags: [String]
+    let effortFlags: [String]
 
     func makeNSView(context: Context) -> LoggingTerminalView {
         let terminalView = LoggingTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
@@ -26,6 +83,7 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
         terminalView.nativeBackgroundColor = NSColor(red: 0.118, green: 0.118, blue: 0.180, alpha: 1.0)
         terminalView.nativeForegroundColor = NSColor(red: 0.804, green: 0.839, blue: 0.957, alpha: 1.0)
 
+        terminalView.setupDragAndDrop()
         terminalView.processDelegate = context.coordinator
         context.coordinator.terminalView = terminalView
 
@@ -33,7 +91,7 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
             session.terminalView = terminalView
         }
 
-        let (executable, args) = ProcessSpawner.command(for: session.todoText, engine: engine)
+        let (executable, args) = ProcessSpawner.command(for: session.todoText, engine: engine, modeFlags: modeFlags, effortFlags: effortFlags)
         let env: [String]
         if let ipcRoot = ipcRoot {
             env = ProcessSpawner.environment(

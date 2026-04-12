@@ -49,4 +49,29 @@ final class TerminalManager {
         session.enqueueOrSend(text)
     }
 
+    func spawnAndWire(todo: TodoItem, engine: TerminalEngine) {
+        let session = spawnSession(
+            todoID: todo.id,
+            todoText: todo.text,
+            canvasPosition: todo.canvasPosition,
+            gridIndex: todo.gridIndex,
+            engine: engine
+        )
+        todo.terminalSessionID = session.id
+        todo.status = .running
+
+        session.onStatusChange = { [weak todo] newStatus in
+            todo?.status = newStatus
+        }
+        session.onCwdChange = { [weak todo] dir in
+            todo?.cwd = dir
+        }
+        session.onLogFlush = { [weak todo] chunk in
+            guard let todo else { return }
+            todo.terminalLog.append(chunk)
+            if todo.terminalLog.count > TodoItem.maxLogSize {
+                todo.terminalLog.removeFirst(todo.terminalLog.count - TodoItem.maxLogSize)
+            }
+        }
+    }
 }

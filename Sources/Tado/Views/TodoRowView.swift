@@ -42,14 +42,23 @@ struct TodoRowView: View {
                 .help("Forward next prompt to this terminal")
             }
 
+            // Done button
+            Button(action: markDone) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Mark as done")
+
             // Trash button
-            Button(action: deleteTodo) {
+            Button(action: trashTodo) {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Delete todo and terminal")
+            .help("Move to trash")
 
             // Canvas coordinates link
             Button(action: navigateToTerminal) {
@@ -155,12 +164,23 @@ struct TodoRowView: View {
         }
     }
 
-    private func deleteTodo() {
+    private func markDone() {
         terminalManager.terminateSessionForTodo(todo.id)
         if appState.forwardTargetTodoID == todo.id {
             appState.forwardTargetTodoID = nil
         }
-        modelContext.delete(todo)
+        todo.listState = .done
+        todo.gridIndex = -1
+        try? modelContext.save()
+    }
+
+    private func trashTodo() {
+        terminalManager.terminateSessionForTodo(todo.id)
+        if appState.forwardTargetTodoID == todo.id {
+            appState.forwardTargetTodoID = nil
+        }
+        todo.listState = .trashed
+        todo.gridIndex = -1
         try? modelContext.save()
     }
 }

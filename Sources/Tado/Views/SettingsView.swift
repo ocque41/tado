@@ -49,6 +49,54 @@ struct SettingsView: View {
                     .pickerStyle(.radioGroup)
                 }
 
+                Section("Mode") {
+                    if settings.engine == .claude {
+                        Picker("Permission mode:", selection: Binding(
+                            get: { settings.claudeMode },
+                            set: { settings.claudeMode = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(ClaudeMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        Picker("Approval mode:", selection: Binding(
+                            get: { settings.codexMode },
+                            set: { settings.codexMode = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(CodexMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+
+                Section("Effort") {
+                    if settings.engine == .claude {
+                        Picker("Thinking effort:", selection: Binding(
+                            get: { settings.claudeEffort },
+                            set: { settings.claudeEffort = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(ClaudeEffort.allCases, id: \.self) { effort in
+                                Text(effort.displayName).tag(effort)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        Picker("Reasoning effort:", selection: Binding(
+                            get: { settings.codexEffort },
+                            set: { settings.codexEffort = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(CodexEffort.allCases, id: \.self) { effort in
+                                Text(effort.displayName).tag(effort)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+
                 Section("Canvas") {
                     Stepper(
                         "Grid columns: \(settings.gridColumns)",
@@ -64,12 +112,14 @@ struct SettingsView: View {
                     LabeledContent("Switch view", value: "Ctrl + Tab")
                     LabeledContent("Settings", value: "Cmd + M")
                     LabeledContent("Sidebar", value: "Cmd + B")
+                    LabeledContent("Done list", value: "Cmd + D")
+                    LabeledContent("Trash", value: "Cmd + T")
                     LabeledContent("Submit todo", value: "Enter")
                 }
             }
             .formStyle(.grouped)
             .padding(.horizontal, 10)
         }
-        .frame(width: 450, height: 380)
+        .frame(width: 450, height: 580)
     }
 }

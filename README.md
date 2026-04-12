@@ -16,11 +16,14 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 
 - **Todo-driven terminal spawning** -- one terminal per task, powered by the AI agent of your choice
 - **Pannable/zoomable canvas** -- drag, scroll, and zoom across all your running agents
+- **Resizable and moveable tiles** -- drag edges to resize, drag title bar to reposition
 - **Claude Code and Codex support** -- switch engines from Settings
+- **Mode and effort settings** -- configure permission mode and thinking/reasoning effort per engine
 - **Prompt queueing** -- queue follow-up prompts that auto-send when the agent goes idle
-- **Agent-to-agent IPC** -- agents can discover peers and send messages via `tado-send`, `tado-recv`, `tado-list`
+- **Agent-to-agent IPC** -- agents can discover peers, read output, and send messages via `tado-list`, `tado-read`, `tado-send`
 - **External CLI tools** -- message any Tado session from an outside terminal
 - **Forward mode** -- route your next typed input directly into a specific terminal
+- **Done and Trash lists** -- move completed or discarded todos out of the main list
 - **Activity detection** -- cursor monitoring detects when an agent is idle (5-second threshold)
 - **Persistent state** -- todos and settings survive restarts via SwiftData
 - **Session sidebar** -- live status indicators for all running sessions
@@ -59,6 +62,7 @@ Agents running inside Tado can communicate with each other:
 | Command | Description |
 |---------|-------------|
 | `tado-list` | List all peer sessions with their ID, engine, grid position, and status |
+| `tado-read <target> [--tail N] [--follow] [--raw]` | Read terminal output from a session |
 | `tado-send <target> <message>` | Send a message to another session (by name, grid coords like `1,1`, or UUID) |
 | `tado-recv [--wait]` | Read messages from the inbox (`--wait` polls for up to 30 seconds) |
 
@@ -72,6 +76,8 @@ From **any external terminal**, you can also use `tado-list` and `tado-send` (in
 | Ctrl+Tab | Switch between Todo List and Canvas |
 | Cmd+M | Open Settings |
 | Cmd+B | Toggle Sidebar |
+| Cmd+D | Done list |
+| Cmd+T | Trash list |
 | Shift+Scroll | Zoom canvas |
 | Scroll | Pan canvas |
 
@@ -82,7 +88,7 @@ Sources/Tado/
   App/          TadoApp (entry point), AppState (UI state)
   Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage
   Services/     TerminalManager, ProcessSpawner, IPCBroker
-  Views/        ContentView, TodoListView, CanvasView, TerminalTileView, SidebarView, SettingsView
+  Views/        ContentView, TodoListView, DoneListView, TrashListView, CanvasView, TerminalTileView, SidebarView, SettingsView
 ```
 
 **State management**: `AppState` and `TerminalManager` are `@Observable` singletons injected via SwiftUI environment. `SwiftData` persists `TodoItem` and `AppSettings`.

@@ -26,6 +26,8 @@ final class TerminalSession: Identifiable {
     var promptQueue: [String] = []
     var unreadMessageCount: Int = 0
     var engine: TerminalEngine?
+    var tileWidth: CGFloat = CanvasLayout.contentWidth
+    var tileHeight: CGFloat = CanvasLayout.contentHeight
     weak var terminalView: LocalProcessTerminalView?
 
     var lastKnownCwd: String?
@@ -49,10 +51,21 @@ final class TerminalSession: Identifiable {
         self.engine = engine
     }
 
+    /// Send text to the terminal followed by Enter
+    private func sendToTerminal(_ text: String) {
+        guard let view = terminalView else { return }
+        view.send(txt: text)
+        // Send Enter as a separate write; use \r (CR) which matches the byte
+        // that a real Enter keypress generates in the PTY (see EscapeSequences.cmdRet)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            view.send(txt: "\r")
+        }
+    }
+
     /// Send immediately if agent is idle, otherwise queue
     func enqueueOrSend(_ text: String) {
         if status == .needsInput || status == .completed || status == .failed {
-            terminalView?.send(txt: text + "\r")
+            sendToTerminal(text)
             markActivity()
         } else {
             promptQueue.append(text)
@@ -63,7 +76,7 @@ final class TerminalSession: Identifiable {
     func drainQueueIfReady() {
         guard status == .needsInput, !promptQueue.isEmpty else { return }
         let next = promptQueue.removeFirst()
-        terminalView?.send(txt: next + "\r")
+        sendToTerminal(next)
         markActivity()
     }
 

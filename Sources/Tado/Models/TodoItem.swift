@@ -1,6 +1,12 @@
 import Foundation
 import SwiftData
 
+enum ListState: String {
+    case active
+    case done
+    case trashed
+}
+
 @Model
 final class TodoItem {
     var id: UUID
@@ -12,6 +18,7 @@ final class TodoItem {
     var gridIndex: Int
     var terminalSessionID: UUID?
     var statusRaw: String = SessionStatus.pending.rawValue
+    var listStateRaw: String = ListState.active.rawValue
     var cwd: String?
     var terminalLog: String = ""
     static let maxLogSize = 256 * 1024
@@ -30,6 +37,11 @@ final class TodoItem {
     var status: SessionStatus {
         get { SessionStatus(rawValue: statusRaw) ?? .pending }
         set { statusRaw = newValue.rawValue }
+    }
+
+    var listState: ListState {
+        get { ListState(rawValue: listStateRaw) ?? .active }
+        set { listStateRaw = newValue.rawValue }
     }
 
     var canvasPosition: CGPoint {

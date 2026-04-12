@@ -12,6 +12,7 @@ struct CanvasView: View {
     @State private var offset: CGSize = .zero
     @State private var scrollMonitor: Any?
     @State private var clickMonitor: Any?
+    @State private var keyMonitor: Any?
     @State private var viewportSize: CGSize = .zero
     @State private var hasInitialized: Bool = false
 
@@ -25,6 +26,8 @@ struct CanvasView: View {
                         session: session,
                         engine: currentEngine,
                         ipcRoot: terminalManager.ipcBroker?.ipcRoot,
+                        modeFlags: currentModeFlags,
+                        effortFlags: currentEffortFlags,
                         scale: scale
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)
@@ -118,6 +121,30 @@ struct CanvasView: View {
             return nil
         }
 
+        // Cmd+/- = zoom in/out, Cmd+0 = reset zoom
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+            guard self.appState.currentView == .canvas else { return event }
+            guard event.modifierFlags.contains(.command) else { return event }
+
+            switch event.charactersIgnoringModifiers {
+            case "=", "+":
+                withAnimation(.easeOut(duration: 0.15)) {
+                    self.zoomAnchored(by: 0.15)
+                }
+                return nil
+            case "-":
+                withAnimation(.easeOut(duration: 0.15)) {
+                    self.zoomAnchored(by: -0.15)
+                }
+                return nil
+            case "0":
+                self.resetZoom()
+                return nil
+            default:
+                return event
+            }
+        }
+
         // Click outside a terminal = unfocus it so scroll goes back to canvas pan
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
@@ -137,6 +164,7 @@ struct CanvasView: View {
     private func removeMonitors() {
         if let m = scrollMonitor { NSEvent.removeMonitor(m); scrollMonitor = nil }
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 
     /// Check if any TerminalView in the responder chain is first responder
@@ -226,6 +254,18 @@ struct CanvasView: View {
     private var currentEngine: TerminalEngine {
         let descriptor = FetchDescriptor<AppSettings>()
         return (try? modelContext.fetch(descriptor).first?.engine) ?? .claude
+    }
+
+    private var currentModeFlags: [String] {
+        let descriptor = FetchDescriptor<AppSettings>()
+        guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
+        return settings.engine == .claude ? settings.claudeMode.cliFlags : settings.codexMode.cliFlags
+    }
+
+    private var currentEffortFlags: [String] {
+        let descriptor = FetchDescriptor<AppSettings>()
+        guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
+        return settings.engine == .claude ? settings.claudeEffort.cliFlags : settings.codexEffort.cliFlags
     }
 
     private func persistPosition(session: TerminalSession, position: CGPoint) {

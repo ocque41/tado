@@ -32,12 +32,12 @@ struct ContentView: View {
 
             // View mode indicator
             VStack {
+                Spacer()
                 HStack {
-                    Spacer()
                     viewModeIndicator
                         .padding(12)
+                    Spacer()
                 }
-                Spacer()
             }
         }
         .animation(.easeInOut(duration: 0.2), value: appState.currentView == .canvas)
@@ -47,6 +47,18 @@ struct ContentView: View {
             set: { appState.showSettings = $0 }
         )) {
             SettingsView()
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showDoneList },
+            set: { appState.showDoneList = $0 }
+        )) {
+            DoneListView()
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showTrashList },
+            set: { appState.showTrashList = $0 }
+        )) {
+            TrashListView()
         }
         .frame(minWidth: 800, minHeight: 600)
         .onAppear { installKeyboardMonitor() }
