@@ -1,0 +1,47 @@
+import SwiftUI
+import SwiftData
+import AppKit
+
+@main
+struct TadoApp: App {
+    @State private var appState = AppState()
+    @State private var terminalManager = TerminalManager()
+    @State private var ipcBrokerInitialized = false
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(appState)
+                .environment(terminalManager)
+                .onAppear {
+                    if !ipcBrokerInitialized {
+                        terminalManager.ipcBroker = IPCBroker(terminalManager: terminalManager)
+                        ipcBrokerInitialized = true
+                    }
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                    DispatchQueue.main.async {
+                        if let window = NSApp.windows.first {
+                            window.makeKeyAndOrderFront(nil)
+                            window.orderFrontRegardless()
+                        }
+                    }
+                }
+        }
+        .modelContainer(for: [TodoItem.self, AppSettings.self])
+        .commands {
+            CommandGroup(after: .appSettings) {
+                Button("Settings") {
+                    appState.showSettings.toggle()
+                }
+                .keyboardShortcut("m", modifiers: .command)
+            }
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Sidebar") {
+                    appState.showSidebar.toggle()
+                }
+                .keyboardShortcut("b", modifiers: .command)
+            }
+        }
+    }
+}

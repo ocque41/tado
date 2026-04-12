@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# IDE
+*.swp
+*~
+.idea/
+.vscode/
+
+# Claude Code (user-local settings)
+.claude/
