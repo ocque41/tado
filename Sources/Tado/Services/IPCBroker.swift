@@ -82,7 +82,9 @@ final class IPCBroker {
                 name: session.todoText,
                 engine: session.engine?.rawValue ?? "claude",
                 gridLabel: CanvasLayout.gridLabel(forIndex: session.gridIndex),
-                status: statusString(session.status)
+                status: statusString(session.status),
+                projectName: session.projectName,
+                agentName: session.agentName
             )
         }
         let encoder = JSONEncoder()
@@ -362,11 +364,13 @@ final class IPCBroker {
         if not peers:
             print('No other sessions active.')
         else:
-            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} Name'
+            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Agent":<14} Name'
             print(hdr)
-            print('-' * 100)
+            print('-' * 130)
             for e in peers:
-                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {e["name"]}'
+                proj = e.get("projectName") or "-"
+                agent = e.get("agentName") or "-"
+                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {proj:<16} {agent:<14} {e["name"]}'
                 print(line)
         PYEOF
         """
@@ -484,11 +488,13 @@ final class IPCBroker {
         if not entries:
             print('No active sessions.')
         else:
-            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} Name'
+            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Agent":<14} Name'
             print(hdr)
-            print('-' * 100)
+            print('-' * 130)
             for e in entries:
-                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {e["name"]}'
+                proj = e.get("projectName") or "-"
+                agent = e.get("agentName") or "-"
+                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {proj:<16} {agent:<14} {e["name"]}'
                 print(line)
         PYEOF
         """

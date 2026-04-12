@@ -32,6 +32,8 @@ final class TerminalSession: Identifiable {
 
     var lastKnownCwd: String?
     var logBuffer: String = ""
+    var projectName: String?
+    var agentName: String?
     var onStatusChange: ((SessionStatus) -> Void)?
     var onCwdChange: ((String) -> Void)?
     var onLogFlush: ((String) -> Void)?

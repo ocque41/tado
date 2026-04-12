@@ -109,7 +109,9 @@ struct SettingsView: View {
                 }
 
                 Section("Shortcuts") {
-                    LabeledContent("Switch view", value: "Ctrl + Tab")
+                    LabeledContent("Cycle pages", value: "Ctrl + Tab")
+                    LabeledContent("Projects", value: "Cmd + P")
+                    LabeledContent("Teams", value: "Cmd + E")
                     LabeledContent("Settings", value: "Cmd + M")
                     LabeledContent("Sidebar", value: "Cmd + B")
                     LabeledContent("Done list", value: "Cmd + D")

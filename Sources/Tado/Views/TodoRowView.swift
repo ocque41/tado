@@ -6,6 +6,12 @@ struct TodoRowView: View {
     @Environment(AppState.self) private var appState
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Project.createdAt) private var projects: [Project]
+
+    private var projectName: String? {
+        guard let pid = todo.projectID else { return nil }
+        return projects.first { $0.id == pid }?.name
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -17,6 +23,14 @@ struct TodoRowView: View {
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundStyle(todoStatus == .stale ? .tertiary : .primary)
                 .lineLimit(1)
+
+            // Project label
+            if let name = projectName {
+                Text("/\(name)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
 
             // Queue count
             if let session = terminalManager.session(forTodoID: todo.id),

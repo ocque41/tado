@@ -28,7 +28,7 @@ struct TadoApp: App {
                     }
                 }
         }
-        .modelContainer(for: [TodoItem.self, AppSettings.self])
+        .modelContainer(for: [TodoItem.self, AppSettings.self, Project.self, Team.self])
         .commands {
             CommandGroup(after: .appSettings) {
                 Button("Settings") {
@@ -41,6 +41,17 @@ struct TadoApp: App {
                     appState.showSidebar.toggle()
                 }
                 .keyboardShortcut("b", modifiers: .command)
+            }
+            CommandMenu("Navigate") {
+                Button("Projects") {
+                    appState.currentView = .projects
+                }
+                .keyboardShortcut("p", modifiers: .command)
+
+                Button("Teams") {
+                    appState.currentView = .teams
+                }
+                .keyboardShortcut("e", modifiers: .command)
             }
             CommandMenu("Lists") {
                 Button("Done List") {

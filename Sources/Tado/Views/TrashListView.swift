@@ -6,6 +6,7 @@ struct TrashListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(TerminalManager.self) private var terminalManager
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
+    @Query(sort: \Project.createdAt) private var projects: [Project]
 
     private var trashedTodos: [TodoItem] {
         todos.filter { $0.listState == .trashed }
@@ -68,6 +69,13 @@ struct TrashListView: View {
                 .font(.system(size: 14, design: .monospaced))
                 .lineLimit(1)
 
+            if let pid = todo.projectID, let pname = projects.first(where: { $0.id == pid })?.name {
+                Text("/\(pname)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+
             Spacer()
 
             // Restore button
@@ -107,7 +115,8 @@ struct TrashListView: View {
         todo.canvasY = position.y
         todo.terminalLog = ""
 
-        terminalManager.spawnAndWire(todo: todo, engine: settings.engine)
+        let project = todo.projectID.flatMap { pid in projects.first { $0.id == pid } }
+        terminalManager.spawnAndWire(todo: todo, engine: settings.engine, cwd: project?.rootPath, agentName: todo.agentName, projectName: project?.name)
         try? modelContext.save()
     }
 

@@ -21,4 +21,6 @@ struct IPCSessionEntry: Codable {
     let engine: String
     let gridLabel: String
     let status: String
+    let projectName: String?
+    let agentName: String?
 }

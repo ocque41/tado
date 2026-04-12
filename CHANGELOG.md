@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-12
+
+### Added
+
+- Projects -- organize todos under a directory with auto-discovered agents
+- Teams -- group agents from a project into named teams for coordinated work
+- Agent discovery -- scans `.claude/agents/` and `.codex/agents/` for agent definition files
+- Project-scoped todo input with agent picker
+- Project detail view showing teams, agents, and todos in a tree layout
+- Teams view with expandable agent management (add/remove agents per team)
+- Page navigation bar replacing the old view mode toggle (Todos, Canvas, Projects, Teams)
+- Ctrl+Tab now cycles through all four pages
+- Todos can be associated with a project, team, and specific agent
+- Per-project working directory passed to spawned agent processes
+
 ## [0.2.0] - 2026-04-12
 
 ### Added

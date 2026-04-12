@@ -72,6 +72,7 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
     let ipcRoot: URL?
     let modeFlags: [String]
     let effortFlags: [String]
+    let agentName: String?
 
     func makeNSView(context: Context) -> LoggingTerminalView {
         let terminalView = LoggingTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
@@ -91,7 +92,7 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
             session.terminalView = terminalView
         }
 
-        let (executable, args) = ProcessSpawner.command(for: session.todoText, engine: engine, modeFlags: modeFlags, effortFlags: effortFlags)
+        let (executable, args) = ProcessSpawner.command(for: session.todoText, engine: engine, modeFlags: modeFlags, effortFlags: effortFlags, agentName: agentName)
         let env: [String]
         if let ipcRoot = ipcRoot {
             env = ProcessSpawner.environment(

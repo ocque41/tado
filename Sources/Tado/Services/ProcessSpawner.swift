@@ -1,10 +1,14 @@
 import Foundation
 
 enum ProcessSpawner {
-    static func command(for todoText: String, engine: TerminalEngine, modeFlags: [String] = [], effortFlags: [String] = []) -> (executable: String, args: [String]) {
+    static func command(for todoText: String, engine: TerminalEngine, modeFlags: [String] = [], effortFlags: [String] = [], agentName: String? = nil) -> (executable: String, args: [String]) {
         let escaped = shellEscape(todoText)
         let cli = engine.rawValue
-        let allFlags = (modeFlags + effortFlags).joined(separator: " ")
+        var flags = modeFlags + effortFlags
+        if let agentName, engine == .claude {
+            flags.insert(contentsOf: ["--agent", agentName], at: 0)
+        }
+        let allFlags = flags.joined(separator: " ")
         let cmd = allFlags.isEmpty ? "\(cli) \(escaped)" : "\(cli) \(allFlags) \(escaped)"
         return ("/bin/zsh", ["-l", "-c", cmd])
     }

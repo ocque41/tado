@@ -14,6 +14,8 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 
 ## Features
 
+- **Projects** -- organize todos under a directory; agents are auto-discovered from `.claude/agents/` and `.codex/agents/`
+- **Teams** -- group agents into named teams for coordinated multi-agent work
 - **Todo-driven terminal spawning** -- one terminal per task, powered by the AI agent of your choice
 - **Pannable/zoomable canvas** -- drag, scroll, and zoom across all your running agents
 - **Resizable and moveable tiles** -- drag edges to resize, drag title bar to reposition
@@ -25,7 +27,7 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 - **Forward mode** -- route your next typed input directly into a specific terminal
 - **Done and Trash lists** -- move completed or discarded todos out of the main list
 - **Activity detection** -- cursor monitoring detects when an agent is idle (5-second threshold)
-- **Persistent state** -- todos and settings survive restarts via SwiftData
+- **Persistent state** -- todos, projects, teams, and settings survive restarts via SwiftData
 - **Session sidebar** -- live status indicators for all running sessions
 
 ## Requirements
@@ -49,7 +51,7 @@ No Xcode project is included. The project uses Swift Package Manager as its buil
 
 1. Launch Tado and type a task in the input field
 2. Press **Enter** -- a terminal tile spawns on the canvas with your AI agent working on it
-3. Press **Ctrl+Tab** to switch between the todo list and the canvas
+3. Press **Ctrl+Tab** to cycle between Todos, Canvas, Projects, and Teams
 4. **Shift+Scroll** to zoom the canvas, **Scroll** to pan
 5. Click the arrow icon on a todo row to enter **forward mode** (your next input goes to that terminal)
 6. Press **Cmd+B** to open the sidebar and see all session statuses
@@ -73,7 +75,7 @@ From **any external terminal**, you can also use `tado-list` and `tado-send` (in
 | Shortcut | Action |
 |----------|--------|
 | Enter | Submit todo / send message |
-| Ctrl+Tab | Switch between Todo List and Canvas |
+| Ctrl+Tab | Cycle through Todos, Canvas, Projects, Teams |
 | Cmd+M | Open Settings |
 | Cmd+B | Toggle Sidebar |
 | Cmd+D | Done list |
@@ -86,14 +88,16 @@ From **any external terminal**, you can also use `tado-list` and `tado-send` (in
 ```
 Sources/Tado/
   App/          TadoApp (entry point), AppState (UI state)
-  Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage
-  Services/     TerminalManager, ProcessSpawner, IPCBroker
-  Views/        ContentView, TodoListView, DoneListView, TrashListView, CanvasView, TerminalTileView, SidebarView, SettingsView
+  Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage, Project, Team, AgentDefinition
+  Services/     TerminalManager, ProcessSpawner, IPCBroker, AgentDiscoveryService
+  Views/        ContentView, TodoListView, DoneListView, TrashListView, CanvasView, ProjectsView, TeamsView, TerminalTileView, SidebarView, SettingsView
 ```
 
-**State management**: `AppState` and `TerminalManager` are `@Observable` singletons injected via SwiftUI environment. `SwiftData` persists `TodoItem` and `AppSettings`.
+**State management**: `AppState` and `TerminalManager` are `@Observable` singletons injected via SwiftUI environment. `SwiftData` persists `TodoItem`, `Project`, `Team`, and `AppSettings`.
 
-**Terminal bridge**: `TerminalNSViewRepresentable` wraps [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s `LocalProcessTerminalView` into SwiftUI. Both views (TodoListView and CanvasView) stay mounted simultaneously via opacity toggling, so terminal processes are never destroyed when switching views.
+**Terminal bridge**: `TerminalNSViewRepresentable` wraps [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s `LocalProcessTerminalView` into SwiftUI. All four page views stay mounted simultaneously via opacity toggling, so terminal processes are never destroyed when switching views.
+
+**Agent discovery**: `AgentDiscoveryService` scans a project's `.claude/agents/` and `.codex/agents/` directories for `.md` agent definition files, making them available for team assignment and todo routing.
 
 **IPC**: `IPCBroker` manages a file-based message queue under `/tmp/tado-ipc-<pid>/` with per-session inboxes and outboxes, watched via `DispatchSource`.
 

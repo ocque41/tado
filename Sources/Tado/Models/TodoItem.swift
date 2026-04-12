@@ -21,6 +21,9 @@ final class TodoItem {
     var listStateRaw: String = ListState.active.rawValue
     var cwd: String?
     var terminalLog: String = ""
+    var projectID: UUID?
+    var teamID: UUID?
+    var agentName: String?
     static let maxLogSize = 256 * 1024
 
     init(text: String, gridIndex: Int, canvasPosition: CGPoint) {

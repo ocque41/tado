@@ -1,8 +1,28 @@
 import SwiftUI
 
-enum ViewMode: Equatable {
-    case todoList
+enum ViewMode: String, CaseIterable, Equatable {
+    case todos
     case canvas
+    case projects
+    case teams
+
+    var label: String {
+        switch self {
+        case .todos: "Todos"
+        case .canvas: "Canvas"
+        case .projects: "Projects"
+        case .teams: "Teams"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .todos: "checklist"
+        case .canvas: "square.grid.3x3"
+        case .projects: "folder"
+        case .teams: "person.3"
+        }
+    }
 }
 
 enum TerminalEngine: String, Codable, CaseIterable {
@@ -111,11 +131,12 @@ enum CodexEffort: String, Codable, CaseIterable {
 @Observable
 @MainActor
 final class AppState {
-    var currentView: ViewMode = .todoList
+    var currentView: ViewMode = .todos
     var showSettings: Bool = false
     var showSidebar: Bool = false
     var showDoneList: Bool = false
     var showTrashList: Bool = false
     var pendingNavigationID: UUID? = nil
     var forwardTargetTodoID: UUID? = nil
+    var activeProjectID: UUID? = nil
 }

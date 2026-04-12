@@ -49,7 +49,7 @@ final class TerminalManager {
         session.enqueueOrSend(text)
     }
 
-    func spawnAndWire(todo: TodoItem, engine: TerminalEngine) {
+    func spawnAndWire(todo: TodoItem, engine: TerminalEngine, cwd: String? = nil, agentName: String? = nil, projectName: String? = nil) {
         let session = spawnSession(
             todoID: todo.id,
             todoText: todo.text,
@@ -57,6 +57,9 @@ final class TerminalManager {
             gridIndex: todo.gridIndex,
             engine: engine
         )
+        if let cwd { session.lastKnownCwd = cwd }
+        session.agentName = agentName
+        session.projectName = projectName
         todo.terminalSessionID = session.id
         todo.status = .running
 

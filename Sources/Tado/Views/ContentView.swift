@@ -9,15 +9,23 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // Both views stay alive — never destroyed/recreated.
-            // Terminals keep running when switching to the todo list.
+            // All views stay alive — never destroyed/recreated.
+            // Terminals keep running when switching views.
             CanvasView()
                 .opacity(appState.currentView == .canvas ? 1 : 0)
                 .allowsHitTesting(appState.currentView == .canvas)
 
             TodoListView()
-                .opacity(appState.currentView == .todoList ? 1 : 0)
-                .allowsHitTesting(appState.currentView == .todoList)
+                .opacity(appState.currentView == .todos ? 1 : 0)
+                .allowsHitTesting(appState.currentView == .todos)
+
+            ProjectsView()
+                .opacity(appState.currentView == .projects ? 1 : 0)
+                .allowsHitTesting(appState.currentView == .projects)
+
+            TeamsView()
+                .opacity(appState.currentView == .teams ? 1 : 0)
+                .allowsHitTesting(appState.currentView == .teams)
 
             // Sidebar overlay
             if appState.showSidebar {
@@ -30,17 +38,17 @@ struct ContentView: View {
                 }
             }
 
-            // View mode indicator
+            // Page navigation indicator
             VStack {
                 Spacer()
                 HStack {
-                    viewModeIndicator
+                    pageNavigation
                         .padding(12)
                     Spacer()
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: appState.currentView == .canvas)
+        .animation(.easeInOut(duration: 0.2), value: appState.currentView)
         .animation(.easeInOut(duration: 0.2), value: appState.showSidebar)
         .sheet(isPresented: Binding(
             get: { appState.showSettings },
@@ -66,26 +74,37 @@ struct ContentView: View {
         .task { reconnectOnLaunch() }
     }
 
-    private var viewModeIndicator: some View {
-        HStack(spacing: 6) {
-            Image(systemName: appState.currentView == .todoList ? "checklist" : "square.grid.3x3")
-                .font(.system(size: 10))
-            Text(appState.currentView == .todoList ? "Todos" : "Canvas")
-                .font(.system(size: 11, design: .monospaced))
+    private var pageNavigation: some View {
+        VStack(spacing: 4) {
+            ForEach(ViewMode.allCases, id: \.self) { mode in
+                Button(action: { appState.currentView = mode }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: mode.icon)
+                            .font(.system(size: 10))
+                        Text(mode.label)
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .foregroundStyle(appState.currentView == mode ? Color.accentColor : .secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
         .background(.ultraThinMaterial)
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func installKeyboardMonitor() {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Ctrl+Tab: toggle view
+            // Ctrl+Tab: cycle through pages
             if event.keyCode == 48 && event.modifierFlags.contains(.control) {
                 withAnimation {
-                    appState.currentView = appState.currentView == .todoList ? .canvas : .todoList
+                    let allCases = ViewMode.allCases
+                    if let idx = allCases.firstIndex(of: appState.currentView) {
+                        let next = allCases.index(after: idx)
+                        appState.currentView = next < allCases.endIndex ? allCases[next] : allCases[allCases.startIndex]
+                    }
                 }
                 return nil
             }

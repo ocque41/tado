@@ -16,12 +16,54 @@ struct CanvasView: View {
     @State private var viewportSize: CGSize = .zero
     @State private var hasInitialized: Bool = false
 
+    /// Width of the gap between project zones on the universal canvas
+    private let zoneGap: CGFloat = 120
+
+    /// Group sessions by project name for zone layout
+    private var projectZones: [(name: String, sessions: [TerminalSession])] {
+        var groups: [String: [TerminalSession]] = [:]
+        for session in terminalManager.sessions {
+            let key = session.projectName ?? "General"
+            groups[key, default: []].append(session)
+        }
+        // "General" first, then alphabetical
+        return groups.sorted { a, b in
+            if a.key == "General" { return true }
+            if b.key == "General" { return false }
+            return a.key < b.key
+        }.map { (name: $0.key, sessions: $0.value) }
+    }
+
+    /// Compute the X offset for each project zone
+    private func zoneOffset(for zoneIndex: Int) -> CGFloat {
+        let settings = fetchSettings()
+        let cols = CGFloat(settings.gridColumns)
+        let zoneWidth = cols * CanvasLayout.tileWidth + zoneGap
+        return CGFloat(zoneIndex) * zoneWidth
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 CanvasGridBackground()
 
+                // Project zone labels
+                ForEach(Array(projectZones.enumerated()), id: \.element.name) { index, zone in
+                    let xOff = zoneOffset(for: index)
+                    Text(zone.name)
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .position(
+                            x: xOff + CanvasLayout.tileWidth * CGFloat(fetchSettings().gridColumns) / 2,
+                            y: 20
+                        )
+                }
+
+                // Session tiles with zone offsets
                 ForEach(terminalManager.sessions) { session in
+                    let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
+                    let xOff = zoneOffset(for: zoneIndex)
+
                     TerminalTileView(
                         session: session,
                         engine: currentEngine,
@@ -32,7 +74,10 @@ struct CanvasView: View {
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)
                     }
-                    .position(x: session.canvasPosition.x, y: session.canvasPosition.y)
+                    .position(
+                        x: session.canvasPosition.x + xOff,
+                        y: session.canvasPosition.y
+                    )
                     .id(session.id)
                 }
             }
@@ -57,7 +102,9 @@ struct CanvasView: View {
                 guard let session = terminalManager.session(forTodoID: todoID) else { return }
                 try? await Task.sleep(for: .milliseconds(150))
                 let vp = viewportSize.width > 0 ? viewportSize : geometry.size
-                let target = session.canvasPosition
+                let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
+                let xOff = zoneOffset(for: zoneIndex)
+                let target = CGPoint(x: session.canvasPosition.x + xOff, y: session.canvasPosition.y)
                 withAnimation(.easeInOut(duration: 0.4)) {
                     offset = CGSize(
                         width: -target.x * scale + vp.width / 2,
@@ -79,8 +126,10 @@ struct CanvasView: View {
     private func centerCanvas() {
         guard appState.pendingNavigationID == nil else { return }
         if let first = terminalManager.sessions.first {
+            let zoneIndex = projectZones.firstIndex(where: { $0.name == (first.projectName ?? "General") }) ?? 0
+            let xOff = zoneOffset(for: zoneIndex)
             offset = CGSize(
-                width: -first.canvasPosition.x * scale + viewportSize.width / 2,
+                width: -(first.canvasPosition.x + xOff) * scale + viewportSize.width / 2,
                 height: -first.canvasPosition.y * scale + viewportSize.height / 2
             )
         } else {
@@ -249,6 +298,12 @@ struct CanvasView: View {
             )
             scale = newScale
         }
+    }
+
+    private func fetchSettings() -> AppSettings {
+        let descriptor = FetchDescriptor<AppSettings>()
+        if let existing = try? modelContext.fetch(descriptor).first { return existing }
+        return AppSettings()
     }
 
     private var currentEngine: TerminalEngine {

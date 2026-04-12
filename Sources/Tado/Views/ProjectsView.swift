@@ -1,0 +1,485 @@
+import SwiftUI
+import SwiftData
+
+struct ProjectsView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(TerminalManager.self) private var terminalManager
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Project.createdAt) private var projects: [Project]
+    @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
+    @Query(sort: \Team.createdAt) private var teams: [Team]
+    @State private var showNewProject: Bool = false
+    @State private var newProjectName: String = ""
+    @State private var newProjectPath: String = ""
+    @State private var selectedProjectID: UUID? = nil
+
+    private var selectedProject: Project? {
+        guard let id = selectedProjectID else { return nil }
+        return projects.first { $0.id == id }
+    }
+
+    var body: some View {
+        if let project = selectedProject {
+            projectDetail(project)
+        } else {
+            projectList
+        }
+    }
+
+    // MARK: - Project List
+
+    private var projectList: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 12) {
+                Text("Projects")
+                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+
+                Spacer()
+
+                Button(action: { showNewProject.toggle() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                        Text("New Project")
+                    }
+                    .font(.system(size: 12, design: .monospaced))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(.ultraThinMaterial)
+
+            Divider()
+
+            // New project form
+            if showNewProject {
+                newProjectForm
+                Divider()
+            }
+
+            // Project rows
+            if projects.isEmpty {
+                Spacer()
+                VStack(spacing: 8) {
+                    Text("No projects yet")
+                        .font(.system(size: 15, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("Create a project to organize todos by directory")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(projects) { project in
+                            projectRow(project)
+                            Divider().padding(.leading, 44)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func projectRow(_ project: Project) -> some View {
+        let todoCount = todos.filter { $0.projectID == project.id && $0.listState == .active }.count
+        let teamCount = teams.filter { $0.projectID == project.id }.count
+        let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
+
+        return Button(action: {
+            selectedProjectID = project.id
+            appState.activeProjectID = project.id
+        }) {
+            HStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(.accentColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.name)
+                        .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    Text(project.rootPath)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer()
+
+                if agents.count > 0 {
+                    Text("\(agents.count) agents")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+
+                if teamCount > 0 {
+                    Text("\(teamCount) teams")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+
+                if todoCount > 0 {
+                    Text("\(todoCount) todos")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+
+                Button(action: { deleteProject(project) }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - New Project Form
+
+    private var newProjectForm: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                TextField("Project name", text: $newProjectName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, design: .monospaced))
+
+                Button("Browse...") { pickDirectory() }
+                    .font(.system(size: 12, design: .monospaced))
+                    .buttonStyle(.plain)
+            }
+
+            if !newProjectPath.isEmpty {
+                HStack {
+                    Text(newProjectPath)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showNewProject = false
+                    newProjectName = ""
+                    newProjectPath = ""
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .buttonStyle(.plain)
+
+                Button("Create") { createProject() }
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .buttonStyle(.plain)
+                    .disabled(newProjectName.isEmpty || newProjectPath.isEmpty)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color.accentColor.opacity(0.04))
+    }
+
+    // MARK: - Project Detail
+
+    private func projectDetail(_ project: Project) -> some View {
+        let projectTodos = todos.filter { $0.projectID == project.id && $0.listState == .active }
+        let projectTeams = teams.filter { $0.projectID == project.id }
+        let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
+        return VStack(spacing: 0) {
+            // Header with back button
+            HStack(spacing: 12) {
+                Button(action: {
+                    selectedProjectID = nil
+                    appState.activeProjectID = nil
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Projects")
+                    }
+                    .font(.system(size: 12, design: .monospaced))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Text(project.name)
+                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+
+                Spacer()
+
+                // Spacer to balance the back button
+                Color.clear.frame(width: 60, height: 1)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(.ultraThinMaterial)
+
+            Divider()
+
+            // Project info + todo input
+            VStack(spacing: 8) {
+                HStack {
+                    Text(project.rootPath)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Text("\(agents.count) agents")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("\(projectTeams.count) teams")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+
+                // Todo input for this project
+                ProjectTodoInput(project: project)
+            }
+
+            Divider()
+
+            // Content: team/agent tree + todo list
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // Teams section
+                    if !projectTeams.isEmpty {
+                        ForEach(projectTeams) { team in
+                            teamSection(team, agents: agents, projectTodos: projectTodos)
+                        }
+                    }
+
+                    // Unassigned todos
+                    let unassigned = projectTodos.filter { $0.teamID == nil }
+                    if !unassigned.isEmpty {
+                        sectionHeader("Unassigned")
+                        ForEach(unassigned) { todo in
+                            TodoRowView(todo: todo)
+                            Divider().padding(.leading, 60)
+                        }
+                    }
+
+                    // Discovered agents (not in any team)
+                    let assignedAgents = Set(projectTeams.flatMap(\.agentNames))
+                    let unassignedAgents = agents.filter { !assignedAgents.contains($0.id) }
+                    if !unassignedAgents.isEmpty {
+                        sectionHeader("Available Agents")
+                        ForEach(unassignedAgents) { agent in
+                            agentRow(agent)
+                            Divider().padding(.leading, 60)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func teamSection(_ team: Team, agents: [AgentDefinition], projectTodos: [TodoItem]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader(team.name)
+
+            let names = Array(team.agentNames)
+            ForEach(names, id: \.self) { agentName in
+                let agent = agents.first { $0.id == agentName }
+                let agentTodos = projectTodos.filter { $0.teamID == team.id && $0.agentName == agentName }
+
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.accentColor)
+                        Text(agent?.name ?? agentName)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        if agent == nil {
+                            Text("(not found)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.red)
+                        }
+                        Spacer()
+                        Text("\(agentTodos.count) todos")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 6)
+
+                    ForEach(agentTodos) { todo in
+                        TodoRowView(todo: todo)
+                            .padding(.leading, 20)
+                        Divider().padding(.leading, 80)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.05))
+    }
+
+    private func agentRow(_ agent: AgentDefinition) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "person.circle")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(agent.name)
+                .font(.system(size: 13, design: .monospaced))
+            Text("(\(agent.source.rawValue))")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Actions
+
+    private func pickDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select project root directory"
+        if panel.runModal() == .OK, let url = panel.url {
+            newProjectPath = url.path
+            if newProjectName.isEmpty {
+                newProjectName = url.lastPathComponent
+            }
+        }
+    }
+
+    private func createProject() {
+        let project = Project(name: newProjectName, rootPath: newProjectPath)
+        modelContext.insert(project)
+        try? modelContext.save()
+        newProjectName = ""
+        newProjectPath = ""
+        showNewProject = false
+    }
+
+    private func deleteProject(_ project: Project) {
+        // Terminate any sessions belonging to this project
+        for todo in todos where todo.projectID == project.id {
+            terminalManager.terminateSessionForTodo(todo.id)
+        }
+        modelContext.delete(project)
+        try? modelContext.save()
+    }
+}
+
+// MARK: - Project-scoped Todo Input
+
+struct ProjectTodoInput: View {
+    let project: Project
+    @Environment(TerminalManager.self) private var terminalManager
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \TodoItem.createdAt) private var allTodos: [TodoItem]
+    @State private var inputText: String = ""
+    @State private var selectedAgentName: String? = nil
+    @State private var selectedTeamID: UUID? = nil
+    @FocusState private var isFocused: Bool
+
+    private var activeTodos: [TodoItem] {
+        allTodos.filter { $0.listState == .active && $0.projectID == project.id }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Agent picker
+            let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
+            if !agents.isEmpty {
+                Picker("", selection: $selectedAgentName) {
+                    Text("No agent").tag(nil as String?)
+                    ForEach(agents) { agent in
+                        Text(agent.name).tag(agent.id as String?)
+                    }
+                }
+                .frame(width: 120)
+                .font(.system(size: 11, design: .monospaced))
+            }
+
+            TextField("New todo for \(project.name)...", text: $inputText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, design: .monospaced))
+                .focused($isFocused)
+                .onSubmit { submitTodo() }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+    }
+
+    private func submitTodo() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        let index = nextAvailableGridIndex()
+        let settings = fetchOrCreateSettings()
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: text, gridIndex: index, canvasPosition: position)
+        todo.projectID = project.id
+        todo.agentName = selectedAgentName
+        todo.teamID = selectedTeamID
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: settings.engine,
+            cwd: project.rootPath,
+            agentName: selectedAgentName,
+            projectName: project.name
+        )
+
+        try? modelContext.save()
+        inputText = ""
+    }
+
+    private func nextAvailableGridIndex() -> Int {
+        let usedIndices = Set(activeTodos.map(\.gridIndex))
+        var index = 0
+        while usedIndices.contains(index) { index += 1 }
+        return index
+    }
+
+    private func fetchOrCreateSettings() -> AppSettings {
+        let descriptor = FetchDescriptor<AppSettings>()
+        if let existing = try? modelContext.fetch(descriptor).first { return existing }
+        let settings = AppSettings()
+        modelContext.insert(settings)
+        try? modelContext.save()
+        return settings
+    }
+}

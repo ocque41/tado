@@ -96,6 +96,16 @@ struct TerminalTileView: View {
                 .fill(session.isRunning ? .green : .orange)
                 .frame(width: 8, height: 8)
 
+            if let agent = session.agentName {
+                Text(agent)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(.accentColor)
+                    .lineLimit(1)
+                Text("|")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+
             Text(session.todoText)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -299,7 +309,7 @@ private struct StableTerminalContent: View {
     let height: CGFloat
 
     var body: some View {
-        TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags)
+        TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, agentName: session.agentName)
             .frame(width: width, height: height)
     }
 }
