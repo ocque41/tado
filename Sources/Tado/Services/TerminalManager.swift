@@ -49,7 +49,7 @@ final class TerminalManager {
         session.enqueueOrSend(text)
     }
 
-    func spawnAndWire(todo: TodoItem, engine: TerminalEngine, cwd: String? = nil, agentName: String? = nil, projectName: String? = nil) {
+    func spawnAndWire(todo: TodoItem, engine: TerminalEngine, cwd: String? = nil, agentName: String? = nil, projectName: String? = nil, teamName: String? = nil, teamID: UUID? = nil, teamAgents: [String]? = nil) {
         let session = spawnSession(
             todoID: todo.id,
             todoText: todo.text,
@@ -60,6 +60,10 @@ final class TerminalManager {
         if let cwd { session.lastKnownCwd = cwd }
         session.agentName = agentName
         session.projectName = projectName
+        session.teamName = teamName
+        session.teamID = teamID
+        session.projectRoot = cwd
+        session.teamAgents = teamAgents
         todo.terminalSessionID = session.id
         todo.status = .running
 

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-13
+
+### Added
+
+- Tado MCP Server (`tado-mcp/`) -- TypeScript MCP server exposing A2A tools (`tado_list`, `tado_read`, `tado_send`, `tado_broadcast`) for any MCP-compatible AI agent
+- Auto-registration of tado-mcp in `~/.claude.json` on launch
+- Pub/sub topics system -- `tado-publish`, `tado-subscribe`, `tado-unsubscribe`, `tado-topics` for topic-based messaging
+- Broadcast messaging -- `tado-broadcast` sends to all sessions, filterable by `--project` and `--team`
+- Team-aware IPC -- `tado-list` and `tado-send` now support `--project` and `--team` filters
+- `tado-team` command to list teammates within a session
+- Project bootstrap -- one-click injection of Tado A2A documentation into a project's CLAUDE.md and AGENTS.md
+- Team bootstrap -- one-click injection of team structure and coordination rules into project docs
+- Inline team creation from the project detail view
+- Enhanced AGENTS.md with "Contacting Other Agents", "Team Coordination", and "Responding to Agent Requests" sections
+- Rich environment variables for spawned processes: `TADO_PROJECT_NAME`, `TADO_PROJECT_ROOT`, `TADO_TEAM_NAME`, `TADO_TEAM_ID`, `TADO_AGENT_NAME`, `TADO_TEAM_AGENTS`
+- Registry now includes `teamName` and `teamID` fields
+
+### Changed
+
+- Default view is now Canvas (previously Todos)
+
 ## [0.3.0] - 2026-04-12
 
 ### Added

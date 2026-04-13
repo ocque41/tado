@@ -22,7 +22,10 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 - **Claude Code and Codex support** -- switch engines from Settings
 - **Mode and effort settings** -- configure permission mode and thinking/reasoning effort per engine
 - **Prompt queueing** -- queue follow-up prompts that auto-send when the agent goes idle
-- **Agent-to-agent IPC** -- agents can discover peers, read output, and send messages via `tado-list`, `tado-read`, `tado-send`
+- **MCP Server** -- `tado-mcp` exposes A2A tools to any MCP-compatible AI agent; auto-registered on launch
+- **Agent-to-agent IPC** -- agents can discover peers, read output, broadcast, and send messages via CLI tools
+- **Pub/sub topics** -- `tado-publish`, `tado-subscribe`, `tado-unsubscribe` for topic-based messaging
+- **Project bootstrap** -- one-click injection of A2A docs and team structure into any project's CLAUDE.md/AGENTS.md
 - **External CLI tools** -- message any Tado session from an outside terminal
 - **Forward mode** -- route your next typed input directly into a specific terminal
 - **Done and Trash lists** -- move completed or discarded todos out of the main list
@@ -63,12 +66,18 @@ Agents running inside Tado can communicate with each other:
 
 | Command | Description |
 |---------|-------------|
-| `tado-list` | List all peer sessions with their ID, engine, grid position, and status |
+| `tado-list [--project X] [--team Y]` | List all peer sessions, optionally filtered by project or team |
 | `tado-read <target> [--tail N] [--follow] [--raw]` | Read terminal output from a session |
-| `tado-send <target> <message>` | Send a message to another session (by name, grid coords like `1,1`, or UUID) |
+| `tado-send [--project X] <target> <message>` | Send a message to another session (by name, grid coords like `1,1`, or UUID) |
+| `tado-broadcast [--project X] [--team Y] <message>` | Send a message to all matching sessions |
 | `tado-recv [--wait]` | Read messages from the inbox (`--wait` polls for up to 30 seconds) |
+| `tado-publish <topic> <message>` | Publish a message to a topic |
+| `tado-subscribe <topic>` | Subscribe the current session to a topic |
+| `tado-unsubscribe <topic>` | Unsubscribe from a topic |
+| `tado-topics` | List all active topics and their subscribers |
+| `tado-team` | List teammates in the current session's team |
 
-From **any external terminal**, you can also use `tado-list` and `tado-send` (installed to `~/.local/bin`) to interact with running Tado sessions.
+From **any external terminal**, CLI tools are installed to `~/.local/bin`. The **tado-mcp** MCP server is also auto-registered so MCP-compatible agents can use Tado tools natively.
 
 ## Keyboard Shortcuts
 
@@ -86,6 +95,7 @@ From **any external terminal**, you can also use `tado-list` and `tado-send` (in
 ## Architecture
 
 ```
+tado-mcp/         TypeScript MCP server (list, read, send, broadcast tools)
 Sources/Tado/
   App/          TadoApp (entry point), AppState (UI state)
   Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage, Project, Team, AgentDefinition
@@ -99,7 +109,9 @@ Sources/Tado/
 
 **Agent discovery**: `AgentDiscoveryService` scans a project's `.claude/agents/` and `.codex/agents/` directories for `.md` agent definition files, making them available for team assignment and todo routing.
 
-**IPC**: `IPCBroker` manages a file-based message queue under `/tmp/tado-ipc-<pid>/` with per-session inboxes and outboxes, watched via `DispatchSource`.
+**IPC**: `IPCBroker` manages a file-based message queue under `/tmp/tado-ipc-<pid>/` with per-session inboxes, outboxes, and a pub/sub topics directory, watched via `DispatchSource`.
+
+**MCP Server**: `tado-mcp/` is a TypeScript MCP server built on `@modelcontextprotocol/sdk` that exposes `tado_list`, `tado_read`, `tado_send`, and `tado_broadcast` as MCP tools. Auto-registered in `~/.claude.json` on app launch.
 
 ## Contributing
 

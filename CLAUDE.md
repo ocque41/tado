@@ -56,6 +56,12 @@ tado-send hello "follow-up prompt"         # Send to session whose name contains
 
 **Typical workflow for responding to a terminal:** `tado-read 1,1` to see what it output, then `tado-send 1,1 "your response"` to reply.
 
+**Contacting other agents:** When you send a message via `tado-send`, always identify yourself and tell the recipient how to respond. Include your grid position (e.g., `[1,1]`), your project, and instruct them to reply with `tado-send <your-grid> "<response>"`. The receiving agent has no context about who sent the message unless you include it. Once a conversation is established, you can skip the full introduction.
+
+**Responding to agent requests:** When another agent sends you a message asking for something, you **must** deliver the requested information back via `tado-send <their-grid> "<response>"`. This is not optional — the requesting agent is waiting. Do not just print the answer in your own terminal; send it back to them.
+
+**Working in a team:** When you are part of a team, you share a project with other specialized agents. Know your teammates — read their agent definitions at `.claude/agents/<name>.md` to understand their roles. Use `tado-list` to find running teammates. When a teammate asks you for something, deliver it back to them via `tado-send`. When you need something from a teammate, send a request and they will deliver back to you.
+
 **IPC internals:** File-based via `/tmp/tado-ipc/`. Each session has `inbox/`, `outbox/`, and `log` in its directory. Terminal output is flushed to the `log` file every 5 seconds. External messages go to `/tmp/tado-ipc/a2a-inbox/`. See `IPCBroker.swift` and `IPCMessage.swift`.
 
 ## Key Files

@@ -75,7 +75,7 @@ struct ContentView: View {
     }
 
     private var pageNavigation: some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(ViewMode.allCases, id: \.self) { mode in
                 Button(action: { appState.currentView = mode }) {
                     HStack(spacing: 6) {
@@ -84,6 +84,7 @@ struct ContentView: View {
                         Text(mode.label)
                             .font(.system(size: 11, design: .monospaced))
                     }
+                    .frame(width: 100, alignment: .leading)
                     .foregroundStyle(appState.currentView == mode ? Color.accentColor : .secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)

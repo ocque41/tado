@@ -29,5 +29,9 @@ DerivedData/
 .idea/
 .vscode/
 
+# Node.js (tado-mcp)
+node_modules/
+npm-debug.log*
+
 # Claude Code (user-local settings)
 .claude/

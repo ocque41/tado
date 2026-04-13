@@ -12,6 +12,9 @@ struct ProjectsView: View {
     @State private var newProjectName: String = ""
     @State private var newProjectPath: String = ""
     @State private var selectedProjectID: UUID? = nil
+    @State private var showNewTeamInProject: Bool = false
+    @State private var newTeamNameInProject: String = ""
+    @State private var newTeamAgentsInProject: Set<String> = []
 
     private var selectedProject: Project? {
         guard let id = selectedProjectID else { return nil }
@@ -139,6 +142,24 @@ struct ProjectsView: View {
                         .clipShape(Capsule())
                 }
 
+                Button(action: { bootstrapTools(for: project) }) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.orange.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+                .help("Bootstrap Tado A2A tools for this project")
+
+                if teamCount > 0 {
+                    Button(action: { bootstrapTeam(for: project) }) {
+                        Image(systemName: "person.3.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.cyan.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Bootstrap team awareness for this project")
+                }
+
                 Button(action: { deleteProject(project) }) {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
@@ -231,14 +252,26 @@ struct ProjectsView: View {
 
                 Spacer()
 
-                // Spacer to balance the back button
-                Color.clear.frame(width: 60, height: 1)
+                Button(action: { showNewTeamInProject.toggle() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                        Text("New Team")
+                    }
+                    .font(.system(size: 12, design: .monospaced))
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
             .background(.ultraThinMaterial)
 
             Divider()
+
+            // Inline new team form
+            if showNewTeamInProject {
+                inlineNewTeamForm(project: project, agents: agents)
+                Divider()
+            }
 
             // Project info + todo input
             VStack(spacing: 8) {
@@ -365,6 +398,69 @@ struct ProjectsView: View {
         .padding(.vertical, 6)
     }
 
+    // MARK: - Inline New Team Form
+
+    private func inlineNewTeamForm(project: Project, agents: [AgentDefinition]) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                TextField("Team name", text: $newTeamNameInProject)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, design: .monospaced))
+            }
+
+            if !agents.isEmpty {
+                HStack(spacing: 8) {
+                    Text("Agents:")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    ForEach(agents) { agent in
+                        let isSelected = newTeamAgentsInProject.contains(agent.id)
+                        Button(action: {
+                            if isSelected { newTeamAgentsInProject.remove(agent.id) }
+                            else { newTeamAgentsInProject.insert(agent.id) }
+                        }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 10))
+                                Text(agent.name)
+                                    .font(.system(size: 11, design: .monospaced))
+                            }
+                            .foregroundColor(isSelected ? .accentColor : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showNewTeamInProject = false
+                    newTeamNameInProject = ""
+                    newTeamAgentsInProject = []
+                }
+                .font(.system(size: 12, design: .monospaced))
+                .buttonStyle(.plain)
+
+                Button("Create") {
+                    let team = Team(name: newTeamNameInProject, projectID: project.id, agentNames: Array(newTeamAgentsInProject))
+                    modelContext.insert(team)
+                    try? modelContext.save()
+                    showNewTeamInProject = false
+                    newTeamNameInProject = ""
+                    newTeamAgentsInProject = []
+                }
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .buttonStyle(.plain)
+                .disabled(newTeamNameInProject.isEmpty)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color.accentColor.opacity(0.04))
+    }
+
     // MARK: - Actions
 
     private func pickDirectory() {
@@ -398,6 +494,82 @@ struct ProjectsView: View {
         modelContext.delete(project)
         try? modelContext.save()
     }
+
+    // MARK: - Bootstrap Tools
+
+    private func bootstrapTools(for project: Project) {
+        guard let tadoRoot = ProcessSpawner.tadoRepoRoot() else { return }
+
+        let prompt = ProcessSpawner.bootstrapPrompt(targetPath: project.rootPath)
+        let settings = bootstrapFetchOrCreateSettings()
+        let index = bootstrapNextAvailableGridIndex()
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: tadoRoot,
+            projectName: "Tado"
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
+    // MARK: - Bootstrap Team
+
+    private func bootstrapTeam(for project: Project) {
+        let projectTeams = teams.filter { $0.projectID == project.id }
+        guard !projectTeams.isEmpty else { return }
+
+        let prompt = ProcessSpawner.bootstrapTeamPrompt(
+            targetPath: project.rootPath,
+            projectName: project.name,
+            teams: projectTeams.map { ($0.name, $0.agentNames) }
+        )
+        let settings = bootstrapFetchOrCreateSettings()
+        let index = bootstrapNextAvailableGridIndex()
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: project.rootPath,
+            projectName: project.name
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
+    private func bootstrapNextAvailableGridIndex() -> Int {
+        let activeTodos = todos.filter { $0.listState == .active }
+        let usedIndices = Set(activeTodos.map(\.gridIndex))
+        var index = 0
+        while usedIndices.contains(index) { index += 1 }
+        return index
+    }
+
+    private func bootstrapFetchOrCreateSettings() -> AppSettings {
+        let descriptor = FetchDescriptor<AppSettings>()
+        if let existing = try? modelContext.fetch(descriptor).first {
+            return existing
+        }
+        let settings = AppSettings()
+        modelContext.insert(settings)
+        try? modelContext.save()
+        return settings
+    }
 }
 
 // MARK: - Project-scoped Todo Input
@@ -407,6 +579,7 @@ struct ProjectTodoInput: View {
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \TodoItem.createdAt) private var allTodos: [TodoItem]
+    @Query(sort: \Team.createdAt) private var teams: [Team]
     @State private var inputText: String = ""
     @State private var selectedAgentName: String? = nil
     @State private var selectedTeamID: UUID? = nil
@@ -416,14 +589,46 @@ struct ProjectTodoInput: View {
         allTodos.filter { $0.listState == .active && $0.projectID == project.id }
     }
 
+    private var projectTeams: [Team] {
+        teams.filter { $0.projectID == project.id }
+    }
+
+    private var availableAgents: [AgentDefinition] {
+        let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
+        if let teamID = selectedTeamID,
+           let team = projectTeams.first(where: { $0.id == teamID }) {
+            return agents.filter { team.agentNames.contains($0.id) }
+        }
+        return agents
+    }
+
     var body: some View {
         HStack(spacing: 10) {
+            // Team picker
+            if !projectTeams.isEmpty {
+                Picker("", selection: $selectedTeamID) {
+                    Text("No team").tag(nil as UUID?)
+                    ForEach(projectTeams) { team in
+                        Text(team.name).tag(team.id as UUID?)
+                    }
+                }
+                .frame(width: 120)
+                .font(.system(size: 11, design: .monospaced))
+                .onChange(of: selectedTeamID) { _, newTeamID in
+                    // Reset agent if not in new team
+                    if let newTeamID, let team = projectTeams.first(where: { $0.id == newTeamID }) {
+                        if let agent = selectedAgentName, !team.agentNames.contains(agent) {
+                            selectedAgentName = nil
+                        }
+                    }
+                }
+            }
+
             // Agent picker
-            let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
-            if !agents.isEmpty {
+            if !availableAgents.isEmpty {
                 Picker("", selection: $selectedAgentName) {
                     Text("No agent").tag(nil as String?)
-                    ForEach(agents) { agent in
+                    ForEach(availableAgents) { agent in
                         Text(agent.name).tag(agent.id as String?)
                     }
                 }
@@ -452,15 +657,25 @@ struct ProjectTodoInput: View {
         let todo = TodoItem(text: text, gridIndex: index, canvasPosition: position)
         todo.projectID = project.id
         todo.agentName = selectedAgentName
-        todo.teamID = selectedTeamID
+
+        // Auto-assign teamID: use explicit selection, or find the team containing this agent
+        var effectiveTeamID = selectedTeamID
+        if effectiveTeamID == nil, let agentName = selectedAgentName {
+            effectiveTeamID = projectTeams.first { $0.agentNames.contains(agentName) }?.id
+        }
+        todo.teamID = effectiveTeamID
         modelContext.insert(todo)
 
+        let team = effectiveTeamID.flatMap { tid in teams.first { $0.id == tid } }
         terminalManager.spawnAndWire(
             todo: todo,
             engine: settings.engine,
             cwd: project.rootPath,
             agentName: selectedAgentName,
-            projectName: project.name
+            projectName: project.name,
+            teamName: team?.name,
+            teamID: team?.id,
+            teamAgents: team?.agentNames
         )
 
         try? modelContext.save()

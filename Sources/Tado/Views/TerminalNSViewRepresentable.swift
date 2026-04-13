@@ -99,7 +99,13 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
                 sessionID: session.id,
                 sessionName: session.todoText,
                 engine: engine,
-                ipcRoot: ipcRoot
+                ipcRoot: ipcRoot,
+                projectName: session.projectName,
+                projectRoot: session.projectRoot,
+                teamName: session.teamName,
+                teamID: session.teamID,
+                agentName: session.agentName,
+                teamAgents: session.teamAgents
             )
         } else {
             env = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }

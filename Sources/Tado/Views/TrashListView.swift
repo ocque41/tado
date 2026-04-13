@@ -7,6 +7,7 @@ struct TrashListView: View {
     @Environment(TerminalManager.self) private var terminalManager
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
     @Query(sort: \Project.createdAt) private var projects: [Project]
+    @Query(sort: \Team.createdAt) private var teams: [Team]
 
     private var trashedTodos: [TodoItem] {
         todos.filter { $0.listState == .trashed }
@@ -116,7 +117,8 @@ struct TrashListView: View {
         todo.terminalLog = ""
 
         let project = todo.projectID.flatMap { pid in projects.first { $0.id == pid } }
-        terminalManager.spawnAndWire(todo: todo, engine: settings.engine, cwd: project?.rootPath, agentName: todo.agentName, projectName: project?.name)
+        let team = todo.teamID.flatMap { tid in teams.first { $0.id == tid } }
+        terminalManager.spawnAndWire(todo: todo, engine: settings.engine, cwd: project?.rootPath, agentName: todo.agentName, projectName: project?.name, teamName: team?.name, teamID: team?.id, teamAgents: team?.agentNames)
         try? modelContext.save()
     }
 

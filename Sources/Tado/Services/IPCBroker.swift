@@ -10,6 +10,11 @@ final class IPCBroker {
     private var externalWatcher: DispatchSourceFileSystemObject?
     private var externalFd: Int32?
     private var externalPollTimer: Timer?
+    private var topicsWatcher: DispatchSourceFileSystemObject?
+    private var topicsFd: Int32?
+    private var topicMessageWatchers: [String: DispatchSourceFileSystemObject] = [:]
+    private var topicMessageFds: [String: Int32] = [:]
+    private var topicsPollTimer: Timer?
     private weak var terminalManager: TerminalManager?
     private var processedFiles: Set<String> = []
 
@@ -21,7 +26,9 @@ final class IPCBroker {
         createDirectoryStructure()
         writeHelperScripts()
         writeExternalScripts()
+        installMCPServer()
         startExternalInboxWatcher()
+        startTopicsWatcher()
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -43,6 +50,7 @@ final class IPCBroker {
         try? fm.createDirectory(at: ipcRoot.appendingPathComponent("sessions"), withIntermediateDirectories: true)
         try? fm.createDirectory(at: ipcRoot.appendingPathComponent("bin"), withIntermediateDirectories: true)
         try? fm.createDirectory(at: ipcRoot.appendingPathComponent("a2a-inbox"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: ipcRoot.appendingPathComponent("topics"), withIntermediateDirectories: true)
 
         // Create stable symlink so external tools can find us
         let symlink = Self.stableSymlink
@@ -84,7 +92,9 @@ final class IPCBroker {
                 gridLabel: CanvasLayout.gridLabel(forIndex: session.gridIndex),
                 status: statusString(session.status),
                 projectName: session.projectName,
-                agentName: session.agentName
+                agentName: session.agentName,
+                teamName: session.teamName,
+                teamID: session.teamID?.uuidString.lowercased()
             )
         }
         let encoder = JSONEncoder()
@@ -197,35 +207,51 @@ final class IPCBroker {
         writeTadoSend(to: binDir)
         writeTadoRecv(to: binDir)
         writeTadoList(to: binDir)
+        writeTadoBroadcast(to: binDir)
+        writeTadoPublish(to: binDir)
+        writeTadoSubscribe(to: binDir)
+        writeTadoUnsubscribe(to: binDir)
+        writeTadoTopics(to: binDir)
+        writeTadoTeam(to: binDir)
     }
 
     private func writeTadoSend(to binDir: URL) {
         let script = """
         #!/bin/bash
-        # Usage: tado-send <target-name-or-uuid> <message>
+        # Usage: tado-send [--project <name>] <target-name-or-uuid> <message>
+
+        PROJ_FILTER=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_FILTER="$2"; shift 2 ;;
+            *) break ;;
+          esac
+        done
 
         TARGET="$1"
         shift
         MESSAGE="$*"
 
         if [ -z "$TARGET" ] || [ -z "$MESSAGE" ]; then
-          echo "Usage: tado-send <target-name-or-id> <message>"
+          echo "Usage: tado-send [--project <name>] <target-name-or-id> <message>"
           echo "Use 'tado-list' to see available sessions"
           exit 1
         fi
 
         # Fall back to stable symlink when env vars are missing
-        # (Codex CLI may strip custom env vars from subprocesses)
         IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
         SESSION_ID="${TADO_SESSION_ID:-}"
         SESSION_NAME="${TADO_SESSION_NAME:-unknown}"
 
-        RESOLVED=$(python3 - "$TARGET" "$IPC_ROOT/registry.json" "$SESSION_ID" <<'PYEOF'
+        RESOLVED=$(python3 - "$TARGET" "$IPC_ROOT/registry.json" "$SESSION_ID" "$PROJ_FILTER" <<'PYEOF'
         import json, sys
         target, registry, self_id = sys.argv[1], sys.argv[2], sys.argv[3].lower()
+        proj_filter = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
         with open(registry) as f:
             entries = json.load(f)
         others = [e for e in entries if e['sessionID'].lower() != self_id] if self_id else entries
+        if proj_filter:
+            others = [e for e in others if (e.get('projectName') or '').lower() == proj_filter.lower()]
         t = target.lower()
         # Try exact UUID
         if len(t) == 36:
@@ -347,30 +373,49 @@ final class IPCBroker {
         let script = """
         #!/bin/bash
         # Lists all peer sessions
+        # Usage: tado-list [--project <name>] [--team <name>]
 
-        REGISTRY="$TADO_IPC_ROOT/registry.json"
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        REGISTRY="$IPC_ROOT/registry.json"
 
         if [ ! -f "$REGISTRY" ]; then
           echo "No active sessions."
           exit 0
         fi
 
-        python3 - "$REGISTRY" "$TADO_SESSION_ID" <<'PYEOF'
+        PROJ_FILTER=""
+        TEAM_FILTER=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_FILTER="$2"; shift 2 ;;
+            --team) TEAM_FILTER="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+
+        python3 - "$REGISTRY" "$TADO_SESSION_ID" "$PROJ_FILTER" "$TEAM_FILTER" <<'PYEOF'
         import json, sys
         with open(sys.argv[1]) as f:
             entries = json.load(f)
-        self_id = sys.argv[2].lower() if len(sys.argv) > 2 else ''
+        self_id = sys.argv[2].lower() if len(sys.argv) > 2 and sys.argv[2] else ''
+        proj_filter = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+        team_filter = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
         peers = [e for e in entries if e['sessionID'].lower() != self_id]
+        if proj_filter:
+            peers = [e for e in peers if (e.get('projectName') or '').lower() == proj_filter.lower()]
+        if team_filter:
+            peers = [e for e in peers if (e.get('teamName') or '').lower() == team_filter.lower()]
         if not peers:
-            print('No other sessions active.')
+            print('No matching sessions.')
         else:
-            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Agent":<14} Name'
+            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Team":<14} {"Agent":<14} Name'
             print(hdr)
-            print('-' * 130)
+            print('-' * 146)
             for e in peers:
                 proj = e.get("projectName") or "-"
+                team = e.get("teamName") or "-"
                 agent = e.get("agentName") or "-"
-                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {proj:<16} {agent:<14} {e["name"]}'
+                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {proj:<16} {team:<14} {agent:<14} {e["name"]}'
                 print(line)
         PYEOF
         """
@@ -443,6 +488,11 @@ final class IPCBroker {
         writeExternalTadoList(to: binDir)
         writeExternalTadoSend(to: binDir)
         writeExternalTadoRead(to: binDir)
+        writeExternalTadoBroadcast(to: binDir)
+        writeExternalTadoPublish(to: binDir)
+        writeExternalTadoSubscribe(to: binDir)
+        writeExternalTadoUnsubscribe(to: binDir)
+        writeExternalTadoTopics(to: binDir)
 
         // Also install to ~/.local/bin for PATH accessibility
         let localBin = FileManager.default.homeDirectoryForCurrentUser
@@ -451,6 +501,51 @@ final class IPCBroker {
         installScript(name: "tado-list", from: binDir, to: localBin)
         installScript(name: "tado-send", from: binDir, to: localBin)
         installScript(name: "tado-read", from: binDir, to: localBin)
+        installScript(name: "tado-broadcast", from: binDir, to: localBin)
+        installScript(name: "tado-publish", from: binDir, to: localBin)
+        installScript(name: "tado-subscribe", from: binDir, to: localBin)
+        installScript(name: "tado-unsubscribe", from: binDir, to: localBin)
+        installScript(name: "tado-topics", from: binDir, to: localBin)
+    }
+
+    private func installMCPServer() {
+        // Auto-register tado-mcp as a user-scope MCP server for Claude Code
+        // so agents in any project can discover and use Tado's A2A tools.
+        let claudeConfig = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json")
+
+        // Check if already registered
+        if let data = try? Data(contentsOf: claudeConfig),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let mcpServers = json["mcpServers"] as? [String: Any],
+           mcpServers["tado"] != nil {
+            return // Already registered
+        }
+
+        // Find the tado-mcp server entry point relative to the app bundle or repo
+        let candidates = [
+            // Development: repo checkout
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("tado-mcp/dist/index.js"),
+            // Installed alongside the app
+            Bundle.main.resourceURL?
+                .appendingPathComponent("tado-mcp/dist/index.js"),
+        ].compactMap { $0 }
+
+        guard let serverPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
+            return // MCP server not found, skip
+        }
+
+        // Register via claude CLI if available
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = ["claude", "mcp", "add", "tado", "--scope", "user", "--", "node", serverPath.path]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
     }
 
     private func installScript(name: String, from srcDir: URL, to destDir: URL) {
@@ -466,6 +561,7 @@ final class IPCBroker {
         let script = """
         #!/bin/bash
         # Lists all Tado terminal sessions (run from any terminal)
+        # Usage: tado-list [--project <name>] [--team <name>]
 
         IPC_ROOT="/tmp/tado-ipc"
 
@@ -481,20 +577,37 @@ final class IPCBroker {
           exit 0
         fi
 
-        python3 - "$REGISTRY" <<'PYEOF'
+        PROJ_FILTER=""
+        TEAM_FILTER=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_FILTER="$2"; shift 2 ;;
+            --team) TEAM_FILTER="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+
+        python3 - "$REGISTRY" "$PROJ_FILTER" "$TEAM_FILTER" <<'PYEOF'
         import json, sys
         with open(sys.argv[1]) as f:
             entries = json.load(f)
+        proj_filter = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+        team_filter = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+        if proj_filter:
+            entries = [e for e in entries if (e.get('projectName') or '').lower() == proj_filter.lower()]
+        if team_filter:
+            entries = [e for e in entries if (e.get('teamName') or '').lower() == team_filter.lower()]
         if not entries:
-            print('No active sessions.')
+            print('No matching sessions.')
         else:
-            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Agent":<14} Name'
+            hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Team":<14} {"Agent":<14} Name'
             print(hdr)
-            print('-' * 130)
+            print('-' * 146)
             for e in entries:
                 proj = e.get("projectName") or "-"
+                team = e.get("teamName") or "-"
                 agent = e.get("agentName") or "-"
-                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {proj:<16} {agent:<14} {e["name"]}'
+                line = f'{e["sessionID"]:<38} {e["engine"]:<8} {e["gridLabel"]:<8} {e["status"]:<12} {proj:<16} {team:<14} {agent:<14} {e["name"]}'
                 print(line)
         PYEOF
         """
@@ -507,15 +620,23 @@ final class IPCBroker {
     private func writeExternalTadoSend(to binDir: URL) {
         let script = """
         #!/bin/bash
-        # Usage: tado-send <target-name-substring> <message>
+        # Usage: tado-send [--project <name>] <target-name-substring> <message>
         # Sends typed input to a Tado terminal session (run from any terminal)
+
+        PROJ_FILTER=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_FILTER="$2"; shift 2 ;;
+            *) break ;;
+          esac
+        done
 
         TARGET="$1"
         shift
         MESSAGE="$*"
 
         if [ -z "$TARGET" ] || [ -z "$MESSAGE" ]; then
-          echo "Usage: tado-send <target-name-or-id> <message>"
+          echo "Usage: tado-send [--project <name>] <target-name-or-id> <message>"
           echo "Use 'tado-list' to see available sessions"
           exit 1
         fi
@@ -529,12 +650,14 @@ final class IPCBroker {
 
         REGISTRY="$IPC_ROOT/registry.json"
 
-        # Resolve target: try UUID, then grid coords (1,1 / 1:1 / [1,1]), then name substring
-        RESOLVED=$(python3 - "$TARGET" "$REGISTRY" <<'PYEOF'
+        RESOLVED=$(python3 - "$TARGET" "$REGISTRY" "$PROJ_FILTER" <<'PYEOF'
         import json, sys
         target = sys.argv[1]
+        proj_filter = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
         with open(sys.argv[2]) as f:
             entries = json.load(f)
+        if proj_filter:
+            entries = [e for e in entries if (e.get('projectName') or '').lower() == proj_filter.lower()]
         t = target.lower()
         # Try exact UUID
         for e in entries:
@@ -760,9 +883,752 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
+    // MARK: - Broadcast Script
+
+    private func writeTadoBroadcast(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-broadcast [--project <name>] [--team <name>] <message>
+
+        PROJ_FILTER=""
+        TEAM_FILTER=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_FILTER="$2"; shift 2 ;;
+            --team) TEAM_FILTER="$2"; shift 2 ;;
+            *) break ;;
+          esac
+        done
+
+        MESSAGE="$*"
+        if [ -z "$MESSAGE" ]; then
+          echo "Usage: tado-broadcast [--project <name>] [--team <name>] <message>"
+          exit 1
+        fi
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SESSION_NAME="${TADO_SESSION_NAME:-unknown}"
+        REGISTRY="$IPC_ROOT/registry.json"
+        [ ! -f "$REGISTRY" ] && echo "No active sessions." && exit 0
+
+        python3 - "$REGISTRY" "$SESSION_ID" "$SESSION_NAME" "$PROJ_FILTER" "$TEAM_FILTER" "$MESSAGE" "$IPC_ROOT" <<'PYEOF'
+        import json, sys, os, uuid
+        from datetime import datetime, timezone
+        registry, self_id, self_name = sys.argv[1], sys.argv[2].lower(), sys.argv[3]
+        proj_filter = sys.argv[4] if sys.argv[4] else None
+        team_filter = sys.argv[5] if sys.argv[5] else None
+        message, ipc_root = sys.argv[6], sys.argv[7]
+        with open(registry) as f:
+            entries = json.load(f)
+        targets = [e for e in entries if e['sessionID'].lower() != self_id]
+        if proj_filter:
+            targets = [e for e in targets if (e.get('projectName') or '').lower() == proj_filter.lower()]
+        if team_filter:
+            targets = [e for e in targets if (e.get('teamName') or '').lower() == team_filter.lower()]
+        count = 0
+        for e in targets:
+            msg_id = str(uuid.uuid4())
+            msg = {
+                'id': msg_id,
+                'from': self_id if self_id else '00000000-0000-0000-0000-000000000000',
+                'fromName': self_name,
+                'to': e['sessionID'],
+                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'body': message,
+                'status': 'pending'
+            }
+            if self_id:
+                outbox = os.path.join(ipc_root, 'sessions', self_id, 'outbox')
+            else:
+                outbox = os.path.join(ipc_root, 'a2a-inbox')
+            with open(os.path.join(outbox, msg_id + '.msg'), 'w') as f:
+                json.dump(msg, f, indent=2)
+            count += 1
+        print(f'Broadcast sent to {count} session(s)')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-broadcast")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeExternalTadoBroadcast(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-broadcast [--project <name>] [--team <name>] <message>
+
+        PROJ_FILTER=""
+        TEAM_FILTER=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_FILTER="$2"; shift 2 ;;
+            --team) TEAM_FILTER="$2"; shift 2 ;;
+            *) break ;;
+          esac
+        done
+
+        MESSAGE="$*"
+        if [ -z "$MESSAGE" ]; then
+          echo "Usage: tado-broadcast [--project <name>] [--team <name>] <message>"
+          exit 1
+        fi
+
+        IPC_ROOT="/tmp/tado-ipc"
+        [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ] && echo "Tado is not running" && exit 1
+        REGISTRY="$IPC_ROOT/registry.json"
+        [ ! -f "$REGISTRY" ] && echo "No active sessions." && exit 0
+
+        python3 - "$REGISTRY" "$PROJ_FILTER" "$TEAM_FILTER" "$MESSAGE" "$IPC_ROOT" <<'PYEOF'
+        import json, sys, os, uuid
+        from datetime import datetime, timezone
+        registry = sys.argv[1]
+        proj_filter = sys.argv[2] if sys.argv[2] else None
+        team_filter = sys.argv[3] if sys.argv[3] else None
+        message, ipc_root = sys.argv[4], sys.argv[5]
+        with open(registry) as f:
+            entries = json.load(f)
+        if proj_filter:
+            entries = [e for e in entries if (e.get('projectName') or '').lower() == proj_filter.lower()]
+        if team_filter:
+            entries = [e for e in entries if (e.get('teamName') or '').lower() == team_filter.lower()]
+        count = 0
+        for e in entries:
+            msg_id = str(uuid.uuid4())
+            msg = {
+                'id': msg_id,
+                'from': '00000000-0000-0000-0000-000000000000',
+                'fromName': 'external',
+                'to': e['sessionID'],
+                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'body': message,
+                'status': 'pending'
+            }
+            with open(os.path.join(ipc_root, 'a2a-inbox', msg_id + '.msg'), 'w') as f:
+                json.dump(msg, f, indent=2)
+            count += 1
+        print(f'Broadcast sent to {count} session(s)')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("ext-tado-broadcast")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    // MARK: - Publish/Subscribe Scripts
+
+    private func writeTadoPublish(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-publish <topic> <message>
+
+        TOPIC="$1"
+        shift
+        MESSAGE="$*"
+
+        if [ -z "$TOPIC" ] || [ -z "$MESSAGE" ]; then
+          echo "Usage: tado-publish <topic> <message>"
+          exit 1
+        fi
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-00000000-0000-0000-0000-000000000000}"
+        SESSION_NAME="${TADO_SESSION_NAME:-unknown}"
+        TOPIC_DIR="$IPC_ROOT/topics/$TOPIC/messages"
+        mkdir -p "$TOPIC_DIR"
+
+        python3 - "$TOPIC" "$MESSAGE" "$SESSION_ID" "$SESSION_NAME" "$TOPIC_DIR" <<'PYEOF'
+        import json, sys, uuid
+        from datetime import datetime, timezone
+        topic, message, sid, sname, topic_dir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+        msg_id = str(uuid.uuid4())
+        msg = {
+            'id': msg_id,
+            'from': sid,
+            'fromName': sname,
+            'topic': topic,
+            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'body': message
+        }
+        import os
+        with open(os.path.join(topic_dir, msg_id + '.msg'), 'w') as f:
+            json.dump(msg, f, indent=2)
+        print(f'Published to topic "{topic}"')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-publish")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeExternalTadoPublish(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-publish <topic> <message>
+
+        TOPIC="$1"
+        shift
+        MESSAGE="$*"
+
+        if [ -z "$TOPIC" ] || [ -z "$MESSAGE" ]; then
+          echo "Usage: tado-publish <topic> <message>"
+          exit 1
+        fi
+
+        IPC_ROOT="/tmp/tado-ipc"
+        [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ] && echo "Tado is not running" && exit 1
+        TOPIC_DIR="$IPC_ROOT/topics/$TOPIC/messages"
+        mkdir -p "$TOPIC_DIR"
+
+        python3 - "$TOPIC" "$MESSAGE" "$TOPIC_DIR" <<'PYEOF'
+        import json, sys, uuid
+        from datetime import datetime, timezone
+        topic, message, topic_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+        msg_id = str(uuid.uuid4())
+        msg = {
+            'id': msg_id,
+            'from': '00000000-0000-0000-0000-000000000000',
+            'fromName': 'external',
+            'topic': topic,
+            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'body': message
+        }
+        import os
+        with open(os.path.join(topic_dir, msg_id + '.msg'), 'w') as f:
+            json.dump(msg, f, indent=2)
+        print(f'Published to topic "{topic}"')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("ext-tado-publish")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeTadoSubscribe(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-subscribe <topic> [--project <name>]
+
+        TOPIC=""
+        PROJ_NAME=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_NAME="$2"; shift 2 ;;
+            *) if [ -z "$TOPIC" ]; then TOPIC="$1"; fi; shift ;;
+          esac
+        done
+
+        if [ -z "$TOPIC" ]; then
+          echo "Usage: tado-subscribe <topic> [--project <name>]"
+          exit 1
+        fi
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SUBS_DIR="$IPC_ROOT/topics/$TOPIC"
+        mkdir -p "$SUBS_DIR"
+
+        python3 - "$SUBS_DIR/subscribers.json" "$SESSION_ID" "$PROJ_NAME" <<'PYEOF'
+        import json, sys, os
+        subs_file, session_id, proj_name = sys.argv[1], sys.argv[2], sys.argv[3]
+        subs = []
+        if os.path.exists(subs_file):
+            with open(subs_file) as f:
+                subs = json.load(f)
+        if proj_name:
+            entry = {'type': 'project', 'id': None, 'name': proj_name}
+            key = ('project', proj_name.lower())
+        elif session_id:
+            entry = {'type': 'session', 'id': session_id, 'name': None}
+            key = ('session', session_id.lower())
+        else:
+            print('Error: no session ID or project name'); sys.exit(1)
+        existing = set()
+        for s in subs:
+            existing.add((s['type'], (s.get('id') or s.get('name') or '').lower()))
+        if key not in existing:
+            subs.append(entry)
+            with open(subs_file, 'w') as f:
+                json.dump(subs, f, indent=2)
+            print(f'Subscribed to topic')
+        else:
+            print(f'Already subscribed')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-subscribe")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeExternalTadoSubscribe(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-subscribe <topic> [--project <name>]
+
+        TOPIC=""
+        PROJ_NAME=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --project) PROJ_NAME="$2"; shift 2 ;;
+            *) if [ -z "$TOPIC" ]; then TOPIC="$1"; fi; shift ;;
+          esac
+        done
+
+        if [ -z "$TOPIC" ]; then
+          echo "Usage: tado-subscribe <topic> [--project <name>]"
+          exit 1
+        fi
+
+        IPC_ROOT="/tmp/tado-ipc"
+        [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ] && echo "Tado is not running" && exit 1
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SUBS_DIR="$IPC_ROOT/topics/$TOPIC"
+        mkdir -p "$SUBS_DIR"
+
+        python3 - "$SUBS_DIR/subscribers.json" "$SESSION_ID" "$PROJ_NAME" <<'PYEOF'
+        import json, sys, os
+        subs_file, session_id, proj_name = sys.argv[1], sys.argv[2], sys.argv[3]
+        subs = []
+        if os.path.exists(subs_file):
+            with open(subs_file) as f:
+                subs = json.load(f)
+        if proj_name:
+            entry = {'type': 'project', 'id': None, 'name': proj_name}
+            key = ('project', proj_name.lower())
+        elif session_id:
+            entry = {'type': 'session', 'id': session_id, 'name': None}
+            key = ('session', session_id.lower())
+        else:
+            print('Error: no session ID or project name'); sys.exit(1)
+        existing = set()
+        for s in subs:
+            existing.add((s['type'], (s.get('id') or s.get('name') or '').lower()))
+        if key not in existing:
+            subs.append(entry)
+            with open(subs_file, 'w') as f:
+                json.dump(subs, f, indent=2)
+            print(f'Subscribed to topic')
+        else:
+            print(f'Already subscribed')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("ext-tado-subscribe")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeTadoUnsubscribe(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-unsubscribe <topic>
+
+        TOPIC="$1"
+        if [ -z "$TOPIC" ]; then
+          echo "Usage: tado-unsubscribe <topic>"
+          exit 1
+        fi
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SUBS_FILE="$IPC_ROOT/topics/$TOPIC/subscribers.json"
+
+        [ ! -f "$SUBS_FILE" ] && echo "Not subscribed to '$TOPIC'" && exit 0
+
+        python3 - "$SUBS_FILE" "$SESSION_ID" <<'PYEOF'
+        import json, sys
+        subs_file, session_id = sys.argv[1], sys.argv[2].lower()
+        with open(subs_file) as f:
+            subs = json.load(f)
+        before = len(subs)
+        subs = [s for s in subs if not (s['type'] == 'session' and (s.get('id') or '').lower() == session_id)]
+        if len(subs) < before:
+            with open(subs_file, 'w') as f:
+                json.dump(subs, f, indent=2)
+            print('Unsubscribed')
+        else:
+            print('Not subscribed')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-unsubscribe")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeExternalTadoUnsubscribe(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-unsubscribe <topic>
+
+        TOPIC="$1"
+        if [ -z "$TOPIC" ]; then
+          echo "Usage: tado-unsubscribe <topic>"
+          exit 1
+        fi
+
+        IPC_ROOT="/tmp/tado-ipc"
+        [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ] && echo "Tado is not running" && exit 1
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SUBS_FILE="$IPC_ROOT/topics/$TOPIC/subscribers.json"
+
+        [ ! -f "$SUBS_FILE" ] && echo "Not subscribed to '$TOPIC'" && exit 0
+
+        python3 - "$SUBS_FILE" "$SESSION_ID" <<'PYEOF'
+        import json, sys
+        subs_file, session_id = sys.argv[1], sys.argv[2].lower()
+        with open(subs_file) as f:
+            subs = json.load(f)
+        before = len(subs)
+        subs = [s for s in subs if not (s['type'] == 'session' and (s.get('id') or '').lower() == session_id)]
+        if len(subs) < before:
+            with open(subs_file, 'w') as f:
+                json.dump(subs, f, indent=2)
+            print('Unsubscribed')
+        else:
+            print('Not subscribed')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("ext-tado-unsubscribe")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeTadoTopics(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Lists all topics with subscriber counts
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        TOPICS_DIR="$IPC_ROOT/topics"
+
+        if [ ! -d "$TOPICS_DIR" ]; then
+          echo "No topics."
+          exit 0
+        fi
+
+        python3 - "$TOPICS_DIR" <<'PYEOF'
+        import os, json, sys
+        topics_dir = sys.argv[1]
+        topics = [d for d in os.listdir(topics_dir) if os.path.isdir(os.path.join(topics_dir, d))]
+        if not topics:
+            print('No topics.')
+        else:
+            print(f'{"Topic":<30} {"Subscribers":<15} Messages')
+            print('-' * 60)
+            for t in sorted(topics):
+                subs_file = os.path.join(topics_dir, t, 'subscribers.json')
+                subs = 0
+                if os.path.exists(subs_file):
+                    with open(subs_file) as f:
+                        subs = len(json.load(f))
+                msgs_dir = os.path.join(topics_dir, t, 'messages')
+                msgs = len([f for f in os.listdir(msgs_dir) if f.endswith('.msg')]) if os.path.exists(msgs_dir) else 0
+                print(f'{t:<30} {subs:<15} {msgs}')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-topics")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeExternalTadoTopics(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Lists all topics with subscriber counts
+
+        IPC_ROOT="/tmp/tado-ipc"
+        [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ] && echo "Tado is not running" && exit 1
+        TOPICS_DIR="$IPC_ROOT/topics"
+
+        if [ ! -d "$TOPICS_DIR" ]; then
+          echo "No topics."
+          exit 0
+        fi
+
+        python3 - "$TOPICS_DIR" <<'PYEOF'
+        import os, json, sys
+        topics_dir = sys.argv[1]
+        topics = [d for d in os.listdir(topics_dir) if os.path.isdir(os.path.join(topics_dir, d))]
+        if not topics:
+            print('No topics.')
+        else:
+            print(f'{"Topic":<30} {"Subscribers":<15} Messages')
+            print('-' * 60)
+            for t in sorted(topics):
+                subs_file = os.path.join(topics_dir, t, 'subscribers.json')
+                subs = 0
+                if os.path.exists(subs_file):
+                    with open(subs_file) as f:
+                        subs = len(json.load(f))
+                msgs_dir = os.path.join(topics_dir, t, 'messages')
+                msgs = len([f for f in os.listdir(msgs_dir) if f.endswith('.msg')]) if os.path.exists(msgs_dir) else 0
+                print(f'{t:<30} {subs:<15} {msgs}')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("ext-tado-topics")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    // MARK: - Team Script
+
+    private func writeTadoTeam(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-team [--send <message>]
+        # Without --send: lists team members
+        # With --send: sends message to all teammates
+
+        SEND_MSG=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --send) shift; SEND_MSG="$*"; break ;;
+            *) shift ;;
+          esac
+        done
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-}"
+        SESSION_NAME="${TADO_SESSION_NAME:-unknown}"
+        TEAM_NAME="${TADO_TEAM_NAME:-}"
+        REGISTRY="$IPC_ROOT/registry.json"
+
+        if [ -z "$TEAM_NAME" ]; then
+          echo "Not part of a team. Use tado-list to see sessions."
+          exit 1
+        fi
+
+        if [ -z "$SEND_MSG" ]; then
+          # List team members
+          python3 - "$REGISTRY" "$SESSION_ID" "$TEAM_NAME" <<'PYEOF'
+        import json, sys
+        with open(sys.argv[1]) as f:
+            entries = json.load(f)
+        self_id = sys.argv[2].lower()
+        team_name = sys.argv[3].lower()
+        members = [e for e in entries if (e.get('teamName') or '').lower() == team_name]
+        print(f'Team: {sys.argv[3]} ({len(members)} members)')
+        print('-' * 80)
+        for e in members:
+            marker = ' (you)' if e['sessionID'].lower() == self_id else ''
+            agent = e.get('agentName') or '-'
+            print(f'  {e["gridLabel"]:<8} {agent:<14} {e["status"]:<12} {e["name"]}{marker}')
+        PYEOF
+        else
+          # Send to all teammates
+          python3 - "$REGISTRY" "$SESSION_ID" "$SESSION_NAME" "$TEAM_NAME" "$SEND_MSG" "$IPC_ROOT" <<'PYEOF'
+        import json, sys, os, uuid
+        from datetime import datetime, timezone
+        with open(sys.argv[1]) as f:
+            entries = json.load(f)
+        self_id, self_name = sys.argv[2].lower(), sys.argv[3]
+        team_name, message, ipc_root = sys.argv[4].lower(), sys.argv[5], sys.argv[6]
+        teammates = [e for e in entries if (e.get('teamName') or '').lower() == team_name and e['sessionID'].lower() != self_id]
+        count = 0
+        for e in teammates:
+            msg_id = str(uuid.uuid4())
+            msg = {
+                'id': msg_id,
+                'from': self_id,
+                'fromName': self_name,
+                'to': e['sessionID'],
+                'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'body': message,
+                'status': 'pending'
+            }
+            if self_id and self_id != '00000000-0000-0000-0000-000000000000':
+                outbox = os.path.join(ipc_root, 'sessions', self_id, 'outbox')
+            else:
+                outbox = os.path.join(ipc_root, 'a2a-inbox')
+            with open(os.path.join(outbox, msg_id + '.msg'), 'w') as f:
+                json.dump(msg, f, indent=2)
+            count += 1
+        print(f'Sent to {count} teammate(s)')
+        PYEOF
+        fi
+        """
+
+        let url = binDir.appendingPathComponent("tado-team")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    // MARK: - Topics Broker
+
+    private func startTopicsWatcher() {
+        let topicsURL = ipcRoot.appendingPathComponent("topics")
+        let fd = open(topicsURL.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: .main
+        )
+
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                self?.scanForNewTopics()
+            }
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        source.resume()
+        topicsWatcher = source
+        topicsFd = fd
+
+        topicsPollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scanForNewTopics()
+                self?.scanAllTopicMessages()
+            }
+        }
+    }
+
+    private func scanForNewTopics() {
+        let topicsURL = ipcRoot.appendingPathComponent("topics")
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(at: topicsURL, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
+
+        for dir in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let topicName = dir.lastPathComponent
+            guard topicMessageWatchers[topicName] == nil else { continue }
+            startWatchingTopic(name: topicName)
+        }
+    }
+
+    private func startWatchingTopic(name: String) {
+        let messagesURL = ipcRoot.appendingPathComponent("topics/\(name)/messages")
+        let fm = FileManager.default
+        try? fm.createDirectory(at: messagesURL, withIntermediateDirectories: true)
+
+        let fd = open(messagesURL.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: .main
+        )
+
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                self?.scanTopicMessages(topic: name, at: messagesURL)
+            }
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        source.resume()
+        topicMessageWatchers[name] = source
+        topicMessageFds[name] = fd
+    }
+
+    private func scanAllTopicMessages() {
+        let topicsURL = ipcRoot.appendingPathComponent("topics")
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(at: topicsURL, includingPropertiesForKeys: [.isDirectoryKey]) else { return }
+
+        for dir in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let topicName = dir.lastPathComponent
+            let messagesURL = dir.appendingPathComponent("messages")
+            scanTopicMessages(topic: topicName, at: messagesURL)
+        }
+    }
+
+    private func scanTopicMessages(topic: String, at messagesURL: URL) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: messagesURL, includingPropertiesForKeys: nil) else { return }
+
+        for file in files where file.pathExtension == "msg" {
+            let filename = file.lastPathComponent
+            let key = "topic-\(topic)-\(filename)"
+            guard !processedFiles.contains(key) else { continue }
+
+            guard let data = try? Data(contentsOf: file) else { continue }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let topicMsg = try? decoder.decode(TopicMessage.self, from: data) else { continue }
+
+            processedFiles.insert(key)
+
+            let subscribers = resolveSubscribers(topic: topic)
+            for subscriberID in subscribers where subscriberID != topicMsg.from {
+                let ipcMessage = IPCMessage(
+                    id: UUID(),
+                    from: topicMsg.from,
+                    fromName: "topic:\(topic)",
+                    to: subscriberID,
+                    timestamp: topicMsg.timestamp,
+                    body: topicMsg.body,
+                    status: .pending
+                )
+                deliverMessage(ipcMessage)
+            }
+
+            try? fm.removeItem(at: file)
+        }
+    }
+
+    private func resolveSubscribers(topic: String) -> [UUID] {
+        let subsFile = ipcRoot.appendingPathComponent("topics/\(topic)/subscribers.json")
+        guard let data = try? Data(contentsOf: subsFile) else { return [] }
+        guard let subscribers = try? JSONDecoder().decode([TopicSubscriber].self, from: data) else { return [] }
+
+        var resolved: Set<UUID> = []
+        guard let manager = terminalManager else { return [] }
+
+        for sub in subscribers {
+            switch sub.type {
+            case .session:
+                if let idStr = sub.id, let uuid = UUID(uuidString: idStr) {
+                    if manager.sessions.contains(where: { $0.id == uuid }) {
+                        resolved.insert(uuid)
+                    }
+                }
+            case .project:
+                if let projectName = sub.name {
+                    for session in manager.sessions where session.projectName?.lowercased() == projectName.lowercased() {
+                        resolved.insert(session.id)
+                    }
+                }
+            }
+        }
+
+        return Array(resolved)
+    }
+
     // MARK: - Cleanup
 
     func cleanup() {
+        topicsPollTimer?.invalidate()
+        topicsPollTimer = nil
+        topicsWatcher?.cancel()
+        topicsWatcher = nil
+        topicsFd = nil
+        for (_, watcher) in topicMessageWatchers {
+            watcher.cancel()
+        }
+        topicMessageWatchers.removeAll()
+        topicMessageFds.removeAll()
         externalPollTimer?.invalidate()
         externalPollTimer = nil
         externalWatcher?.cancel()

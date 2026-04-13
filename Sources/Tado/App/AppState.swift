@@ -1,26 +1,26 @@
 import SwiftUI
 
 enum ViewMode: String, CaseIterable, Equatable {
-    case todos
     case canvas
     case projects
     case teams
+    case todos
 
     var label: String {
         switch self {
-        case .todos: "Todos"
         case .canvas: "Canvas"
         case .projects: "Projects"
         case .teams: "Teams"
+        case .todos: "Todos"
         }
     }
 
     var icon: String {
         switch self {
-        case .todos: "checklist"
         case .canvas: "square.grid.3x3"
         case .projects: "folder"
         case .teams: "person.3"
+        case .todos: "checklist"
         }
     }
 }

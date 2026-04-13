@@ -34,6 +34,10 @@ final class TerminalSession: Identifiable {
     var logBuffer: String = ""
     var projectName: String?
     var agentName: String?
+    var teamName: String?
+    var teamID: UUID?
+    var projectRoot: String?
+    var teamAgents: [String]?
     var onStatusChange: ((SessionStatus) -> Void)?
     var onCwdChange: ((String) -> Void)?
     var onLogFlush: ((String) -> Void)?

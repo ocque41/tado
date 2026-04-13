@@ -23,4 +23,22 @@ struct IPCSessionEntry: Codable {
     let status: String
     let projectName: String?
     let agentName: String?
+    let teamName: String?
+    let teamID: String?
+}
+
+struct TopicSubscriber: Codable {
+    enum SubscriberType: String, Codable { case session, project }
+    let type: SubscriberType
+    let id: String?
+    let name: String?
+}
+
+struct TopicMessage: Codable {
+    let id: UUID
+    let from: UUID
+    let fromName: String
+    let topic: String
+    let timestamp: Date
+    let body: String
 }
