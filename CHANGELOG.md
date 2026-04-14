@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-14
+
+### Added
+
+- `tado-deploy` command -- agents can programmatically spawn new agent sessions on the Tado canvas from within a terminal
+- Smart engine resolution -- `tado-deploy` auto-detects engine from agent source (`.claude/agents/` → claude, `.codex/agents/` → codex)
+- SpawnRequest IPC -- new file-based IPC flow (`/tmp/tado-ipc/spawn-requests/`) for inter-agent session creation
+- Multiline text input -- TodoListView and ProjectTodoInput now use a growing TextEditor (up to 8 lines)
+- Submit shortcut changed from Enter to **Cmd+Enter** (`⌘↩`) so newlines work in the input
+- Todo renaming -- right-click context menu with "Rename", "Mark as Done", "Move to Trash"
+- `TodoItem.name` property with `displayName` computed fallback to the original text
+- Enhanced AGENTS.md with a full "Deploying Agents" section covering syntax, flags, defaults, and example workflows
+- Project bootstrap now injects the Deploying Agents documentation into target projects
+
+- Bracketed paste mode -- multi-line messages sent to terminals are wrapped in bracketed paste escape sequences so agents receive them as a single paste rather than character-by-character input
+- Scaled send delay -- longer text now gets a proportional delay before Enter (base 50ms + 1ms per 100 bytes, capped at 2s) to prevent dropped characters
+- `FlowLayout` -- custom SwiftUI layout that wraps agent pills to multiple lines in the Teams view
+
+### Changed
+
+- ProjectsView input layout -- team/agent pickers moved to a dedicated row above the text editor
+- TeamsView agent chips -- redesigned as pill-shaped buttons that wrap across multiple lines via FlowLayout
+
 ## [0.4.0] - 2026-04-13
 
 ### Added

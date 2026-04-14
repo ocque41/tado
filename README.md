@@ -26,6 +26,8 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 - **Agent-to-agent IPC** -- agents can discover peers, read output, broadcast, and send messages via CLI tools
 - **Pub/sub topics** -- `tado-publish`, `tado-subscribe`, `tado-unsubscribe` for topic-based messaging
 - **Project bootstrap** -- one-click injection of A2A docs and team structure into any project's CLAUDE.md/AGENTS.md
+- **`tado-deploy`** -- agents can spawn other agents on the canvas programmatically; engine auto-detected from agent source
+- **Multiline input with renaming** -- grow-to-fit editor with Cmd+Enter submit; right-click todos to rename
 - **External CLI tools** -- message any Tado session from an outside terminal
 - **Forward mode** -- route your next typed input directly into a specific terminal
 - **Done and Trash lists** -- move completed or discarded todos out of the main list
@@ -52,8 +54,8 @@ No Xcode project is included. The project uses Swift Package Manager as its buil
 
 ## Usage
 
-1. Launch Tado and type a task in the input field
-2. Press **Enter** -- a terminal tile spawns on the canvas with your AI agent working on it
+1. Launch Tado and type a task in the input field (multiline supported, grows up to 8 lines)
+2. Press **Cmd+Enter** (`⌘↩`) -- a terminal tile spawns on the canvas with your AI agent working on it
 3. Press **Ctrl+Tab** to cycle between Todos, Canvas, Projects, and Teams
 4. **Shift+Scroll** to zoom the canvas, **Scroll** to pan
 5. Click the arrow icon on a todo row to enter **forward mode** (your next input goes to that terminal)
@@ -69,6 +71,7 @@ Agents running inside Tado can communicate with each other:
 | `tado-list [--project X] [--team Y]` | List all peer sessions, optionally filtered by project or team |
 | `tado-read <target> [--tail N] [--follow] [--raw]` | Read terminal output from a session |
 | `tado-send [--project X] <target> <message>` | Send a message to another session (by name, grid coords like `1,1`, or UUID) |
+| `tado-deploy "<prompt>" [--agent N] [--team T] [--project P] [--engine E] [--cwd D]` | Spawn a new agent session on the canvas |
 | `tado-broadcast [--project X] [--team Y] <message>` | Send a message to all matching sessions |
 | `tado-recv [--wait]` | Read messages from the inbox (`--wait` polls for up to 30 seconds) |
 | `tado-publish <topic> <message>` | Publish a message to a topic |
@@ -83,7 +86,8 @@ From **any external terminal**, CLI tools are installed to `~/.local/bin`. The *
 
 | Shortcut | Action |
 |----------|--------|
-| Enter | Submit todo / send message |
+| Cmd+Enter | Submit todo / send message |
+| Right-click on todo | Context menu (Rename, Mark as Done, Move to Trash) |
 | Ctrl+Tab | Cycle through Todos, Canvas, Projects, Teams |
 | Cmd+M | Open Settings |
 | Cmd+B | Toggle Sidebar |

@@ -26,4 +26,18 @@ enum AgentDiscoveryService {
 
         return results.sorted { $0.name < $1.name }
     }
+
+    /// Resolve which engine an agent belongs to based on its parent directory.
+    /// Agents under `.claude/agents/` → `.claude` engine, `.codex/agents/` → `.codex` engine.
+    /// Returns nil if the agent is not found (caller falls back to user settings).
+    static func resolveEngine(agentName: String, projectRoot: String) -> TerminalEngine? {
+        let agents = discover(projectRoot: projectRoot)
+        guard let agent = agents.first(where: { $0.id == agentName }) else {
+            return nil
+        }
+        switch agent.source {
+        case .claude: return .claude
+        case .codex: return .codex
+        }
+    }
 }

@@ -24,6 +24,7 @@ final class TodoItem {
     var projectID: UUID?
     var teamID: UUID?
     var agentName: String?
+    var name: String?
     static let maxLogSize = 256 * 1024
 
     init(text: String, gridIndex: Int, canvasPosition: CGPoint) {
@@ -49,6 +50,10 @@ final class TodoItem {
 
     var canvasPosition: CGPoint {
         CGPoint(x: canvasX, y: canvasY)
+    }
+
+    var displayName: String {
+        name ?? text
     }
 
     var gridLabel: String {

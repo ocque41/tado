@@ -37,6 +37,7 @@ Tado exposes CLI tools at `~/.local/bin/` for inter-terminal communication. **Us
 tado-list                          # List all active sessions (ID, engine, grid, status, name)
 tado-read <target> [--tail N] [--follow] [--raw]  # Read terminal output from a session
 tado-send <target> <message>       # Send typed input to a terminal session
+tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]  # Deploy a new agent session on the Tado canvas
 ```
 
 **Target resolution** (same for `tado-read` and `tado-send`, in priority order):
@@ -52,9 +53,14 @@ tado-read hello --follow                   # Live-stream output (like tail -f)
 tado-read 1,1 --raw                        # Include ANSI escape codes (default: stripped)
 tado-send 1,1 "hello from another agent"   # Send to terminal at grid [1,1]
 tado-send hello "follow-up prompt"         # Send to session whose name contains "hello"
+tado-deploy "implement auth module" --agent backend  # Deploy a backend agent on the canvas
 ```
 
 **Typical workflow for responding to a terminal:** `tado-read 1,1` to see what it output, then `tado-send 1,1 "your response"` to reply.
+
+**Deploying agents:** `tado-deploy` is a Tado IPC command that creates a new terminal tile on the Tado canvas — it is NOT your built-in subagent or background agent tool. Use it to deploy a new agent session that gets its own tile, grid position, and IPC registration. Defaults (project, team, engine, cwd) are inherited from the calling session's environment. The agent name corresponds to definitions at `.claude/agents/<name>.md`.
+
+**Fire-and-forget pattern:** When deploying, include in the deployed agent's prompt instructions to deliver results back via `tado-send <your-grid>`. Then STOP — do not wait, do not run tado-list, do not read the deployed agent's terminal log. The deployed agent will `tado-send` results back to you, which will wake you. Example: `tado-deploy "analyze the codebase and deliver results via tado-send 1,1" --agent analyst`
 
 **Contacting other agents:** When you send a message via `tado-send`, always identify yourself and tell the recipient how to respond. Include your grid position (e.g., `[1,1]`), your project, and instruct them to reply with `tado-send <your-grid> "<response>"`. The receiving agent has no context about who sent the message unless you include it. Once a conversation is established, you can skip the full introduction.
 

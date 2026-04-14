@@ -66,7 +66,7 @@ struct TrashListView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(.gray)
 
-            Text(todo.text)
+            Text(todo.displayName)
                 .font(.system(size: 14, design: .monospaced))
                 .lineLimit(1)
 

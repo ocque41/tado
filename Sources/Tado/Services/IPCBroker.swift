@@ -15,6 +15,10 @@ final class IPCBroker {
     private var topicMessageWatchers: [String: DispatchSourceFileSystemObject] = [:]
     private var topicMessageFds: [String: Int32] = [:]
     private var topicsPollTimer: Timer?
+    private var spawnWatcher: DispatchSourceFileSystemObject?
+    private var spawnFd: Int32?
+    private var spawnPollTimer: Timer?
+    var onSpawnRequest: ((SpawnRequest) -> Void)?
     private weak var terminalManager: TerminalManager?
     private var processedFiles: Set<String> = []
 
@@ -29,6 +33,7 @@ final class IPCBroker {
         installMCPServer()
         startExternalInboxWatcher()
         startTopicsWatcher()
+        startSpawnRequestWatcher()
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -51,6 +56,7 @@ final class IPCBroker {
         try? fm.createDirectory(at: ipcRoot.appendingPathComponent("bin"), withIntermediateDirectories: true)
         try? fm.createDirectory(at: ipcRoot.appendingPathComponent("a2a-inbox"), withIntermediateDirectories: true)
         try? fm.createDirectory(at: ipcRoot.appendingPathComponent("topics"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: ipcRoot.appendingPathComponent("spawn-requests"), withIntermediateDirectories: true)
 
         // Create stable symlink so external tools can find us
         let symlink = Self.stableSymlink
@@ -213,6 +219,7 @@ final class IPCBroker {
         writeTadoUnsubscribe(to: binDir)
         writeTadoTopics(to: binDir)
         writeTadoTeam(to: binDir)
+        writeTadoDeploy(to: binDir)
     }
 
     private func writeTadoSend(to binDir: URL) {
@@ -481,6 +488,111 @@ final class IPCBroker {
         }
     }
 
+    // MARK: - Spawn Requests
+
+    private func startSpawnRequestWatcher() {
+        let spawnDir = ipcRoot.appendingPathComponent("spawn-requests")
+        let fd = open(spawnDir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: .main
+        )
+
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                self?.scanSpawnRequests()
+            }
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        source.resume()
+        spawnWatcher = source
+        spawnFd = fd
+
+        spawnPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scanSpawnRequests()
+            }
+        }
+    }
+
+    private func scanSpawnRequests() {
+        let spawnDir = ipcRoot.appendingPathComponent("spawn-requests")
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: spawnDir, includingPropertiesForKeys: nil) else { return }
+
+        for file in files where file.pathExtension == "spawn" {
+            let filename = file.lastPathComponent
+            let key = "spawn-\(filename)"
+            guard !processedFiles.contains(key) else { continue }
+
+            guard let data = try? Data(contentsOf: file) else { continue }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard var request = try? decoder.decode(SpawnRequest.self, from: data) else { continue }
+            guard request.status == .pending else { continue }
+
+            processedFiles.insert(key)
+
+            // Mark as processing
+            request.status = .processing
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            encoder.dateEncodingStrategy = .iso8601
+            if let updated = try? encoder.encode(request) {
+                try? updated.write(to: file, options: .atomic)
+            }
+
+            // Resolve defaults from requesting session if available
+            if let requestedBy = request.requestedBy,
+               let requesterUUID = UUID(uuidString: requestedBy),
+               let requesterSession = terminalManager?.sessions.first(where: { $0.id == requesterUUID }) {
+                var projectName = request.projectName
+                var projectRoot = request.projectRoot
+                var teamName = request.teamName
+                var engine = request.engine
+                if projectName == nil { projectName = requesterSession.projectName }
+                if projectRoot == nil { projectRoot = requesterSession.projectRoot }
+                if teamName == nil { teamName = requesterSession.teamName }
+                if engine == nil { engine = requesterSession.engine?.rawValue }
+
+                let resolved = SpawnRequest(
+                    id: request.id,
+                    prompt: request.prompt,
+                    agentName: request.agentName,
+                    teamName: teamName,
+                    projectName: projectName,
+                    projectRoot: projectRoot,
+                    engine: engine,
+                    requestedBy: request.requestedBy,
+                    timestamp: request.timestamp,
+                    status: request.status
+                )
+                onSpawnRequest?(resolved)
+            } else {
+                onSpawnRequest?(request)
+            }
+
+            // Mark as completed
+            request.status = .completed
+            if let updated = try? encoder.encode(request) {
+                try? updated.write(to: file, options: .atomic)
+            }
+
+            // Clean up after delay
+            let fileURL = file
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                try? fm.removeItem(at: fileURL)
+            }
+        }
+    }
+
     // MARK: - Tado A2A CLI Scripts
 
     private func writeExternalScripts() {
@@ -493,6 +605,7 @@ final class IPCBroker {
         writeExternalTadoSubscribe(to: binDir)
         writeExternalTadoUnsubscribe(to: binDir)
         writeExternalTadoTopics(to: binDir)
+        writeExternalTadoDeploy(to: binDir)
 
         // Also install to ~/.local/bin for PATH accessibility
         let localBin = FileManager.default.homeDirectoryForCurrentUser
@@ -506,6 +619,7 @@ final class IPCBroker {
         installScript(name: "tado-subscribe", from: binDir, to: localBin)
         installScript(name: "tado-unsubscribe", from: binDir, to: localBin)
         installScript(name: "tado-topics", from: binDir, to: localBin)
+        installScript(name: "tado-deploy", from: binDir, to: localBin)
     }
 
     private func installMCPServer() {
@@ -1379,6 +1493,92 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
+    private func writeExternalTadoDeploy(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+        # Deploys a new agent session on the Tado canvas (run from any terminal).
+
+        AGENT=""
+        TEAM=""
+        PROJECT=""
+        ENGINE=""
+        CWD=""
+        PROMPT=""
+
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --agent) AGENT="$2"; shift 2 ;;
+            --team) TEAM="$2"; shift 2 ;;
+            --project) PROJECT="$2"; shift 2 ;;
+            --engine) ENGINE="$2"; shift 2 ;;
+            --cwd) CWD="$2"; shift 2 ;;
+            --help|-h)
+              echo "Usage: tado-deploy \\"<prompt>\\" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]"
+              exit 0
+              ;;
+            *) [ -z "$PROMPT" ] && PROMPT="$1" || PROMPT="$PROMPT $1"; shift ;;
+          esac
+        done
+
+        if [ -z "$PROMPT" ]; then
+          echo "Usage: tado-deploy \\"<prompt>\\" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]"
+          exit 1
+        fi
+
+        IPC_ROOT="/tmp/tado-ipc"
+
+        if [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ]; then
+          echo "Tado is not running (no IPC root at $IPC_ROOT)"
+          exit 1
+        fi
+
+        SPAWN_DIR="$IPC_ROOT/spawn-requests"
+        mkdir -p "$SPAWN_DIR"
+
+        python3 - "$PROMPT" "$AGENT" "$TEAM" "$PROJECT" "$CWD" "$ENGINE" "$SPAWN_DIR" <<'PYEOF'
+        import json, sys, uuid, os
+        from datetime import datetime, timezone
+
+        prompt = sys.argv[1]
+        agent = sys.argv[2] or None
+        team = sys.argv[3] or None
+        project = sys.argv[4] or None
+        cwd = sys.argv[5] or None
+        engine = sys.argv[6] or None
+        spawn_dir = sys.argv[7]
+
+        req_id = str(uuid.uuid4())
+        request = {
+            'id': req_id,
+            'prompt': prompt,
+            'agentName': agent,
+            'teamName': team,
+            'projectName': project,
+            'projectRoot': cwd,
+            'engine': engine,
+            'requestedBy': None,
+            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'status': 'pending'
+        }
+
+        path = os.path.join(spawn_dir, req_id + '.spawn')
+        with open(path, 'w') as f:
+            json.dump(request, f, indent=2)
+
+        print(f'Deploy request submitted: {req_id}')
+        if agent:
+            print(f'  Agent: {agent}')
+        if project:
+            print(f'  Project: {project}')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("ext-tado-deploy")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
     // MARK: - Team Script
 
     private func writeTadoTeam(to binDir: URL) {
@@ -1458,6 +1658,111 @@ final class IPCBroker {
         """
 
         let url = binDir.appendingPathComponent("tado-team")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func writeTadoDeploy(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+        # Deploys a new agent session on the Tado canvas.
+
+        AGENT=""
+        TEAM=""
+        PROJECT=""
+        ENGINE=""
+        CWD=""
+        PROMPT=""
+
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --agent) AGENT="$2"; shift 2 ;;
+            --team) TEAM="$2"; shift 2 ;;
+            --project) PROJECT="$2"; shift 2 ;;
+            --engine) ENGINE="$2"; shift 2 ;;
+            --cwd) CWD="$2"; shift 2 ;;
+            --help|-h)
+              echo "Usage: tado-deploy \\"<prompt>\\" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]"
+              echo ""
+              echo "Deploys a new agent session on the Tado canvas."
+              echo ""
+              echo "Options:"
+              echo "  --agent    Agent definition name (from .claude/agents/<name>.md)"
+              echo "  --team     Team name (defaults to TADO_TEAM_NAME)"
+              echo "  --project  Project name (defaults to TADO_PROJECT_NAME)"
+              echo "  --engine   Engine: claude or codex (defaults to TADO_ENGINE)"
+              echo "  --cwd      Working directory for the new session (defaults to TADO_PROJECT_ROOT)"
+              exit 0
+              ;;
+            *) [ -z "$PROMPT" ] && PROMPT="$1" || PROMPT="$PROMPT $1"; shift ;;
+          esac
+        done
+
+        if [ -z "$PROMPT" ]; then
+          echo "Usage: tado-deploy \\"<prompt>\\" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]"
+          exit 1
+        fi
+
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SESSION_ID="${TADO_SESSION_ID:-}"
+
+        # Apply env defaults for unset flags
+        [ -z "$TEAM" ] && TEAM="${TADO_TEAM_NAME:-}"
+        [ -z "$PROJECT" ] && PROJECT="${TADO_PROJECT_NAME:-}"
+        [ -z "$ENGINE" ] && ENGINE="${TADO_ENGINE:-}"
+        [ -z "$CWD" ] && CWD="${TADO_PROJECT_ROOT:-}"
+
+        if [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ]; then
+          echo "Tado is not running (no IPC root at $IPC_ROOT)"
+          exit 1
+        fi
+
+        SPAWN_DIR="$IPC_ROOT/spawn-requests"
+        mkdir -p "$SPAWN_DIR"
+
+        python3 - "$PROMPT" "$AGENT" "$TEAM" "$PROJECT" "$CWD" "$ENGINE" "$SESSION_ID" "$SPAWN_DIR" <<'PYEOF'
+        import json, sys, uuid, os
+        from datetime import datetime, timezone
+
+        prompt = sys.argv[1]
+        agent = sys.argv[2] or None
+        team = sys.argv[3] or None
+        project = sys.argv[4] or None
+        cwd = sys.argv[5] or None
+        engine = sys.argv[6] or None
+        requested_by = sys.argv[7] or None
+        spawn_dir = sys.argv[8]
+
+        req_id = str(uuid.uuid4())
+        request = {
+            'id': req_id,
+            'prompt': prompt,
+            'agentName': agent,
+            'teamName': team,
+            'projectName': project,
+            'projectRoot': cwd,
+            'engine': engine,
+            'requestedBy': requested_by,
+            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'status': 'pending'
+        }
+
+        path = os.path.join(spawn_dir, req_id + '.spawn')
+        with open(path, 'w') as f:
+            json.dump(request, f, indent=2)
+
+        print(f'Deploy request submitted: {req_id}')
+        if agent:
+            print(f'  Agent: {agent}')
+        if team:
+            print(f'  Team: {team}')
+        if project:
+            print(f'  Project: {project}')
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-deploy")
         try? script.write(to: url, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
@@ -1619,6 +1924,11 @@ final class IPCBroker {
     // MARK: - Cleanup
 
     func cleanup() {
+        spawnPollTimer?.invalidate()
+        spawnPollTimer = nil
+        spawnWatcher?.cancel()
+        spawnWatcher = nil
+        spawnFd = nil
         topicsPollTimer?.invalidate()
         topicsPollTimer = nil
         topicsWatcher?.cancel()

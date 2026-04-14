@@ -66,7 +66,7 @@ struct DoneListView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(.green)
 
-            Text(todo.text)
+            Text(todo.displayName)
                 .font(.system(size: 14, design: .monospaced))
                 .lineLimit(1)
 

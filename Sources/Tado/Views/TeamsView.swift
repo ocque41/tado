@@ -203,23 +203,24 @@ struct TeamsView: View {
             // Available agents to add
             let unassigned = allAgents.filter { !team.agentNames.contains($0.id) }
             if !unassigned.isEmpty {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Add:")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
-                    ForEach(unassigned) { agent in
-                        Button(action: { addAgentToTeam(team, agentName: agent.id) }) {
-                            HStack(spacing: 3) {
-                                Image(systemName: "plus.circle")
-                                    .font(.system(size: 10))
+                    FlowLayout(spacing: 4) {
+                        ForEach(unassigned) { agent in
+                            Button(action: { addAgentToTeam(team, agentName: agent.id) }) {
                                 Text(agent.name)
                                     .font(.system(size: 10, design: .monospaced))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color.accentColor.opacity(0.1))
+                                    .foregroundColor(.accentColor)
+                                    .clipShape(Capsule())
                             }
-                            .foregroundColor(.accentColor)
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
-                    Spacer()
                 }
                 .padding(.horizontal, 40)
                 .padding(.vertical, 6)
@@ -252,14 +253,15 @@ struct TeamsView: View {
             }
 
             if !agents.isEmpty {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Agents:")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
-                    ForEach(agents) { agent in
-                        agentToggleButton(agent)
+                    FlowLayout(spacing: 4) {
+                        ForEach(agents) { agent in
+                            agentToggleButton(agent)
+                        }
                     }
-                    Spacer()
                 }
             }
 
@@ -292,13 +294,17 @@ struct TeamsView: View {
                 newTeamAgents.insert(agent.id)
             }
         }) {
-            HStack(spacing: 3) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 10))
-                Text(agent.name)
-                    .font(.system(size: 11, design: .monospaced))
-            }
-            .foregroundColor(isSelected ? .accentColor : .secondary)
+            Text(agent.name)
+                .font(.system(size: 10, design: .monospaced))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
+                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(isSelected ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
     }

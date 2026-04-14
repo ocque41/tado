@@ -83,7 +83,7 @@ enum ProcessSpawner {
     static func bootstrapPrompt(targetPath: String) -> String {
         """
         Read the 'Tado A2A' section from ./CLAUDE.md and the 'Tado A2A', \
-        'Contacting Other Agents', 'Responding to Agent Requests (Mandatory)', \
+        'Contacting Other Agents', 'Deploying Agents', 'Responding to Agent Requests (Mandatory)', \
         and 'Message Origin Rules' sections from ./AGENTS.md in this directory. \
         Then inject that documentation into the project at \(targetPath).
 
@@ -93,17 +93,47 @@ enum ProcessSpawner {
         If the file doesn't exist, create it with a '# CLAUDE.md' header first.
         2. Check \(targetPath)/AGENTS.md \u{2014} same logic: if it exists and already has '## Tado A2A', \
         skip. Otherwise append the Tado A2A section, the Contacting Other Agents section, \
-        the Responding to Agent Requests section, and the Message Origin Rules section. \
+        the Deploying Agents section, the Responding to Agent Requests section, \
+        and the Message Origin Rules section. \
         If the file doesn't exist, create it with a '# AGENTS.md' header first.
 
         Preserve all existing content in both files. Only append new sections. \
-        Include tado-list, tado-read, tado-send usage, target resolution rules, and examples.
+        Include tado-list, tado-read, tado-send, tado-deploy usage, target resolution rules, and examples.
 
         Critical rules to include:
         - Agents must always identify themselves and tell the recipient how to respond back.
         - When an agent receives a request from another agent, it MUST deliver the requested \
         information back via tado-send. This is mandatory, not optional. The requesting agent \
         is waiting. Do not just print the answer locally \u{2014} send it back.
+
+        Include a full '## Deploying Agents' section with this exact documentation:
+
+        tado-deploy is a Tado IPC command (NOT a built-in subagent tool) that creates a new \
+        terminal tile on the Tado canvas. It deploys a completely separate agent session.
+
+        Syntax:
+        tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+
+        Flags:
+        --agent <name>    Agent definition from .claude/agents/<name>.md or .codex/agents/<name>.md
+        --team <name>     Assign the deployed agent to a team
+        --project <name>  Assign to a project
+        --engine          Use claude or codex (default: inherited from caller)
+        --cwd <path>      Working directory (default: inherited from caller)
+
+        Defaults are inherited from the calling session's environment variables (TADO_TEAM_NAME, \
+        TADO_PROJECT_NAME, TADO_ENGINE, TADO_PROJECT_ROOT). You only need --agent and the prompt.
+
+        Examples:
+        tado-deploy "implement the auth module" --agent backend
+        tado-deploy "write unit tests for the API" --agent backend --team core
+        tado-deploy "design the landing page" --agent frontend
+
+        After deploying, STOP immediately. Do not wait, do not run tado-list, do not read the \
+        new agent's output. Include in the deployed agent's prompt instructions to deliver \
+        results back to you via tado-send when done. The deployed agent will tado-send its \
+        results to your grid position, which will wake you. Example: \
+        tado-deploy "implement auth module and deliver results via tado-send <my-grid> when done" --agent backend
         """
     }
 
@@ -145,9 +175,20 @@ enum ProcessSpawner {
           information back to them via tado-send. This is mandatory. The requesting \
           agent is waiting for your response. Do not just work on it silently \u{2014} \
           send the actual result back.
-        - An example workflow: "I'm the 'frontend' agent on team 'core' in the \(projectName) \
-        project. I need the API types you generated. Reply with: tado-send 1,1 '<types>'" \
-        \u{2014} and the recipient MUST respond with the actual types via tado-send.
+          e) Use tado-deploy to bring a teammate online when you need specialized help. \
+          tado-deploy is a Tado IPC command (NOT your built-in subagent tool) that creates \
+          a new terminal tile on the Tado canvas. Syntax: \
+          tado-deploy "<prompt>" --agent <name> [--team <name>] [--project <name>] \
+          [--engine claude|codex] [--cwd <path>]. Defaults (team, project, engine, cwd) \
+          are inherited from your session. You typically only need --agent and the prompt.
+        - An example communication workflow: "I'm the 'frontend' agent on team 'core' in \
+        the \(projectName) project. I need the API types you generated. Reply with: \
+        tado-send 1,1 '<types>'" \u{2014} the recipient MUST respond with the actual types \
+        via tado-send.
+        - An example deploy workflow: the frontend agent at [1,1] needs database schema work, so it runs: \
+        tado-deploy "design the database schema for user auth. When done, deliver results via tado-send 1,1" --agent backend \
+        A new agent tile appears on the Tado canvas and begins working immediately. \
+        STOP after deploying. The deployed agent will deliver results back via tado-send, which wakes you.
 
         Preserve all existing content in both files. Only add or replace the Team Structure section.
         """

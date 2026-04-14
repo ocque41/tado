@@ -27,6 +27,27 @@ struct IPCSessionEntry: Codable {
     let teamID: String?
 }
 
+// MARK: - Spawn Requests
+
+struct SpawnRequest: Codable, Identifiable {
+    let id: UUID
+    let prompt: String
+    let agentName: String?
+    let teamName: String?
+    let projectName: String?
+    let projectRoot: String?
+    let engine: String?
+    let requestedBy: String?
+    let timestamp: Date
+    var status: SpawnRequestStatus
+}
+
+enum SpawnRequestStatus: String, Codable {
+    case pending, processing, completed, failed
+}
+
+// MARK: - Pub/Sub
+
 struct TopicSubscriber: Codable {
     enum SubscriberType: String, Codable { case session, project }
     let type: SubscriberType

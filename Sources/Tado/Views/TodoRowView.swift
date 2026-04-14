@@ -7,6 +7,9 @@ struct TodoRowView: View {
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Project.createdAt) private var projects: [Project]
+    @State private var isRenaming = false
+    @State private var editName = ""
+    @FocusState private var isRenameFieldFocused: Bool
 
     private var projectName: String? {
         guard let pid = todo.projectID else { return nil }
@@ -19,10 +22,18 @@ struct TodoRowView: View {
             statusIndicator
 
             // Todo text
-            Text(todo.text)
-                .font(.system(size: 14, design: .monospaced))
-                .foregroundStyle(todoStatus == .stale ? .tertiary : .primary)
-                .lineLimit(1)
+            if isRenaming {
+                TextField("Name", text: $editName, onCommit: commitRename)
+                    .font(.system(size: 14, design: .monospaced))
+                    .textFieldStyle(.plain)
+                    .focused($isRenameFieldFocused)
+                    .onExitCommand { isRenaming = false }
+            } else {
+                Text(todo.displayName)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(todoStatus == .stale ? .tertiary : .primary)
+                    .lineLimit(1)
+            }
 
             // Project label
             if let name = projectName {
@@ -87,6 +98,18 @@ struct TodoRowView: View {
         .padding(.vertical, 10)
         .background(rowBackground)
         .contentShape(Rectangle())
+        .contextMenu {
+            Button("Rename") {
+                editName = todo.name ?? ""
+                isRenaming = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    isRenameFieldFocused = true
+                }
+            }
+            Divider()
+            Button("Mark as Done", action: markDone)
+            Button("Move to Trash", role: .destructive, action: trashTodo)
+        }
     }
 
     // MARK: - Status
@@ -164,6 +187,14 @@ struct TodoRowView: View {
     }
 
     // MARK: - Actions
+
+    private func commitRename() {
+        let trimmed = editName.trimmingCharacters(in: .whitespacesAndNewlines)
+        todo.name = trimmed.isEmpty ? nil : trimmed
+        isRenameFieldFocused = false
+        isRenaming = false
+        try? modelContext.save()
+    }
 
     private func navigateToTerminal() {
         appState.pendingNavigationID = todo.id

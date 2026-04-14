@@ -71,7 +71,10 @@ struct ContentView: View {
         .frame(minWidth: 800, minHeight: 600)
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
-        .task { reconnectOnLaunch() }
+        .task {
+            reconnectOnLaunch()
+            wireSpawnCallback()
+        }
     }
 
     private var pageNavigation: some View {
@@ -118,6 +121,120 @@ struct ContentView: View {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
+    }
+
+    private func wireSpawnCallback() {
+        let manager = terminalManager
+        let context = modelContext
+        let state = appState
+        terminalManager.ipcBroker?.onSpawnRequest = { request in
+            ContentView.handleSpawnRequest(request, terminalManager: manager, modelContext: context, appState: state)
+        }
+    }
+
+    private static func handleSpawnRequest(_ request: SpawnRequest, terminalManager: TerminalManager, modelContext: ModelContext, appState: AppState) {
+        // Resolve project first — needed for agent source lookup
+        var projectID: UUID?
+        var projectRoot: String?
+        if let projectName = request.projectName {
+            let descriptor = FetchDescriptor<Project>()
+            if let projects = try? modelContext.fetch(descriptor),
+               let project = projects.first(where: { $0.name.lowercased() == projectName.lowercased() }) {
+                projectID = project.id
+                projectRoot = request.projectRoot ?? project.rootPath
+            }
+        }
+        if projectRoot == nil { projectRoot = request.projectRoot }
+
+        // Smart engine resolution:
+        // 1. Agent source: .claude/agents/ → claude, .codex/agents/ → codex
+        // 2. Explicit --engine from tado-deploy
+        // 3. Fall back to user's default engine
+        let engine: TerminalEngine
+        if let agentName = request.agentName, let root = projectRoot,
+           let resolved = AgentDiscoveryService.resolveEngine(agentName: agentName, projectRoot: root) {
+            engine = resolved
+        } else if let engineStr = request.engine, let parsed = TerminalEngine(rawValue: engineStr) {
+            engine = parsed
+        } else {
+            engine = ContentView.fetchOrCreateSettings(modelContext: modelContext).engine
+        }
+
+        // Resolve team
+        var teamID: UUID?
+        var teamName: String?
+        var teamAgents: [String]?
+        if let reqTeamName = request.teamName {
+            let descriptor = FetchDescriptor<Team>()
+            if let teams = try? modelContext.fetch(descriptor) {
+                let team = teams.first(where: {
+                    $0.name.lowercased() == reqTeamName.lowercased()
+                    && (projectID == nil || $0.projectID == projectID)
+                })
+                if let team {
+                    teamID = team.id
+                    teamName = team.name
+                    teamAgents = team.agentNames
+                }
+            }
+        }
+
+        // If agent provided but no team, try to find the team containing this agent
+        if teamID == nil, let agentName = request.agentName, let projectID {
+            let descriptor = FetchDescriptor<Team>()
+            if let teams = try? modelContext.fetch(descriptor) {
+                let team = teams.first { $0.projectID == projectID && $0.agentNames.contains(agentName) }
+                if let team {
+                    teamID = team.id
+                    teamName = team.name
+                    teamAgents = team.agentNames
+                }
+            }
+        }
+
+        // Allocate grid index
+        let todoDescriptor = FetchDescriptor<TodoItem>()
+        let allTodos = (try? modelContext.fetch(todoDescriptor)) ?? []
+        let usedIndices = Set(allTodos.filter { $0.listState == .active }.map(\.gridIndex))
+        var index = 0
+        while usedIndices.contains(index) { index += 1 }
+
+        let settings = ContentView.fetchOrCreateSettings(modelContext: modelContext)
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        // Create TodoItem
+        let todo = TodoItem(text: request.prompt, gridIndex: index, canvasPosition: position)
+        todo.projectID = projectID
+        todo.teamID = teamID
+        todo.agentName = request.agentName
+        modelContext.insert(todo)
+
+        // Spawn session
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: engine,
+            cwd: projectRoot,
+            agentName: request.agentName,
+            projectName: request.projectName,
+            teamName: teamName,
+            teamID: teamID,
+            teamAgents: teamAgents
+        )
+
+        try? modelContext.save()
+
+        // Navigate to canvas
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
+    private static func fetchOrCreateSettings(modelContext: ModelContext) -> AppSettings {
+        let descriptor = FetchDescriptor<AppSettings>()
+        if let existing = try? modelContext.fetch(descriptor).first { return existing }
+        let settings = AppSettings()
+        modelContext.insert(settings)
+        try? modelContext.save()
+        return settings
     }
 
     private func reconnectOnLaunch() {

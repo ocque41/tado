@@ -22,6 +22,18 @@ struct TodoListView: View {
         return activeTodos.first(where: { $0.id == targetID })?.text
     }
 
+    private var inputLineCount: Int {
+        max(1, inputText.components(separatedBy: "\n").count)
+    }
+
+    private let maxInputLines = 8
+
+    private var inputEditorHeight: CGFloat {
+        let lineHeight: CGFloat = 20
+        let padding: CGFloat = 8
+        return min(CGFloat(inputLineCount) * lineHeight + padding, CGFloat(maxInputLines) * lineHeight + padding)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Forward mode banner
@@ -49,8 +61,8 @@ struct TodoListView: View {
                 Divider()
             }
 
-            // Input field
-            HStack(spacing: 12) {
+            // Input area
+            HStack(alignment: .top, spacing: 12) {
                 Button(action: { appState.showSettings = true }) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14))
@@ -58,21 +70,42 @@ struct TodoListView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Settings (Cmd+M)")
+                .padding(.top, 4)
 
-                TextField(
-                    isForwarding ? "Type message to forward..." : "What needs to be done?",
-                    text: $inputText
-                )
-                .textFieldStyle(.plain)
-                .font(.system(size: 15, design: .monospaced))
-                .focused($isInputFocused)
-                .onSubmit {
-                    handleSubmit()
+                ZStack(alignment: .topLeading) {
+                    if inputText.isEmpty {
+                        Text(isForwarding ? "Type message to forward..." : "What needs to be done?")
+                            .font(.system(size: 15, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .padding(.top, 1)
+                            .allowsHitTesting(false)
+                    }
+
+                    TextEditor(text: $inputText)
+                        .font(.system(size: 15, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .focused($isInputFocused)
+                }
+                .frame(height: inputEditorHeight)
+
+                if !inputText.isEmpty {
+                    Text("⌘↩")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 4)
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .padding(.vertical, 10)
             .background(.ultraThinMaterial)
+            .onKeyPress(phases: .down) { keyPress in
+                if keyPress.key == .return && keyPress.modifiers.contains(.command) {
+                    handleSubmit()
+                    return .handled
+                }
+                return .ignored
+            }
 
             Divider()
 
@@ -83,7 +116,7 @@ struct TodoListView: View {
                     Text("No todos yet")
                         .font(.system(size: 15, design: .monospaced))
                         .foregroundStyle(.secondary)
-                    Text("Type a task and press Enter to start")
+                    Text("Type a task and press ⌘↩ to start")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }

@@ -60,10 +60,21 @@ final class TerminalSession: Identifiable {
     /// Send text to the terminal followed by Enter
     private func sendToTerminal(_ text: String) {
         guard let view = terminalView else { return }
-        view.send(txt: text)
-        // Send Enter as a separate write; use \r (CR) which matches the byte
-        // that a real Enter keypress generates in the PTY (see EscapeSequences.cmdRet)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+
+        let terminal = view.getTerminal()
+
+        // Wrap multi-line text in bracketed paste sequences if terminal supports it
+        if text.contains("\n"), terminal.bracketedPasteMode {
+            view.send(data: EscapeSequences.bracketedPasteStart[0...])
+            view.send(txt: text)
+            view.send(data: EscapeSequences.bracketedPasteEnd[0...])
+        } else {
+            view.send(txt: text)
+        }
+
+        // Scale delay based on text length: 50ms base + 1ms per 100 bytes, capped at 2s
+        let delay = min(0.05 + Double(text.utf8.count) / 100_000.0, 2.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             view.send(txt: "\r")
         }
     }

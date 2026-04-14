@@ -63,13 +63,14 @@ struct CanvasView: View {
                 ForEach(terminalManager.sessions) { session in
                     let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
                     let xOff = zoneOffset(for: zoneIndex)
+                    let sessionEngine = session.engine ?? currentEngine
 
                     TerminalTileView(
                         session: session,
-                        engine: currentEngine,
+                        engine: sessionEngine,
                         ipcRoot: terminalManager.ipcBroker?.ipcRoot,
-                        modeFlags: currentModeFlags,
-                        effortFlags: currentEffortFlags,
+                        modeFlags: modeFlags(for: sessionEngine),
+                        effortFlags: effortFlags(for: sessionEngine),
                         scale: scale
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)
@@ -311,16 +312,19 @@ struct CanvasView: View {
         return (try? modelContext.fetch(descriptor).first?.engine) ?? .claude
     }
 
-    private var currentModeFlags: [String] {
+    private var currentModeFlags: [String] { modeFlags(for: currentEngine) }
+    private var currentEffortFlags: [String] { effortFlags(for: currentEngine) }
+
+    private func modeFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
-        return settings.engine == .claude ? settings.claudeMode.cliFlags : settings.codexMode.cliFlags
+        return engine == .claude ? settings.claudeMode.cliFlags : settings.codexMode.cliFlags
     }
 
-    private var currentEffortFlags: [String] {
+    private func effortFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
-        return settings.engine == .claude ? settings.claudeEffort.cliFlags : settings.codexEffort.cliFlags
+        return engine == .claude ? settings.claudeEffort.cliFlags : settings.codexEffort.cliFlags
     }
 
     private func persistPosition(session: TerminalSession, position: CGPoint) {

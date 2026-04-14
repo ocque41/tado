@@ -14,6 +14,7 @@ You have CLI tools available for inter-terminal communication. **Use these when 
 tado-list                          # List all active sessions (ID, engine, grid, status, name)
 tado-read <target> [--tail N] [--follow] [--raw]  # Read terminal output from a session
 tado-send <target> <message>       # Send typed input to a terminal session
+tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]  # Deploy a new agent session on the Tado canvas
 ```
 
 **Target resolution** (same for `tado-read` and `tado-send`, in priority order):
@@ -76,6 +77,33 @@ When you are part of a team, you share a project with other specialized agents. 
 1. `tado-list` — find your running teammates
 2. `tado-send <teammate> "I'm '<role>' on team '<name>'. I need <what>. Reply with: tado-send <your-grid> '<response>'"` — request
 3. When you receive a request from a teammate — deliver what they asked via `tado-send`
+
+## Deploying Agents
+
+`tado-deploy` is a Tado IPC command that creates a new terminal tile on the Tado canvas. It is **NOT** your built-in subagent, background agent, or subprocess tool — it deploys a completely separate agent session visible on the Tado canvas. Use it to bring in specialized teammates without waiting for the human user.
+
+```bash
+tado-deploy "<prompt>" --agent <agent-name>                    # Deploy with agent definition
+tado-deploy "<prompt>" --agent backend --team core             # Deploy into a specific team
+tado-deploy "<prompt>" --agent backend --project myapp         # Deploy for a specific project
+tado-deploy "<prompt>" --engine codex                          # Use a different engine
+```
+
+**When to use it:**
+- You need specialized help (e.g., you're a frontend agent and need database schema work)
+- You want to delegate a subtask to another agent
+- You're coordinating a team and need to bring agents online
+
+**Defaults from your session:** If you're already running inside a Tado session, your project, team, engine, and working directory are inherited automatically. You only need to specify `--agent` and the prompt.
+
+**After deploying, STOP immediately.** Do not wait, do not run tado-list, do not read the new agent's terminal log. Include in the deployed agent's prompt instructions to deliver results back to your grid position via `tado-send`. The deployed agent will `tado-send` its results when done, which wakes you up.
+
+**Example workflow:**
+```bash
+# You're a frontend agent at [1,1] and need API types
+tado-deploy "generate TypeScript types for the user auth API. When done, deliver results via tado-send 1,1 '<types>'" --agent backend
+# STOP here. The backend agent will deliver results to you via tado-send.
+```
 
 ## Responding to Agent Requests (Mandatory)
 
