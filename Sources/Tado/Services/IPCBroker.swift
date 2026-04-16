@@ -9,15 +9,17 @@ final class IPCBroker {
     private var fileDescriptors: [UUID: Int32] = [:]
     private var externalWatcher: DispatchSourceFileSystemObject?
     private var externalFd: Int32?
-    private var externalPollTimer: Timer?
     private var topicsWatcher: DispatchSourceFileSystemObject?
     private var topicsFd: Int32?
     private var topicMessageWatchers: [String: DispatchSourceFileSystemObject] = [:]
     private var topicMessageFds: [String: Int32] = [:]
-    private var topicsPollTimer: Timer?
     private var spawnWatcher: DispatchSourceFileSystemObject?
     private var spawnFd: Int32?
-    private var spawnPollTimer: Timer?
+    /// Consolidated fallback poller. DispatchSource vnode watchers occasionally
+    /// miss events on APFS under load; a single 3 s tick catches stranded
+    /// messages across all three inbox kinds. Replaces three separate per-kind
+    /// Timers that each woke the main thread.
+    private var pollTimer: Timer?
     var onSpawnRequest: ((SpawnRequest) -> Void)?
     private weak var terminalManager: TerminalManager?
     private var processedFiles: Set<String> = []
@@ -34,6 +36,7 @@ final class IPCBroker {
         startExternalInboxWatcher()
         startTopicsWatcher()
         startSpawnRequestWatcher()
+        startConsolidatedPoller()
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -458,14 +461,6 @@ final class IPCBroker {
         source.resume()
         externalWatcher = source
         externalFd = fd
-
-        // Polling fallback: DispatchSource can miss vnode events,
-        // so poll every 2 seconds to catch stranded messages
-        externalPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.scanExternalInbox(at: externalInboxURL)
-            }
-        }
     }
 
     private func scanExternalInbox(at inboxURL: URL) {
@@ -514,12 +509,6 @@ final class IPCBroker {
         source.resume()
         spawnWatcher = source
         spawnFd = fd
-
-        spawnPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.scanSpawnRequests()
-            }
-        }
     }
 
     private func scanSpawnRequests() {
@@ -1793,11 +1782,20 @@ final class IPCBroker {
         source.resume()
         topicsWatcher = source
         topicsFd = fd
+    }
 
-        topicsPollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+    /// Single fallback poller replacing the three per-subsystem 2–3 s timers.
+    /// Runs on main at 3 s intervals; each scan is cheap when no new files
+    /// exist. Reduces idle main-thread wake-rate from 3 separate timers to 1.
+    private func startConsolidatedPoller() {
+        let externalInboxURL = ipcRoot.appendingPathComponent("a2a-inbox")
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.scanForNewTopics()
-                self?.scanAllTopicMessages()
+                guard let self = self else { return }
+                self.scanExternalInbox(at: externalInboxURL)
+                self.scanSpawnRequests()
+                self.scanForNewTopics()
+                self.scanAllTopicMessages()
             }
         }
     }
@@ -1924,13 +1922,11 @@ final class IPCBroker {
     // MARK: - Cleanup
 
     func cleanup() {
-        spawnPollTimer?.invalidate()
-        spawnPollTimer = nil
+        pollTimer?.invalidate()
+        pollTimer = nil
         spawnWatcher?.cancel()
         spawnWatcher = nil
         spawnFd = nil
-        topicsPollTimer?.invalidate()
-        topicsPollTimer = nil
         topicsWatcher?.cancel()
         topicsWatcher = nil
         topicsFd = nil
@@ -1939,8 +1935,6 @@ final class IPCBroker {
         }
         topicMessageWatchers.removeAll()
         topicMessageFds.removeAll()
-        externalPollTimer?.invalidate()
-        externalPollTimer = nil
         externalWatcher?.cancel()
         externalWatcher = nil
         externalFd = nil
@@ -1948,7 +1942,6 @@ final class IPCBroker {
             stopWatching(sessionID: id)
         }
         try? FileManager.default.removeItem(at: ipcRoot)
-        // Remove stable symlink
         try? FileManager.default.removeItem(at: Self.stableSymlink)
     }
 }

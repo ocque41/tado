@@ -213,21 +213,33 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
             logFlushTimer = nil
         }
 
+        private static let logFlushQueue = DispatchQueue(
+            label: "com.tado.log-flush",
+            qos: .utility,
+            attributes: .concurrent
+        )
+
         private func flushLog() {
             Task { @MainActor in
-                guard !session.logBuffer.isEmpty else { return }
-                let chunk = session.logBuffer
-                session.logBuffer = ""
+                let chunk = session.drainLogBuffer()
+                guard !chunk.isEmpty else { return }
                 session.onLogFlush?(chunk)
-                self.appendToIPCLog(chunk)
+                // File I/O hops off-main so a slow disk can't stall the
+                // canvas render loop. IPC log file is append-only, so
+                // interleaving from multiple sessions is safe.
+                let ipcRoot = self.ipcRoot
+                let sessionID = self.session.id
+                Self.logFlushQueue.async {
+                    Self.appendToIPCLog(chunk, ipcRoot: ipcRoot, sessionID: sessionID)
+                }
             }
         }
 
-        private func appendToIPCLog(_ chunk: String) {
+        private static func appendToIPCLog(_ chunk: String, ipcRoot: URL?, sessionID: UUID) {
             guard let ipcRoot = ipcRoot else { return }
             let logFile = ipcRoot
                 .appendingPathComponent("sessions")
-                .appendingPathComponent(session.id.uuidString.lowercased())
+                .appendingPathComponent(sessionID.uuidString.lowercased())
                 .appendingPathComponent("log")
             guard let data = chunk.data(using: .utf8) else { return }
             if let handle = try? FileHandle(forWritingTo: logFile) {

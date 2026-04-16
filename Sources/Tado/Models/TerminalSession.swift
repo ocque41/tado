@@ -21,7 +21,11 @@ final class TerminalSession: Identifiable {
     var exitCode: Int32? = nil
     var title: String
     var gridIndex: Int
-    var lastActivityDate: Date
+    /// Observation-ignored: the activity timer mutates this every 1.5 s per
+    /// session. Observing it would invalidate every tile in the canvas
+    /// `ForEach` on every tick. Status transitions (which *are* observed)
+    /// carry the user-visible signal.
+    @ObservationIgnored var lastActivityDate: Date
     var status: SessionStatus = .running
     var promptQueue: [String] = []
     var unreadMessageCount: Int = 0
@@ -31,8 +35,17 @@ final class TerminalSession: Identifiable {
     var theme: TerminalTheme = .tadoDark
     weak var terminalView: LocalProcessTerminalView?
 
-    var lastKnownCwd: String?
-    var logBuffer: String = ""
+    /// Not rendered in any view — only consumed by ProcessSpawner/start-dir
+    /// logic. Observation would be pure overhead.
+    @ObservationIgnored var lastKnownCwd: String?
+    /// Ring-buffered terminal output accumulated between IPC log flushes.
+    /// Capped so long-running agent sessions can't leak unbounded memory; the
+    /// on-disk IPC log under `/tmp/tado-ipc/sessions/<id>/log` remains the
+    /// source of truth for full scrollback.
+    @ObservationIgnored private(set) var logBuffer: String = ""
+    /// Hard cap on in-memory log buffer before trim. 256 KB is ~4000 lines of
+    /// typical agent output — more than enough between 5 s flushes.
+    static let logBufferByteCap = 256 * 1024
     var projectName: String?
     var agentName: String?
     var teamName: String?
@@ -45,6 +58,17 @@ final class TerminalSession: Identifiable {
 
     func appendLog(_ text: String) {
         logBuffer.append(text)
+        if logBuffer.utf8.count > Self.logBufferByteCap {
+            let overflow = logBuffer.utf8.count - Self.logBufferByteCap
+            let trimIndex = logBuffer.utf8.index(logBuffer.utf8.startIndex, offsetBy: overflow)
+            logBuffer = String(logBuffer[trimIndex...])
+        }
+    }
+
+    func drainLogBuffer() -> String {
+        let chunk = logBuffer
+        logBuffer = ""
+        return chunk
     }
 
     init(todoID: UUID, todoText: String, canvasPosition: CGPoint, gridIndex: Int, engine: TerminalEngine? = nil) {
