@@ -75,15 +75,15 @@ enum CodexMode: String, Codable, CaseIterable {
         }
     }
 
+    /// Mode-specific flags only. The Tado runtime shim
+    /// (`--no-alt-screen` and `-c shell_environment_policy.inherit=all`) is added
+    /// separately by `ProcessSpawner.codexEmbedShim(allowAlternateScreen:)`
+    /// so the alt-screen behavior is user-toggleable via AppSettings.
     var cliFlags: [String] {
-        // --no-alt-screen: Tado is a terminal multiplexer; alternate screen
-        // breaks Codex's command execution in embedded SwiftTerm tiles.
-        // env inherit: ensure Tado IPC vars reach tado-send subprocesses.
-        let base = ["--no-alt-screen", "-c", "shell_environment_policy.inherit=all"]
         switch self {
-        case .defaultPermissions: return base
-        case .fullAccess:         return ["--ask-for-approval", "never", "--sandbox", "danger-full-access"] + base
-        case .custom:             return base
+        case .defaultPermissions: return []
+        case .fullAccess:         return ["--ask-for-approval", "never", "--sandbox", "danger-full-access"]
+        case .custom:             return []
         }
     }
 }
@@ -128,6 +128,52 @@ enum CodexEffort: String, Codable, CaseIterable {
     }
 }
 
+enum ClaudeModel: String, Codable, CaseIterable {
+    case opus46 = "claude-opus-4-6"
+    case opus46_1m = "claude-opus-4-6[1m]"
+    case sonnet46 = "claude-sonnet-4-6"
+    case haiku45 = "claude-haiku-4-5"
+
+    var displayName: String {
+        switch self {
+        case .opus46: "Opus 4.6"
+        case .opus46_1m: "Opus 4.6 1M"
+        case .sonnet46: "Sonnet 4.6"
+        case .haiku45: "Haiku 4.5"
+        }
+    }
+
+    var cliFlags: [String] {
+        return ["--model", rawValue]
+    }
+}
+
+enum CodexModel: String, Codable, CaseIterable {
+    case gpt54 = "gpt-5.4"
+    case gpt52Codex = "gpt-5.2-codex"
+    case gpt51CodexMax = "gpt-5.1-codex-max"
+    case gpt54Mini = "gpt-5.4-mini"
+    case gpt53Codex = "gpt-5.3-codex"
+    case gpt52 = "gpt-5.2"
+    case gpt51CodexMini = "gpt-5.1-codex-mini"
+
+    var displayName: String {
+        switch self {
+        case .gpt54: "GPT-5.4"
+        case .gpt52Codex: "GPT-5.2-Codex"
+        case .gpt51CodexMax: "GPT-5.1-Codex-Max"
+        case .gpt54Mini: "GPT-5.4-Mini"
+        case .gpt53Codex: "GPT-5.3-Codex"
+        case .gpt52: "GPT-5.2"
+        case .gpt51CodexMini: "GPT-5.1-Codex-Mini"
+        }
+    }
+
+    var cliFlags: [String] {
+        return ["-c", "model=\"\(rawValue)\""]
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -139,4 +185,5 @@ final class AppState {
     var pendingNavigationID: UUID? = nil
     var forwardTargetTodoID: UUID? = nil
     var activeProjectID: UUID? = nil
+    var dispatchModalProjectID: UUID? = nil
 }

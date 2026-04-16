@@ -10,6 +10,22 @@ final class AppSettings {
     var codexModeRaw: String = CodexMode.defaultPermissions.rawValue
     var claudeEffortRaw: String = ClaudeEffort.high.rawValue
     var codexEffortRaw: String = CodexEffort.high.rawValue
+    var claudeModelRaw: String = ClaudeModel.opus46.rawValue
+    var codexModelRaw: String = CodexModel.gpt54.rawValue
+
+    // Display / harness UI — defaults match Boris Cherny's "no flicker + all useful UI"
+    // recommendation (CLAUDE_CODE_NO_FLICKER=1, mouse on, scroll speed = vim default).
+    // See https://code.claude.com/docs/en/fullscreen
+    var claudeNoFlicker: Bool = true
+    var claudeMouseEnabled: Bool = true
+    var claudeScrollSpeed: Int = 3
+    // Codex equivalent of CLAUDE_CODE_NO_FLICKER is `tui.alternate_screen`. Tado passes
+    // `--no-alt-screen` for Codex by default because alt-screen breaks Codex command
+    // execution in embedded SwiftTerm tiles. Flip this on if a future Codex release
+    // makes alt-screen safe inside an embedded terminal.
+    var codexAlternateScreen: Bool = false
+    // When true, every new terminal tile picks a random theme from TerminalTheme.all.
+    var randomTileColor: Bool = true
 
     init() {
         self.id = UUID()
@@ -19,6 +35,8 @@ final class AppSettings {
         self.codexModeRaw = CodexMode.defaultPermissions.rawValue
         self.claudeEffortRaw = ClaudeEffort.high.rawValue
         self.codexEffortRaw = CodexEffort.high.rawValue
+        self.claudeModelRaw = ClaudeModel.opus46.rawValue
+        self.codexModelRaw = CodexModel.gpt54.rawValue
     }
 
     var engine: TerminalEngine {
@@ -44,5 +62,15 @@ final class AppSettings {
     var codexEffort: CodexEffort {
         get { CodexEffort(rawValue: codexEffortRaw) ?? .high }
         set { codexEffortRaw = newValue.rawValue }
+    }
+
+    var claudeModel: ClaudeModel {
+        get { ClaudeModel(rawValue: claudeModelRaw) ?? .opus46 }
+        set { claudeModelRaw = newValue.rawValue }
+    }
+
+    var codexModel: CodexModel {
+        get { CodexModel(rawValue: codexModelRaw) ?? .gpt54 }
+        set { codexModelRaw = newValue.rawValue }
     }
 }

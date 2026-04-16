@@ -6,6 +6,12 @@ import SwiftUI
 final class TerminalManager {
     var sessions: [TerminalSession] = []
     var ipcBroker: IPCBroker?
+    /// Mirrored from AppSettings.randomTileColor by ContentView. When true, every new
+    /// session gets a random TerminalTheme; otherwise sessions use TerminalTheme.tadoDark.
+    var randomTileColors: Bool = true
+    /// Theme picked for the most recently spawned session — used to avoid back-to-back
+    /// repeats when randomTileColors is on.
+    private var lastTheme: TerminalTheme?
 
     func spawnSession(todoID: UUID, todoText: String, canvasPosition: CGPoint, gridIndex: Int, engine: TerminalEngine? = nil) -> TerminalSession {
         let session = TerminalSession(
@@ -15,6 +21,13 @@ final class TerminalManager {
             gridIndex: gridIndex,
             engine: engine
         )
+        if randomTileColors {
+            let theme = TerminalTheme.random(excluding: lastTheme)
+            session.theme = theme
+            lastTheme = theme
+        } else {
+            session.theme = .tadoDark
+        }
         sessions.append(session)
         if let engine = engine {
             ipcBroker?.registerSession(session, engine: engine)

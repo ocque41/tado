@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(AppState.self) private var appState
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
+    @Query private var allSettings: [AppSettings]
     @State private var eventMonitor: Any?
 
     var body: some View {
@@ -68,12 +69,25 @@ struct ContentView: View {
         )) {
             TrashListView()
         }
+        .sheet(isPresented: Binding(
+            get: { appState.dispatchModalProjectID != nil },
+            set: { if !$0 { appState.dispatchModalProjectID = nil } }
+        )) {
+            if let id = appState.dispatchModalProjectID,
+               let project = fetchProject(id) {
+                DispatchFileModal(project: project)
+            }
+        }
         .frame(minWidth: 800, minHeight: 600)
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }
         .task {
             reconnectOnLaunch()
             wireSpawnCallback()
+            syncTerminalManagerSettings()
+        }
+        .onChange(of: allSettings.first?.randomTileColor) { _, _ in
+            syncTerminalManagerSettings()
         }
     }
 
@@ -235,6 +249,19 @@ struct ContentView: View {
         modelContext.insert(settings)
         try? modelContext.save()
         return settings
+    }
+
+    private func fetchProject(_ id: UUID) -> Project? {
+        let descriptor = FetchDescriptor<Project>()
+        return (try? modelContext.fetch(descriptor))?.first { $0.id == id }
+    }
+
+    /// Mirror tile-color randomness from AppSettings into the TerminalManager so
+    /// new sessions pick a random theme. Called at startup and whenever the user
+    /// flips the toggle in SettingsView.
+    private func syncTerminalManagerSettings() {
+        let settings = ContentView.fetchOrCreateSettings(modelContext: modelContext)
+        terminalManager.randomTileColors = settings.randomTileColor
     }
 
     private func reconnectOnLaunch() {

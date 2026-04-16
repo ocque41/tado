@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-16
+
+### Added
+
+- **Dispatch Architect workflow** -- new "Dispatch" button on each project opens a markdown brief modal; accepting spawns a Dispatch Architect agent that designs a multi-phase plan, creates per-phase skills via `/skill-creator`, writes JSON plan files to `.tado/dispatch/`, and injects "Dispatch System" docs into the project's CLAUDE.md/AGENTS.md
+- **Start/Redo dispatch controls** -- once the architect is running, the Dispatch button becomes a Start (play) button (launches phase 1) and a Redo button (re-edit the brief and re-plan)
+- **Auto-chained phases** -- each phase prompt contains a `tado-deploy` handoff to the next phase, so the entire plan runs end-to-end after the user clicks Start
+- `Project.dispatchMarkdown` and `Project.dispatchState` (idle / drafted / planning / dispatching) persisted via SwiftData
+- `DispatchPlanService` -- handles plan reset, phase JSON parsing, architect spawn, and phase 1 launch
+- `DispatchFileModal` -- markdown editor for the dispatch brief with replan confirmation
+- **Model selection** -- new Settings section with dropdowns for Claude models (Opus 4.6, Opus 4.6 1M, Sonnet 4.6, Haiku 4.5) and Codex models (GPT-5.4, GPT-5.4-Mini, GPT-5.3-Codex, GPT-5.2-Codex, GPT-5.2, GPT-5.1-Codex-Max, GPT-5.1-Codex-Mini)
+- Model CLI flags passed through to every spawned agent process
+- **Random tile colors** -- new `TerminalTheme` system with 15 curated palettes (Tado Dark, Claude Copper, Claude Ink, Pro, Homebrew, Ocean, Grass, Red Sands, Silver Aerogel, Solarized Dark, Dracula, Nord, Monokai, Tokyo Night, Gruvbox Dark)
+- Each new tile picks a random theme (excluding the previous one to avoid back-to-back repeats); toggleable via Settings
+- **Harness Display settings** -- Claude Code knobs (`CLAUDE_CODE_NO_FLICKER`, `CLAUDE_CODE_DISABLE_MOUSE`, `CLAUDE_CODE_SCROLL_SPEED` 1-20) and Codex alternate-screen toggle
+- `ProcessSpawner.codexEmbedShim()` -- alt-screen and env-inheritance flags refactored into a reusable function so alt-screen becomes a user setting
+
+### Fixed
+
+- **Trackpad scrollback** -- scrolling over a freshly-deployed terminal tile (never clicked) is now routed to the terminal's scrollback buffer instead of being swallowed as a canvas pan. Hit-testing replaces the previous first-responder check, and trackpad pixel deltas are synthesized into line scrolls (SwiftTerm's `scrollWheel` only honors classic mouse-wheel `deltaY`, which trackpads always report as 0).
+- `LoggingTerminalView.scrollUpLines()` / `scrollDownLines()` -- new helpers that expose SwiftTerm's protected `scrollUp/scrollDown` to the canvas scroll monitor
+
 ## [0.5.0] - 2026-04-14
 
 ### Added

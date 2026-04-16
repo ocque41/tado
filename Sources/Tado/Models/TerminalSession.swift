@@ -28,6 +28,7 @@ final class TerminalSession: Identifiable {
     var engine: TerminalEngine?
     var tileWidth: CGFloat = CanvasLayout.contentWidth
     var tileHeight: CGFloat = CanvasLayout.contentHeight
+    var theme: TerminalTheme = .tadoDark
     weak var terminalView: LocalProcessTerminalView?
 
     var lastKnownCwd: String?

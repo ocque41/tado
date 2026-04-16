@@ -16,6 +16,10 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 
 - **Projects** -- organize todos under a directory; agents are auto-discovered from `.claude/agents/` and `.codex/agents/`
 - **Teams** -- group agents into named teams for coordinated multi-agent work
+- **Dispatch Architect** -- write a markdown brief and an architect agent designs a multi-phase plan, creates per-phase skills, and auto-chains the execution
+- **Model selection** -- pick the exact Claude or Codex model per session (Opus 4.6, Sonnet 4.6, Haiku 4.5, GPT-5.4, GPT-5.3-Codex, etc.)
+- **Random tile colors** -- 15 curated terminal themes (Claude, macOS classics, Solarized, Dracula, Nord, Monokai, Tokyo Night, Gruvbox)
+- **Harness display knobs** -- Claude no-flicker mode, mouse, scroll speed; Codex alt-screen toggle
 - **Todo-driven terminal spawning** -- one terminal per task, powered by the AI agent of your choice
 - **Pannable/zoomable canvas** -- drag, scroll, and zoom across all your running agents
 - **Resizable and moveable tiles** -- drag edges to resize, drag title bar to reposition
@@ -102,9 +106,9 @@ From **any external terminal**, CLI tools are installed to `~/.local/bin`. The *
 tado-mcp/         TypeScript MCP server (list, read, send, broadcast tools)
 Sources/Tado/
   App/          TadoApp (entry point), AppState (UI state)
-  Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage, Project, Team, AgentDefinition
-  Services/     TerminalManager, ProcessSpawner, IPCBroker, AgentDiscoveryService
-  Views/        ContentView, TodoListView, DoneListView, TrashListView, CanvasView, ProjectsView, TeamsView, TerminalTileView, SidebarView, SettingsView
+  Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage, Project, Team, AgentDefinition, TerminalTheme
+  Services/     TerminalManager, ProcessSpawner, IPCBroker, AgentDiscoveryService, DispatchPlanService
+  Views/        ContentView, TodoListView, DoneListView, TrashListView, CanvasView, ProjectsView, TeamsView, TerminalTileView, SidebarView, SettingsView, DispatchFileModal
 ```
 
 **State management**: `AppState` and `TerminalManager` are `@Observable` singletons injected via SwiftUI environment. `SwiftData` persists `TodoItem`, `Project`, `Team`, and `AppSettings`.
@@ -112,6 +116,8 @@ Sources/Tado/
 **Terminal bridge**: `TerminalNSViewRepresentable` wraps [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s `LocalProcessTerminalView` into SwiftUI. All four page views stay mounted simultaneously via opacity toggling, so terminal processes are never destroyed when switching views.
 
 **Agent discovery**: `AgentDiscoveryService` scans a project's `.claude/agents/` and `.codex/agents/` directories for `.md` agent definition files, making them available for team assignment and todo routing.
+
+**Dispatch Architect**: `DispatchPlanService` orchestrates the multi-phase planning workflow. The architect agent reads `.tado/dispatch/dispatch.md`, designs phases, creates per-phase skills, writes `plan.json` and `phases/<order>-<id>.json`, and injects "Dispatch System" awareness into the project's CLAUDE.md/AGENTS.md. Phase agents auto-chain to the next via `tado-deploy`.
 
 **IPC**: `IPCBroker` manages a file-based message queue under `/tmp/tado-ipc-<pid>/` with per-session inboxes, outboxes, and a pub/sub topics directory, watched via `DispatchSource`.
 

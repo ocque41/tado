@@ -7,6 +7,8 @@ final class Project {
     var name: String
     var rootPath: String
     var createdAt: Date
+    var dispatchMarkdown: String = ""
+    var dispatchState: String = "idle"  // "idle" | "drafted" | "planning" | "dispatching"
 
     init(name: String, rootPath: String) {
         self.id = UUID()

@@ -71,6 +71,8 @@ struct CanvasView: View {
                         ipcRoot: terminalManager.ipcBroker?.ipcRoot,
                         modeFlags: modeFlags(for: sessionEngine),
                         effortFlags: effortFlags(for: sessionEngine),
+                        modelFlags: modelFlags(for: sessionEngine),
+                        claudeDisplay: claudeDisplayEnv(),
                         scale: scale
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)
@@ -145,11 +147,12 @@ struct CanvasView: View {
 
     private func installMonitors() {
         // Scroll: 2-finger pan or shift+2-finger zoom
-        // If a terminal is focused, regular scroll goes to it (scrollback)
+        // If the cursor is over a terminal, regular scroll goes to it
+        // (terminal scrollback) — regardless of focus state.
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
 
-            // Shift + scroll = zoom always, even over a focused terminal
+            // Shift + scroll = zoom always, even over a terminal
             if event.modifierFlags.contains(.shift) {
                 let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
                     ? event.scrollingDeltaX
@@ -158,9 +161,28 @@ struct CanvasView: View {
                 return nil
             }
 
-            // If a terminal has focus, let it handle scroll (terminal scrollback)
-            if self.isTerminalFocused() {
-                return event
+            // If the cursor is over a terminal tile, route the scroll into
+            // its scrollback. Previously this was gated on first-responder
+            // status, so a freshly deployed tile (never clicked) silently
+            // swallowed all scrollback gestures into a canvas pan.
+            //
+            // Two paths because SwiftTerm's `scrollWheel` only honors
+            // `event.deltaY` (classic mouse wheel). Trackpads / Magic Mouse
+            // always have `deltaY == 0` and report via `scrollingDeltaY`,
+            // so we synthesize line scrolls for them and consume the event.
+            if let terminal = self.terminalUnderCursor(for: event) {
+                if event.deltaY != 0 {
+                    return event
+                }
+                let pixels = event.scrollingDeltaY
+                if pixels == 0 { return nil }
+                let lines = max(1, min(20, Int(abs(pixels) / 12)))
+                if pixels > 0 {
+                    terminal.scrollUpLines(lines)
+                } else {
+                    terminal.scrollDownLines(lines)
+                }
+                return nil
             }
 
             // Otherwise pan the canvas
@@ -217,15 +239,18 @@ struct CanvasView: View {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 
-    /// Check if any TerminalView in the responder chain is first responder
-    private func isTerminalFocused() -> Bool {
-        guard let firstResponder = NSApp.keyWindow?.firstResponder as? NSView else { return false }
-        var view: NSView? = firstResponder
+    /// Hit-test the scroll event location and return the LoggingTerminalView
+    /// under the cursor, if any. Used to route scroll events to terminals
+    /// regardless of first-responder state.
+    private func terminalUnderCursor(for event: NSEvent) -> LoggingTerminalView? {
+        guard let window = event.window, let contentView = window.contentView else { return nil }
+        guard let hit = contentView.hitTest(event.locationInWindow) else { return nil }
+        var view: NSView? = hit
         while let v = view {
-            if v is TerminalView { return true }
+            if let term = v as? LoggingTerminalView { return term }
             view = v.superview
         }
-        return false
+        return nil
     }
 
     /// Check if a view is inside a TerminalView hierarchy
@@ -314,17 +339,38 @@ struct CanvasView: View {
 
     private var currentModeFlags: [String] { modeFlags(for: currentEngine) }
     private var currentEffortFlags: [String] { effortFlags(for: currentEngine) }
+    private var currentModelFlags: [String] { modelFlags(for: currentEngine) }
 
     private func modeFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
-        return engine == .claude ? settings.claudeMode.cliFlags : settings.codexMode.cliFlags
+        if engine == .claude { return settings.claudeMode.cliFlags }
+        // Codex needs the Tado embed shim regardless of mode (env inheritance for
+        // tado-send, plus optional --no-alt-screen so SwiftTerm doesn't break).
+        return ProcessSpawner.codexEmbedShim(allowAlternateScreen: settings.codexAlternateScreen)
+            + settings.codexMode.cliFlags
     }
 
     private func effortFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
         return engine == .claude ? settings.claudeEffort.cliFlags : settings.codexEffort.cliFlags
+    }
+
+    private func modelFlags(for engine: TerminalEngine) -> [String] {
+        let descriptor = FetchDescriptor<AppSettings>()
+        guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
+        return engine == .claude ? settings.claudeModel.cliFlags : settings.codexModel.cliFlags
+    }
+
+    private func claudeDisplayEnv() -> ProcessSpawner.ClaudeDisplayEnv {
+        let descriptor = FetchDescriptor<AppSettings>()
+        guard let settings = try? modelContext.fetch(descriptor).first else { return .defaults }
+        return ProcessSpawner.ClaudeDisplayEnv(
+            noFlicker: settings.claudeNoFlicker,
+            mouseEnabled: settings.claudeMouseEnabled,
+            scrollSpeed: settings.claudeScrollSpeed
+        )
     }
 
     private func persistPosition(session: TerminalSession, position: CGPoint) {

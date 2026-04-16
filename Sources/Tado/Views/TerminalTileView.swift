@@ -6,6 +6,8 @@ struct TerminalTileView: View {
     let ipcRoot: URL?
     let modeFlags: [String]
     let effortFlags: [String]
+    let modelFlags: [String]
+    let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let scale: CGFloat
     var onPositionChanged: ((CGPoint) -> Void)? = nil
     @Environment(TerminalManager.self) private var terminalManager
@@ -48,6 +50,8 @@ struct TerminalTileView: View {
                 ipcRoot: ipcRoot,
                 modeFlags: modeFlags,
                 effortFlags: effortFlags,
+                modelFlags: modelFlags,
+                claudeDisplay: claudeDisplay,
                 width: isResizing ? visualWidth : session.tileWidth,
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
             )
@@ -305,11 +309,13 @@ private struct StableTerminalContent: View {
     let ipcRoot: URL?
     let modeFlags: [String]
     let effortFlags: [String]
+    let modelFlags: [String]
+    let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let width: CGFloat
     let height: CGFloat
 
     var body: some View {
-        TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, agentName: session.agentName)
+        TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, modelFlags: modelFlags, agentName: session.agentName, claudeDisplay: claudeDisplay)
             .frame(width: width, height: height)
     }
 }

@@ -11,6 +11,14 @@ class LoggingTerminalView: LocalProcessTerminalView {
         onDataReceived?(slice)
     }
 
+    // SwiftTerm's `scrollWheel(with:)` is `public` (not `open`), so it can't
+    // be overridden from outside the module. To support trackpad scrollback
+    // (where `event.deltaY == 0` and only `scrollingDeltaY` is set), the
+    // CanvasView scroll monitor translates pixel deltas into line scrolls
+    // and calls these helpers directly.
+    func scrollUpLines(_ count: Int) { scrollUp(lines: count) }
+    func scrollDownLines(_ count: Int) { scrollDown(lines: count) }
+
     // MARK: - File drag-and-drop
 
     func setupDragAndDrop() {
@@ -72,7 +80,9 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
     let ipcRoot: URL?
     let modeFlags: [String]
     let effortFlags: [String]
+    let modelFlags: [String]
     let agentName: String?
+    let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
 
     func makeNSView(context: Context) -> LoggingTerminalView {
         let terminalView = LoggingTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
@@ -81,8 +91,10 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
         if let font = NSFont(name: "SF Mono", size: fontSize) ?? NSFont(name: "Menlo", size: fontSize) {
             terminalView.font = font
         }
-        terminalView.nativeBackgroundColor = NSColor(red: 0.118, green: 0.118, blue: 0.180, alpha: 1.0)
-        terminalView.nativeForegroundColor = NSColor(red: 0.804, green: 0.839, blue: 0.957, alpha: 1.0)
+        // Apply the session's randomized (or fixed) theme. Themes are picked at
+        // spawn time in TerminalManager based on AppSettings.randomTileColor.
+        terminalView.nativeBackgroundColor = session.theme.background
+        terminalView.nativeForegroundColor = session.theme.foreground
 
         terminalView.setupDragAndDrop()
         terminalView.processDelegate = context.coordinator
@@ -92,7 +104,7 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
             session.terminalView = terminalView
         }
 
-        let (executable, args) = ProcessSpawner.command(for: session.todoText, engine: engine, modeFlags: modeFlags, effortFlags: effortFlags, agentName: agentName)
+        let (executable, args) = ProcessSpawner.command(for: session.todoText, engine: engine, modeFlags: modeFlags, effortFlags: effortFlags, modelFlags: modelFlags, agentName: agentName)
         let env: [String]
         if let ipcRoot = ipcRoot {
             env = ProcessSpawner.environment(
@@ -105,7 +117,8 @@ struct TerminalNSViewRepresentable: NSViewRepresentable {
                 teamName: session.teamName,
                 teamID: session.teamID,
                 agentName: session.agentName,
-                teamAgents: session.teamAgents
+                teamAgents: session.teamAgents,
+                claudeDisplay: claudeDisplay
             )
         } else {
             env = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }

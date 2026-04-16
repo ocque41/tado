@@ -15,6 +15,7 @@ struct ProjectsView: View {
     @State private var showNewTeamInProject: Bool = false
     @State private var newTeamNameInProject: String = ""
     @State private var newTeamAgentsInProject: Set<String> = []
+    @State private var showPlanNotReadyAlert: Bool = false
 
     private var selectedProject: Project? {
         guard let id = selectedProjectID else { return nil }
@@ -22,10 +23,17 @@ struct ProjectsView: View {
     }
 
     var body: some View {
-        if let project = selectedProject {
-            projectDetail(project)
-        } else {
-            projectList
+        Group {
+            if let project = selectedProject {
+                projectDetail(project)
+            } else {
+                projectList
+            }
+        }
+        .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The Dispatch Architect has not finished writing the plan yet. Watch its terminal on the canvas — once plan.json is on disk, click Start again.")
         }
     }
 
@@ -149,6 +157,8 @@ struct ProjectsView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Bootstrap Tado A2A tools for this project")
+
+                dispatchControls(for: project)
 
                 if teamCount > 0 {
                     Button(action: { bootstrapTeam(for: project) }) {
@@ -493,6 +503,70 @@ struct ProjectsView: View {
         }
         modelContext.delete(project)
         try? modelContext.save()
+    }
+
+    // MARK: - Dispatch File Controls
+
+    @ViewBuilder
+    private func dispatchControls(for project: Project) -> some View {
+        let state = project.dispatchState
+        if state == "idle" || state.isEmpty {
+            Button(action: { appState.dispatchModalProjectID = project.id }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "doc.text.badge.plus")
+                        .font(.system(size: 12))
+                    Text("Dispatch")
+                        .font(.system(size: 10, design: .monospaced))
+                }
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.blue.opacity(0.12))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Write a Dispatch File — a multi-phase super-project plan")
+        } else {
+            Button(action: { appState.dispatchModalProjectID = project.id }) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Redo the Dispatch File — edit the brief and re-plan")
+
+            Button(action: { startPhaseOne(for: project) }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11))
+                    Text("Start")
+                        .font(.system(size: 10, design: .monospaced))
+                }
+                .foregroundStyle(.green)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.green.opacity(0.12))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Start dispatching — launch phase 1 of the plan")
+        }
+    }
+
+    private func startPhaseOne(for project: Project) {
+        let launched = DispatchPlanService.startPhaseOne(
+            project: project,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+        if !launched {
+            showPlanNotReadyAlert = true
+        }
     }
 
     // MARK: - Bootstrap Tools
