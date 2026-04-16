@@ -35,3 +35,7 @@ npm-debug.log*
 
 # Claude Code (user-local settings)
 .claude/
+
+# Rust core build artifacts
+tado-core/target/
+tado-core/include/tado_core.h

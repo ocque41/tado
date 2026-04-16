@@ -1,0 +1,29 @@
+[package]
+name = "tado-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Tado terminal core: PTY, VT parsing, IPC. Linked into the Swift app as a static library."
+
+[lib]
+name = "tado_core"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+portable-pty = "0.9"
+vte = "0.13"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1

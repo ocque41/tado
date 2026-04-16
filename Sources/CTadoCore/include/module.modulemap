@@ -1,0 +1,4 @@
+module CTadoCore {
+    header "tado_core.h"
+    export *
+}
