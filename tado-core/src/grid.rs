@@ -67,6 +67,18 @@ pub struct Grid {
     /// DECSET 25 — cursor visibility. TUIs hide the cursor during render
     /// to prevent flicker. Consumed by the Metal renderer.
     pub cursor_visible: bool,
+    /// DECSET 2004 — bracketed paste mode. When true, the terminal wraps
+    /// pasted text with `ESC [ 200 ~` / `ESC [ 201 ~` so the shell can
+    /// distinguish a paste from typed input. Read by the Swift paste
+    /// handler.
+    pub bracketed_paste: bool,
+    /// DECSET 1000 — X11 mouse button reporting (press + release).
+    pub mouse_reporting_button: bool,
+    /// DECSET 1002 — button-event tracking (button + drag).
+    pub mouse_reporting_drag: bool,
+    /// DECSET 1006 — SGR extended mouse coordinates. Preferred for
+    /// modern apps since it supports columns > 95.
+    pub mouse_reporting_sgr: bool,
     /// Saved cursor (DECSC / CSI s). Stored as (x, y, attrs) so colored
     /// segments restore correctly. None until first save.
     pub saved_cursor: Option<(u16, u16, u32, u32, u32)>,
@@ -119,6 +131,10 @@ impl Grid {
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
             alt_screen: None,
+            bracketed_paste: false,
+            mouse_reporting_button: false,
+            mouse_reporting_drag: false,
+            mouse_reporting_sgr: false,
         }
     }
 

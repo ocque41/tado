@@ -106,6 +106,54 @@ final class TadoCoreSessionTests: XCTestCase {
         XCTAssertEqual(snap.cells.count, Int(snap.cols) * Int(snap.rows))
     }
 
+    func testBracketedPasteAndTitleFFI() throws {
+        // Spawn a shell that emits OSC 2 (title) and DECSET 2004
+        // (bracketed paste on). Confirm the Swift FFI wrappers reflect
+        // each on arrival. Runs in a real PTY to prove the full stack
+        // — Rust parser, session events queue, FFI drain, Swift wrapper.
+        let script = #"""
+            printf '\033]2;my tado test\a'
+            printf '\033[?2004h'
+            echo ready
+            sleep 0.5
+        """#
+        guard let session = TadoCore.Session(
+            command: "/bin/sh",
+            args: ["-c", script],
+            cwd: nil,
+            environment: ["PATH": "/usr/bin:/bin"],
+            cols: 40,
+            rows: 5
+        ) else {
+            XCTFail("spawn failed")
+            return
+        }
+
+        // Wait for `ready` then check flags. The title arrives before
+        // the echo, so by the time we see `ready` both should be set.
+        let deadline = Date().addingTimeInterval(2.0)
+        var sawReady = false
+        var capturedTitle: String?
+        while Date() < deadline {
+            if !sawReady, let snap = session.snapshotFull() {
+                let text = String(snap.cells.compactMap {
+                    Unicode.Scalar($0.ch).map { Character($0) }
+                })
+                if text.contains("ready") { sawReady = true }
+            }
+            if capturedTitle == nil, let title = session.takeTitle() {
+                capturedTitle = title
+            }
+            if sawReady && capturedTitle != nil { break }
+            usleep(50_000)
+        }
+
+        XCTAssertTrue(sawReady, "shell never printed 'ready'")
+        XCTAssertEqual(capturedTitle, "my tado test")
+        XCTAssertTrue(session.bracketedPasteEnabled,
+                      "DECSET 2004 should leave bracketedPasteEnabled=true")
+    }
+
     func testWriteRoundTrip() throws {
         // `cat` echoes stdin back to stdout. We write a string and expect
         // it to appear in the grid.

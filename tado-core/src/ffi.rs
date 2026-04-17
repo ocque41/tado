@@ -10,7 +10,8 @@
 //!   call only; Rust copies if it needs to retain.
 
 use crate::grid::Cell;
-use crate::session::{GridSnapshot, ScrollbackSnapshot, Session};
+use crate::performer::GridEvent;
+use crate::session::{GridSnapshot, MouseReportingMode, ScrollbackSnapshot, Session};
 use std::ffi::{c_char, CStr};
 use std::panic;
 use std::ptr;
@@ -153,6 +154,103 @@ pub unsafe extern "C" fn tado_session_is_running(session: *mut TadoSession) -> u
             .load(std::sync::atomic::Ordering::Acquire) as u8
     });
     r.unwrap_or(0)
+}
+
+/// 1 if the PTY has bracketed paste mode enabled (DECSET 2004).
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_bracketed_paste(session: *mut TadoSession) -> u8 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.bracketed_paste() as u8
+    });
+    r.unwrap_or(0)
+}
+
+/// Mouse reporting mode: 0 off, 1 button, 2 drag. Use
+/// `tado_session_mouse_sgr` to determine the encoding.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_mouse_mode(session: *mut TadoSession) -> u8 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        match s.mouse_reporting_mode() {
+            MouseReportingMode::Off => 0u8,
+            MouseReportingMode::Button => 1u8,
+            MouseReportingMode::Drag => 2u8,
+        }
+    });
+    r.unwrap_or(0)
+}
+
+/// 1 if the PTY uses SGR (1006) mouse encoding — modern, column-uncapped.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_mouse_sgr(session: *mut TadoSession) -> u8 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.mouse_reporting_sgr() as u8
+    });
+    r.unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// Title events (OSC 0 / OSC 2)
+// ---------------------------------------------------------------------------
+//
+// Rust accumulates GridEvents as bytes arrive. Swift drains them each
+// draw-tick via `tado_session_take_title`. We return only the most
+// recent title — intermediate updates during a burst are coalesced to
+// avoid thrashing SwiftUI's observation.
+
+/// Pull the latest title emitted since the last call. Returns a malloc'd
+/// C string (caller frees with `tado_string_free`) or null if there's
+/// been no title since the last drain.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_take_title(session: *mut TadoSession) -> *mut c_char {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+    let r = panic::catch_unwind(|| -> *mut c_char {
+        let s = &*(session as *const Session);
+        let mut latest: Option<String> = None;
+        for ev in s.drain_events() {
+            match ev {
+                GridEvent::TitleChanged(t) => latest = Some(t),
+            }
+        }
+        match latest {
+            Some(t) => {
+                // `CString::new` fails on interior NUL. Drop NULs first.
+                let sanitized: Vec<u8> =
+                    t.into_bytes().into_iter().filter(|b| *b != 0).collect();
+                match std::ffi::CString::new(sanitized) {
+                    Ok(c) => c.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                }
+            }
+            None => ptr::null_mut(),
+        }
+    });
+    r.unwrap_or(ptr::null_mut())
+}
+
+/// Free a string returned by `tado_session_take_title` (or any other
+/// Rust-side CString). No-op on null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_string_free(s: *mut c_char) {
+    if s.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(|| {
+        drop(std::ffi::CString::from_raw(s));
+    });
 }
 
 /// Snapshot just the dirty rows since the last snapshot call.

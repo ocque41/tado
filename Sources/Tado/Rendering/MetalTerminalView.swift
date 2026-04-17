@@ -23,11 +23,15 @@ struct MetalTerminalView: NSViewRepresentable {
     /// Called roughly once per second when no output has arrived.
     /// Wire to `TerminalSession.checkIdle()`.
     var onIdleTick: (() -> Void)? = nil
+    /// Called when the PTY emits an OSC 0 / OSC 2 title sequence.
+    /// Typical wiring is `TerminalSession.title = $0`.
+    var onTitleChange: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows)
         view.onDirty = onDirty
         view.onIdleTick = onIdleTick
+        view.onTitleChange = onTitleChange
         return view
     }
 
@@ -35,6 +39,7 @@ struct MetalTerminalView: NSViewRepresentable {
         nsView.resizeIfNeeded(cols: cols, rows: rows)
         nsView.onDirty = onDirty
         nsView.onIdleTick = onIdleTick
+        nsView.onTitleChange = onTitleChange
     }
 
     static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: ()) {
@@ -77,6 +82,7 @@ final class TerminalMTKView: MTKView {
 
     var onDirty: (() -> Void)?
     var onIdleTick: (() -> Void)?
+    var onTitleChange: ((String) -> Void)?
     private var lastIdleTick: TimeInterval = 0
 
     init(session: TadoCore.Session, cols: UInt16, rows: UInt16) {
@@ -157,10 +163,75 @@ final class TerminalMTKView: MTKView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Intercept plain Cmd-less keystrokes; let SwiftUI handle Cmd+X etc.
+        // Cmd+V → paste from clipboard into the PTY. Honors bracketed
+        // paste mode so the shell can distinguish pasted content.
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "v" {
+            paste(nil)
+            return true
+        }
+        // Other Cmd combos — let SwiftUI / menu system handle them.
         guard !event.modifierFlags.contains(.command) else { return false }
         keyDown(with: event)
         return true
+    }
+
+    /// NSResponder paste action — reached via Cmd+V or Edit → Paste.
+    /// `paste(_:)` isn't declared on NSView so this isn't an `override`;
+    /// it's a selector exposed to the responder chain.
+    @objc func paste(_ sender: Any?) {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.isEmpty else { return }
+        if session.bracketedPasteEnabled {
+            // Bracketed paste: ESC [ 200 ~ ... ESC [ 201 ~
+            let start: [UInt8] = [0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E]
+            let end:   [UInt8] = [0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E]
+            var bytes = start
+            bytes.append(contentsOf: Array(text.utf8))
+            bytes.append(contentsOf: end)
+            session.write(bytes)
+        } else {
+            session.write(text: text)
+        }
+    }
+
+    // MARK: - Mouse reporting
+
+    override func mouseUp(with event: NSEvent) {
+        reportMouse(event: event, button: 0, isPress: false)
+        super.mouseUp(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        reportMouse(event: event, button: 2, isPress: true)
+        super.rightMouseDown(with: event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        reportMouse(event: event, button: 2, isPress: false)
+        super.rightMouseUp(with: event)
+    }
+
+    /// Emit an xterm mouse sequence for a button press/release. No-op
+    /// when the PTY hasn't enabled DECSET 1000/1002. SGR (1006) encoding
+    /// is preferred; falls back to silent-drop when unavailable since
+    /// the legacy 32-byte encoding can't represent columns > 95.
+    private func reportMouse(event: NSEvent, button: Int, isPress: Bool) {
+        guard session.mouseMode != .off,
+              let renderer = renderer,
+              session.mouseSgrEncoding else {
+            return
+        }
+        let local = convert(event.locationInWindow, from: nil)
+        // AppKit y-origin is bottom; terminal rows count from top.
+        let flippedY = max(0, bounds.height - local.y)
+        let col = max(1, Int(local.x / renderer.metrics.cellWidth) + 1)
+        let row = max(1, Int(flippedY / renderer.metrics.cellHeight) + 1)
+        let btnCode = button // 0=left, 1=middle, 2=right
+        // SGR: CSI < btn ; col ; row (M = press, m = release)
+        let trailer: Character = isPress ? "M" : "m"
+        let seq = "\u{1B}[<\(btnCode);\(col);\(row)\(trailer)"
+        session.write(text: seq)
     }
 
     // MARK: - Scroll wheel → scrollback offset
@@ -254,6 +325,12 @@ extension TerminalMTKView: MTKViewDelegate {
         if now - lastIdleTick >= 1.0 {
             lastIdleTick = now
             onIdleTick?()
+            // Drain OSC title events on the same cadence — titles change
+            // rarely so once-per-second polling is fine. Keeps the Rust
+            // event buffer from growing during OSC-heavy output.
+            if let newTitle = session.takeTitle(), !newTitle.isEmpty {
+                onTitleChange?(newTitle)
+            }
         }
 
         // For scrollback we need the FULL live grid (the dirty-row diff

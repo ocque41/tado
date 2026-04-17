@@ -115,6 +115,39 @@ enum TadoCore {
             tado_session_is_running(UnsafeMutablePointer(handle)) != 0
         }
 
+        /// DECSET 2004 — the PTY wants paste events wrapped with
+        /// `ESC [ 200 ~` / `ESC [ 201 ~`. Consulted from Cmd+V handler.
+        var bracketedPasteEnabled: Bool {
+            tado_session_bracketed_paste(UnsafeMutablePointer(handle)) != 0
+        }
+
+        enum MouseMode: UInt8 {
+            case off = 0
+            case button = 1
+            case drag = 2
+        }
+
+        var mouseMode: MouseMode {
+            MouseMode(rawValue: tado_session_mouse_mode(UnsafeMutablePointer(handle))) ?? .off
+        }
+
+        /// 1006 — SGR mouse encoding. Allows columns > 95 and avoids the
+        /// legacy 32-byte-offset encoding's ambiguity.
+        var mouseSgrEncoding: Bool {
+            tado_session_mouse_sgr(UnsafeMutablePointer(handle)) != 0
+        }
+
+        /// Pull the latest OSC 0/2 title, if any emerged since the last
+        /// drain. Nil = no new title. Intermediate titles during a burst
+        /// are coalesced Rust-side to avoid thrashing SwiftUI.
+        func takeTitle() -> String? {
+            guard let cstr = tado_session_take_title(UnsafeMutablePointer(handle)) else {
+                return nil
+            }
+            defer { tado_string_free(cstr) }
+            return String(cString: cstr)
+        }
+
         /// Snapshot just the rows that changed since the last snapshot. Cheap —
         /// intended to be called per Metal frame for every visible tile.
         func snapshotDirty() -> Snapshot? {

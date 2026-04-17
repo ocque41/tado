@@ -41,6 +41,11 @@ struct MetalTerminalTileView: View {
                         MainActor.assumeIsolated {
                             session?.checkIdle()
                         }
+                    },
+                    onTitleChange: { [weak session] title in
+                        MainActor.assumeIsolated {
+                            session?.title = title
+                        }
                     }
                 )
             } else {

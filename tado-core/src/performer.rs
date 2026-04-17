@@ -10,13 +10,23 @@ use crate::grid::{
 };
 use vte::{Params, Perform};
 
+/// Event emitted during byte processing. Accumulated while parsing a
+/// chunk so the caller can deliver them in order after releasing the
+/// grid lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GridEvent {
+    /// OSC 0 or OSC 2 — window/tab title.
+    TitleChanged(String),
+}
+
 pub struct GridPerformer<'a> {
     pub grid: &'a mut Grid,
+    pub events: &'a mut Vec<GridEvent>,
 }
 
 impl<'a> GridPerformer<'a> {
-    pub fn new(grid: &'a mut Grid) -> Self {
-        Self { grid }
+    pub fn new(grid: &'a mut Grid, events: &'a mut Vec<GridEvent>) -> Self {
+        Self { grid, events }
     }
 }
 
@@ -44,7 +54,22 @@ impl<'a> Perform for GridPerformer<'a> {
     fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
-    fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        // OSC 0 — icon + window title; OSC 2 — window title only.
+        // OSC 1 is icon title; we ignore that. Params are bytes,
+        // generally UTF-8 — decode lossy to avoid panics on bad data.
+        if params.len() < 2 {
+            return;
+        }
+        let code = std::str::from_utf8(params[0]).ok();
+        match code {
+            Some("0") | Some("2") => {
+                let title = String::from_utf8_lossy(params[1]).into_owned();
+                self.events.push(GridEvent::TitleChanged(title));
+            }
+            _ => {}
+        }
+    }
 
     fn csi_dispatch(
         &mut self,
@@ -165,6 +190,10 @@ impl<'a> GridPerformer<'a> {
                             self.grid.leave_alt_screen();
                         }
                     }
+                    1000 => self.grid.mouse_reporting_button = enable,
+                    1002 => self.grid.mouse_reporting_drag = enable,
+                    1006 => self.grid.mouse_reporting_sgr = enable,
+                    2004 => self.grid.bracketed_paste = enable,
                     _ => {}
                 }
             }
@@ -297,8 +326,13 @@ mod tests {
     use vte::Parser;
 
     fn feed(grid: &mut Grid, bytes: &[u8]) {
+        let mut events = Vec::new();
+        feed_with_events(grid, bytes, &mut events)
+    }
+
+    fn feed_with_events(grid: &mut Grid, bytes: &[u8], events: &mut Vec<GridEvent>) {
         let mut parser = Parser::new();
-        let mut perf = GridPerformer::new(grid);
+        let mut perf = GridPerformer::new(grid, events);
         for b in bytes {
             parser.advance(&mut perf, *b);
         }
@@ -414,6 +448,46 @@ mod tests {
         assert_eq!(g.cells[4].ch, b'b' as u32);
         // Row 2 should now hold what was row 3 before (c's got wiped by
         // the cursor jump + scroll)
+    }
+
+    #[test]
+    fn bracketed_paste_decset_toggle() {
+        let mut g = Grid::new(4, 2);
+        assert!(!g.bracketed_paste);
+        feed(&mut g, b"\x1b[?2004h");
+        assert!(g.bracketed_paste);
+        feed(&mut g, b"\x1b[?2004l");
+        assert!(!g.bracketed_paste);
+    }
+
+    #[test]
+    fn mouse_reporting_decset_toggle() {
+        let mut g = Grid::new(4, 2);
+        feed(&mut g, b"\x1b[?1000h\x1b[?1006h");
+        assert!(g.mouse_reporting_button);
+        assert!(g.mouse_reporting_sgr);
+        feed(&mut g, b"\x1b[?1000l");
+        assert!(!g.mouse_reporting_button);
+    }
+
+    #[test]
+    fn osc_0_and_2_emit_title_event() {
+        let mut g = Grid::new(10, 2);
+        let mut events = Vec::new();
+        // OSC 2 ; title BEL
+        feed_with_events(&mut g, b"\x1b]2;hello world\x07", &mut events);
+        assert_eq!(
+            events,
+            vec![GridEvent::TitleChanged("hello world".to_string())]
+        );
+
+        events.clear();
+        // OSC 0 ; title ST (ESC \)
+        feed_with_events(&mut g, b"\x1b]0;my title\x1b\\", &mut events);
+        assert_eq!(
+            events,
+            vec![GridEvent::TitleChanged("my title".to_string())]
+        );
     }
 
     #[test]

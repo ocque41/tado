@@ -15,7 +15,7 @@
 //! `kqueue`-based coalescing.
 
 use crate::grid::Grid;
-use crate::performer::GridPerformer;
+use crate::performer::{GridEvent, GridPerformer};
 use crate::pty::{spawn as spawn_pty, PtyHandles};
 use parking_lot::Mutex;
 use std::io::{Read, Write};
@@ -32,6 +32,11 @@ pub struct Session {
     master: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
     pub running: Arc<AtomicBool>,
     pub exit_code: Arc<AtomicI32>,
+    /// Events accumulated during byte processing — pulled by the Swift
+    /// side via `drain_events`. Bounded implicitly by the rate at which
+    /// Swift polls; we cap at 256 to keep a runaway OSC spam from
+    /// growing unbounded.
+    events: Arc<Mutex<Vec<GridEvent>>>,
 }
 
 impl Session {
@@ -53,6 +58,7 @@ impl Session {
         let grid = Arc::new(Mutex::new(Grid::new(cols, rows)));
         let running = Arc::new(AtomicBool::new(true));
         let exit_code = Arc::new(AtomicI32::new(i32::MIN));
+        let events = Arc::new(Mutex::new(Vec::with_capacity(16)));
 
         let session = Arc::new(Self {
             cols,
@@ -63,9 +69,10 @@ impl Session {
             master: Arc::new(Mutex::new(Some(master))),
             running: running.clone(),
             exit_code: exit_code.clone(),
+            events: events.clone(),
         });
 
-        Self::start_reader(grid, reader, running.clone(), {
+        Self::start_reader(grid, events, reader, running.clone(), {
             let child = session.child.clone();
             let exit_code = exit_code.clone();
             let running = running.clone();
@@ -86,6 +93,7 @@ impl Session {
 
     fn start_reader(
         grid: Arc<Mutex<Grid>>,
+        events: Arc<Mutex<Vec<GridEvent>>>,
         mut reader: Box<dyn Read + Send>,
         running: Arc<AtomicBool>,
         on_eof: impl FnOnce() + Send + 'static,
@@ -93,6 +101,9 @@ impl Session {
         thread::spawn(move || {
             let mut parser = vte::Parser::new();
             let mut buf = [0u8; 8 * 1024];
+            // Scratch vec reused across reads so we don't churn
+            // allocations for the common case of zero events per chunk.
+            let mut scratch = Vec::with_capacity(4);
             loop {
                 if !running.load(Ordering::Acquire) {
                     break;
@@ -100,10 +111,23 @@ impl Session {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        scratch.clear();
                         let mut g = grid.lock();
-                        let mut perf = GridPerformer::new(&mut g);
+                        let mut perf = GridPerformer::new(&mut g, &mut scratch);
                         for b in &buf[..n] {
                             parser.advance(&mut perf, *b);
+                        }
+                        // Dropping g before locking events avoids
+                        // holding two locks simultaneously.
+                        drop(g);
+                        if !scratch.is_empty() {
+                            let mut e = events.lock();
+                            e.append(&mut scratch);
+                            // Cap: keep the most recent 256 events.
+                            let len = e.len();
+                            if len > 256 {
+                                e.drain(0..(len - 256));
+                            }
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -112,6 +136,32 @@ impl Session {
             }
             on_eof();
         });
+    }
+
+    /// Drain all accumulated grid events since the last call. Called
+    /// from Swift each draw-tick to pull title changes, etc.
+    pub fn drain_events(&self) -> Vec<GridEvent> {
+        let mut e = self.events.lock();
+        std::mem::take(&mut *e)
+    }
+
+    pub fn bracketed_paste(&self) -> bool {
+        self.grid.lock().bracketed_paste
+    }
+
+    pub fn mouse_reporting_mode(&self) -> MouseReportingMode {
+        let g = self.grid.lock();
+        if g.mouse_reporting_drag {
+            MouseReportingMode::Drag
+        } else if g.mouse_reporting_button {
+            MouseReportingMode::Button
+        } else {
+            MouseReportingMode::Off
+        }
+    }
+
+    pub fn mouse_reporting_sgr(&self) -> bool {
+        self.grid.lock().mouse_reporting_sgr
     }
 
     pub fn write(&self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -201,6 +251,13 @@ impl Session {
         self.running.store(false, Ordering::SeqCst);
         let _ = signal; // reserved for future direct SIG delivery
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseReportingMode {
+    Off,
+    Button,
+    Drag,
 }
 
 #[derive(Debug, Clone)]
