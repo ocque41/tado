@@ -235,4 +235,59 @@ final class TadoCoreSessionTests: XCTestCase {
         session.kill()
         XCTAssertTrue(saw, "expected 'ping' to round-trip through /bin/cat PTY")
     }
+
+    // MARK: - Spawn error surfacing (Packet 0)
+
+    /// Spawning a nonexistent binary must return nil AND populate the
+    /// thread-local error so the UI can show a concrete cause. Before
+    /// Packet 0 the failure was silent — this test gates regressions of
+    /// that contract.
+    func testSpawnFailurePopulatesLastError() throws {
+        TadoCore.lastSpawnError = nil
+
+        let session = TadoCore.Session(
+            command: "/no/such/binary/tado-regression-zzz",
+            args: [],
+            cwd: nil,
+            environment: [:],
+            cols: 80,
+            rows: 24
+        )
+        XCTAssertNil(session, "spawn should fail for nonexistent binary")
+
+        let captured = TadoCore.lastSpawnError
+        XCTAssertNotNil(captured, "init? must stash the Rust error in TadoCore.lastSpawnError")
+        if let captured {
+            XCTAssertTrue(
+                captured.contains("No such file")
+                    || captured.contains("not found")
+                    || captured.contains("Session::spawn failed"),
+                "expected captured error to describe the spawn failure, got: \(captured)"
+            )
+        }
+    }
+
+    /// A successful spawn must clear any prior error so a stale message
+    /// doesn't leak into the UI on the next tile.
+    func testSuccessfulSpawnClearsLastError() throws {
+        TadoCore.lastSpawnError = "stale from a prior test"
+
+        guard let session = TadoCore.Session(
+            command: "/bin/echo",
+            args: ["ok"],
+            cwd: nil,
+            environment: [:],
+            cols: 40,
+            rows: 4
+        ) else {
+            XCTFail("spawn returned nil for /bin/echo")
+            return
+        }
+        defer { session.kill() }
+
+        XCTAssertNil(
+            TadoCore.lastSpawnError,
+            "successful Session.init? must clear TadoCore.lastSpawnError"
+        )
+    }
 }

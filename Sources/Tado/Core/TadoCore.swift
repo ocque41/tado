@@ -14,6 +14,29 @@ import CTadoCore
 /// writer). Swift callers that care about ordering should still serialize
 /// their writes.
 enum TadoCore {
+    /// Last spawn failure surfaced by `tado_session_spawn`. Populated by
+    /// `Session.init?` right before it returns nil so the UI can show a
+    /// concrete cause (`"No such file or directory"`, `"posix_spawnp
+    /// failed"`, …) instead of a generic pending placeholder. Overwritten
+    /// on every spawn attempt (nil on success).
+    ///
+    /// Threading: the Rust side keeps the message in a `thread_local!`,
+    /// so the contract is "read it on the same thread that called
+    /// spawn." Every current caller runs spawn on the main thread
+    /// (`MetalTerminalTileView.onAppear` is main-isolated), so the
+    /// static is effectively main-thread-only today; if we ever spawn
+    /// off-main, revisit this.
+    static var lastSpawnError: String?
+
+    /// Pull+clear the last spawn error recorded inside Rust. Cheap — a
+    /// single FFI call + CString copy. Typically invoked only on the
+    /// failure branch; returns nil if no error is pending.
+    static func lastSpawnErrorFromCore() -> String? {
+        guard let cstr = tado_last_spawn_error() else { return nil }
+        defer { tado_string_free(cstr) }
+        return String(cString: cstr)
+    }
+
     final class Session {
         fileprivate let handle: OpaquePointer
 
@@ -78,7 +101,17 @@ enum TadoCore {
                     return OpaquePointer(raw)
                 }
             }
-            guard let ptr else { return nil }
+            guard let ptr else {
+                // Drain the Rust-side thread-local error so the tile can
+                // render it. NSLog also lands in terminal output so
+                // `make dev` users see the cause without the UI path.
+                let detail = TadoCore.lastSpawnErrorFromCore()
+                    ?? "tado_session_spawn returned null with no error detail"
+                NSLog("tado: TadoCore.Session spawn failed: \(detail)")
+                TadoCore.lastSpawnError = detail
+                return nil
+            }
+            TadoCore.lastSpawnError = nil
             self.handle = ptr
         }
 

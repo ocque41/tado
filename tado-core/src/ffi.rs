@@ -11,10 +11,26 @@
 
 use crate::grid::Cell;
 use crate::session::{GridSnapshot, MouseReportingMode, ScrollbackSnapshot, Session};
-use std::ffi::{c_char, CStr};
+use std::cell::RefCell;
+use std::ffi::{c_char, CStr, CString};
 use std::panic;
 use std::ptr;
 use std::sync::Arc;
+
+thread_local! {
+    /// Captures the most recent `tado_session_spawn` failure on the caller's
+    /// thread. Populated on every error branch inside the spawn path — null
+    /// cstrings, `Session::spawn` IO errors, and caught panics. Swift reads
+    /// this via `tado_last_spawn_error()` right after a nil return, so the
+    /// UI can show the real cause instead of the generic "pending" placeholder.
+    static LAST_SPAWN_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+fn record_spawn_error(msg: impl Into<String>) {
+    LAST_SPAWN_ERROR.with(|cell| {
+        *cell.borrow_mut() = Some(msg.into());
+    });
+}
 
 #[repr(C)]
 pub struct TadoSession {
@@ -59,10 +75,17 @@ pub unsafe extern "C" fn tado_session_spawn(
     cols: u16,
     rows: u16,
 ) -> *mut TadoSession {
+    // Clear stale error on every call so a success after a prior failure
+    // doesn't leave the old message visible.
+    LAST_SPAWN_ERROR.with(|cell| cell.borrow_mut().take());
+
     let result = panic::catch_unwind(|| {
         let cmd = match cstr_to_owned(cmd) {
             Some(s) => s,
-            None => return ptr::null_mut(),
+            None => {
+                record_spawn_error("command string was null or not valid UTF-8");
+                return ptr::null_mut();
+            }
         };
         let mut args = Vec::with_capacity(argc);
         for i in 0..argc {
@@ -81,10 +104,57 @@ pub unsafe extern "C" fn tado_session_spawn(
         }
         match Session::spawn(&cmd, &args, cwd.as_deref(), &env_vec, cols, rows) {
             Ok(session) => Arc::into_raw(session) as *mut TadoSession,
-            Err(_) => ptr::null_mut(),
+            Err(e) => {
+                record_spawn_error(format!(
+                    "Session::spawn failed (cmd={:?}, args={:?}, cwd={:?}, env_count={}): {}",
+                    cmd,
+                    args,
+                    cwd.as_deref(),
+                    env_vec.len(),
+                    e
+                ));
+                ptr::null_mut()
+            }
         }
     });
-    result.unwrap_or(ptr::null_mut())
+    match result {
+        Ok(ptr) => ptr,
+        Err(payload) => {
+            let msg = panic_payload_to_string(&payload);
+            record_spawn_error(format!("panic in tado_session_spawn: {}", msg));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Pull+clear the last spawn error recorded on the current thread. Returns
+/// a malloc'd CString (caller frees with `tado_string_free`) or null if no
+/// error is pending. Always called from Swift immediately after
+/// `tado_session_spawn` returns null, so the thread-local-per-call contract
+/// holds: the spawn call ran on this thread, so the error is here too.
+#[no_mangle]
+pub unsafe extern "C" fn tado_last_spawn_error() -> *mut c_char {
+    let msg = LAST_SPAWN_ERROR.with(|cell| cell.borrow_mut().take());
+    match msg {
+        Some(s) => {
+            let sanitized: Vec<u8> = s.into_bytes().into_iter().filter(|b| *b != 0).collect();
+            match CString::new(sanitized) {
+                Ok(c) => c.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+fn panic_payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
 }
 
 /// Drop a session handle. Safe to call with null (no-op).

@@ -31,6 +31,13 @@ struct MetalTerminalTileView: View {
     /// with the view tree.
     @State private var flashActive: Bool = false
 
+    /// Populated by `spawnIfNeeded` on a nil return so we can render the
+    /// real error inside the tile instead of a generic "pending"
+    /// placeholder. Mirrors `TadoCore.lastSpawnError` but scoped to this
+    /// tile so subsequent successful spawns elsewhere don't overwrite
+    /// what we're showing.
+    @State private var spawnError: String?
+
     private var metrics: FontMetrics { FontMetrics.defaultMono(size: fontSize) }
 
     var body: some View {
@@ -83,12 +90,31 @@ struct MetalTerminalTileView: View {
                 }
                 .animation(.easeOut(duration: 0.15), value: flashActive)
             } else {
-                // Spawn is synchronous but can fail; render a placeholder
-                // that shows the error instead of silently crashing.
+                // Spawn is synchronous but can fail. Show pending until
+                // .onAppear runs, then swap in the captured error so the
+                // user can see the real cause (missing binary, bad cwd,
+                // env-related posix_spawn failure, etc.) without having
+                // to run from a terminal.
                 Color.black.overlay(
-                    Text("tado-core spawn pending…")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let err = spawnError {
+                            Text("tado-core spawn failed")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.red)
+                            Text(err)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(8)
+                                .truncationMode(.tail)
+                                .textSelection(.enabled)
+                        } else {
+                            Text("tado-core spawn pending…")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(8),
+                    alignment: .topLeading
                 )
                 .onAppear {
                     spawnIfNeeded()
@@ -155,6 +181,11 @@ struct MetalTerminalTileView: View {
             cols: cols,
             rows: rows
         ) else {
+            // TadoCore.Session.init? already logged + stashed the error.
+            // Mirror it into @State so this tile's placeholder shows the
+            // real cause instead of the generic pending text.
+            spawnError = TadoCore.lastSpawnError
+                ?? "tado_session_spawn returned null with no error detail"
             NSLog("tado: TadoCore.Session spawn failed for \(session.todoText)")
             return
         }
