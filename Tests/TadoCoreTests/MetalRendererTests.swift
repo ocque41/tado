@@ -71,6 +71,62 @@ final class MetalRendererTests: XCTestCase {
             "expected > 50 lit pixels from rendering 'HI', got \(litPixels)")
     }
 
+    /// Regression test for the glyph lookup rebuild bug: for freshly
+    /// rasterized ASCII chars, the GPU lookup buffer must be up to date
+    /// before the first frame. Render 'M' (dense glyph) next to a space
+    /// cell and assert the 'M' cell has materially more ink than the space.
+    /// Before the fix, both would render as pure background → equal ink
+    /// → test fails.
+    func testFreshGlyphRendersInFirstFrame() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("no Metal device")
+        }
+        let renderer = try MetalTerminalRenderer(device: device, cols: 4, rows: 1)
+        let snapshot = syntheticSnapshot(cols: 4, rows: 1) { c, _ in
+            switch c {
+            case 0: return TadoCore.Cell(ch: UInt32("M".unicodeScalars.first!.value),
+                                         fg: 0xFFFFFFFF, bg: 0x000000FF, attrs: 0)
+            default: return TadoCore.Cell(ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0)
+            }
+        }
+        renderer.upload(snapshot: snapshot)
+
+        let cellW = Int(renderer.metrics.cellWidth)
+        let cellH = Int(renderer.metrics.cellHeight)
+        let w = cellW * 4
+        let h = cellH
+        guard let tex = renderer.renderOffscreen(width: w, height: h) else {
+            XCTFail("renderOffscreen returned nil")
+            return
+        }
+
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        pixels.withUnsafeMutableBufferPointer { buf in
+            tex.getBytes(
+                buf.baseAddress!,
+                bytesPerRow: w * 4,
+                from: MTLRegionMake2D(0, 0, w, h),
+                mipmapLevel: 0
+            )
+        }
+
+        func inkInCell(col: Int) -> Int {
+            var count = 0
+            for y in 0..<h {
+                for x in (col * cellW)..<((col + 1) * cellW) {
+                    let i = (y * w + x) * 4
+                    let b = pixels[i]; let g = pixels[i + 1]; let r = pixels[i + 2]
+                    if r > 32 || g > 32 || b > 32 { count += 1 }
+                }
+            }
+            return count
+        }
+        let mInk = inkInCell(col: 0)
+        let spaceInk = inkInCell(col: 1)
+        XCTAssertGreaterThan(mInk, spaceInk + 30,
+            "expected 'M' cell to have materially more ink than a space cell (got M=\(mInk), space=\(spaceInk)) — indicates the glyph lookup buffer is stale")
+    }
+
     func testRendersLiveSessionSnapshot() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")

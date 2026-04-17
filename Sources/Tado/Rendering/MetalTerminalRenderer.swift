@@ -55,7 +55,15 @@ final class MetalTerminalRenderer {
     private var cellBuffer: MTLBuffer
     private var uniforms = Uniforms()
     private var glyphLookup: MTLBuffer
-    private var lookupMax: UInt32 = 0x80
+    /// Largest codepoint the current `glyphLookup` buffer covers (exclusive).
+    /// Starts at ASCII + Latin-1; grows to BMP when any char ≥ lookupMax is
+    /// rasterized. Extending past BMP (emoji etc.) needs a sparse lookup
+    /// — Phase 3 territory, currently handled by falling back to `hasGlyph=0`.
+    private var lookupMax: UInt32 = 0x100
+    /// Atlas modCount snapshot at the time `glyphLookup` was last built.
+    /// A mismatch means fresh glyphs were rasterized and the GPU table
+    /// is stale — see `commit` for the rebuild decision.
+    private var lastLookupModCount: Int = -1
 
     /// Cached local grid so `snapshotDirty` can patch into a persistent array
     /// without the renderer seeing stale cells between frames.
@@ -160,7 +168,6 @@ final class MetalTerminalRenderer {
 
         // Patch dirty rows into local mirror.
         let colsInt = Int(cols)
-        var sawNewChar = false
         for (i, rowIdx) in snapshot.dirtyRows.enumerated() {
             let dstStart = Int(rowIdx) * colsInt
             let srcStart = i * colsInt
@@ -168,7 +175,7 @@ final class MetalTerminalRenderer {
                   dstStart + colsInt <= localCells.count else { continue }
             for c in 0..<colsInt {
                 let src = snapshot.cells[srcStart + c]
-                rasterizeIfNew(src.ch, sawNewChar: &sawNewChar)
+                rasterizeIfNew(src.ch)
                 localCells[dstStart + c] = CellInstance(
                     ch: src.ch,
                     fg: src.fg,
@@ -180,8 +187,7 @@ final class MetalTerminalRenderer {
 
         commit(uniformsCursorX: UInt32(snapshot.cursorX),
                uniformsCursorY: UInt32(snapshot.cursorY),
-               cursorVisible: snapshot.cursorVisible ? 1 : 0,
-               rebuildLookup: sawNewChar)
+               cursorVisible: snapshot.cursorVisible ? 1 : 0)
     }
 
     /// Compose a view of the grid with `scrollOffset` lines of history
@@ -201,7 +207,6 @@ final class MetalTerminalRenderer {
         let colsInt = Int(cols)
         let rowsInt = Int(rows)
         let clampedOffset = max(0, min(rowsInt, scrollOffset))
-        var sawNewChar = false
 
         // 1) Top `clampedOffset` rows: scrollback (oldest at top-most).
         if clampedOffset > 0, let sb = scrollback {
@@ -219,7 +224,7 @@ final class MetalTerminalRenderer {
                     let cell: CellInstance
                     if sbIdx < sb.cells.count, c < sbCols {
                         let src = sb.cells[sbIdx]
-                        rasterizeIfNew(src.ch, sawNewChar: &sawNewChar)
+                        rasterizeIfNew(src.ch)
                         cell = CellInstance(ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs)
                     } else {
                         cell = CellInstance(ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0)
@@ -244,7 +249,7 @@ final class MetalTerminalRenderer {
             for r in 0..<liveRows {
                 for c in 0..<colsInt {
                     let src = live.cells[r * colsInt + c]
-                    rasterizeIfNew(src.ch, sawNewChar: &sawNewChar)
+                    rasterizeIfNew(src.ch)
                     let dstRow = clampedOffset + r
                     localCells[dstRow * colsInt + c] = CellInstance(
                         ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs
@@ -258,33 +263,54 @@ final class MetalTerminalRenderer {
             (clampedOffset == 0 && live.cursorVisible) ? 1 : 0
         commit(uniformsCursorX: UInt32(live.cursorX),
                uniformsCursorY: UInt32(live.cursorY) + UInt32(clampedOffset),
-               cursorVisible: cursorVisible,
-               rebuildLookup: sawNewChar)
+               cursorVisible: cursorVisible)
     }
 
-    private func rasterizeIfNew(_ ch: UInt32, sawNewChar: inout Bool) {
-        if ch < lookupMax, atlas.uvRect(for: ch) != nil {
-            return
-        }
-        if ch >= lookupMax, atlas.uvRect(for: ch) != nil {
-            lookupMax = max(lookupMax, ch + 1)
-            sawNewChar = true
+    /// Eagerly make sure `ch` has a slot in the atlas (rasterizing if first
+    /// time seen) and that `lookupMax` covers it. The renderer decides
+    /// whether to rebuild the GPU lookup buffer by comparing the atlas's
+    /// modCount against the last built one — that signal is accurate even
+    /// when this method doesn't do anything observable (no in/out bool
+    /// needed).
+    private func rasterizeIfNew(_ ch: UInt32) {
+        // Zero means "blank cell" (handled by shader short-circuit) — never
+        // rasterize. Also cap at BMP: beyond that we'd need sparse lookup,
+        // so fall back to a visible placeholder row instead of blowing
+        // memory on a 4 MB lookup buffer for one emoji.
+        guard ch != 0, ch < 0x10000 else { return }
+        _ = atlas.uvRect(for: ch)
+        if ch >= lookupMax {
+            // Grow lookup bound to cover this codepoint. Round up to the
+            // next 256-codepoint boundary so we don't thrash the GPU
+            // buffer rebuild for codepoints arriving in sequence.
+            let rounded = (ch | 0xFF) + 1
+            lookupMax = min(rounded, 0x10000)
         }
     }
 
     private func commit(
         uniformsCursorX: UInt32,
         uniformsCursorY: UInt32,
-        cursorVisible: UInt32,
-        rebuildLookup: Bool
+        cursorVisible: UInt32
     ) {
         let ptr = cellBuffer.contents().bindMemory(to: CellInstance.self, capacity: localCells.count)
         for i in 0..<localCells.count {
             ptr[i] = localCells[i]
         }
 
-        if rebuildLookup, let lookup = atlas.buildLookupBuffer(device: device, maxCodepoint: lookupMax) {
-            self.glyphLookup = lookup
+        // Rebuild the GPU lookup when either:
+        //   (a) the atlas rasterized new glyphs this pass (modCount bumped), or
+        //   (b) lookupMax grew past the last buffer's coverage.
+        // The `>` on modCount is a weak signal because the initial build
+        // happens at modCount=2 (blank + space); use `!=` so the first real
+        // upload (modCount becomes 3+) triggers a rebuild.
+        let neededCodepoint = lookupMax
+        let builtCodepoint = UInt32(glyphLookup.length / MemoryLayout<SIMD4<Float>>.stride)
+        if atlas.modCount != lastLookupModCount || neededCodepoint > builtCodepoint {
+            if let lookup = atlas.buildLookupBuffer(device: device, maxCodepoint: lookupMax) {
+                self.glyphLookup = lookup
+                self.lastLookupModCount = atlas.modCount
+            }
         }
 
         uniforms.cursorX = uniformsCursorX

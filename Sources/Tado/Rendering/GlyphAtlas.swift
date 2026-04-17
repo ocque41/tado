@@ -27,6 +27,12 @@ final class GlyphAtlas {
     private var shelfHeight: Int = 0
     private var rects: [UInt32: CGRect] = [:] // char -> UV rect
 
+    /// Monotonic counter incremented on every successful (non-empty) rect
+    /// insertion. Renderers compare against their last-built modCount to
+    /// decide whether the GPU lookup buffer needs rebuilding. Cheap
+    /// approximation of a proper "dirty chars since last build" set.
+    private(set) var modCount: Int = 0
+
     /// Glyphs with no visible ink (space, NBSP, control codes) — mapped to a
     /// zero rect so the shader doesn't sample the atlas for them.
     static let emptyRect = CGRect.zero
@@ -112,6 +118,7 @@ final class GlyphAtlas {
             height: CGFloat(h) / CGFloat(atlasSize)
         )
         rects[ch] = uv
+        modCount &+= 1 // wrap-safe; renderer just checks != for inequality
 
         shelfX += w
         shelfHeight = max(shelfHeight, h)
