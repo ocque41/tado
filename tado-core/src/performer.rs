@@ -36,7 +36,17 @@ impl<'a> GridPerformer<'a> {
 
 impl<'a> Perform for GridPerformer<'a> {
     fn print(&mut self, c: char) {
-        self.grid.put_char(c);
+        use unicode_width::UnicodeWidthChar;
+        // Combining marks and other zero-width codepoints don't consume
+        // a cell — they glue onto the previous cell's character via NFC
+        // (`Grid::compose_combining`). Phase 2.21 added this path so
+        // accented text (`"a" + U+0301` → `"á"`) matches master's
+        // SwiftTerm rendering instead of dropping the diacritic.
+        if c.width().unwrap_or(1) == 0 {
+            self.grid.compose_combining(c);
+        } else {
+            self.grid.put_char(c);
+        }
     }
 
     fn execute(&mut self, byte: u8) {
@@ -487,13 +497,59 @@ mod tests {
     }
 
     #[test]
-    fn zero_width_combining_marks_are_skipped() {
+    fn combining_acute_composes_via_nfc() {
         let mut g = Grid::new(4, 2);
-        // "a" followed by a combining acute accent (U+0301, zero width).
-        // Phase 2.14 scope: skip combining. The "a" should be alone.
+        // Phase 2.21: "a" + U+0301 (combining acute) now NFC-composes
+        // into "á" (U+00E1) in-place on the prior cell. Cursor advanced
+        // only once (for the 'a') so subsequent 'b' lands at col 1.
         feed(&mut g, "a\u{0301}b".as_bytes());
-        assert_eq!(g.cells[0].ch, b'a' as u32);
+        assert_eq!(g.cells[0].ch, 0x00E1, "a + combining acute → á");
         assert_eq!(g.cells[1].ch, b'b' as u32);
+        assert_eq!(g.cursor_x, 2);
+    }
+
+    #[test]
+    fn combining_diaeresis_composes_via_nfc() {
+        let mut g = Grid::new(4, 2);
+        // "e" + U+0308 (combining diaeresis) → "ë" (U+00EB).
+        feed(&mut g, "e\u{0308}".as_bytes());
+        assert_eq!(g.cells[0].ch, 0x00EB);
+        assert_eq!(g.cursor_x, 1);
+    }
+
+    #[test]
+    fn combining_mark_without_precomposed_form_is_dropped() {
+        let mut g = Grid::new(4, 2);
+        // "a" + U+0332 (combining low line) has no precomposed form in
+        // Unicode. For Packet B minimum viable scope we drop the mark
+        // and keep the base — a graceful fallback that matches the
+        // pre-2.21 behavior for this particular edge case. A future
+        // packet can add a per-cell side table + renderer overlay.
+        feed(&mut g, "a\u{0332}b".as_bytes());
+        assert_eq!(g.cells[0].ch, b'a' as u32, "base character remains");
+        assert_eq!(g.cells[1].ch, b'b' as u32);
+    }
+
+    #[test]
+    fn combining_mark_at_line_start_composes_with_previous_row() {
+        let mut g = Grid::new(4, 3);
+        // Fill row 0 with "bcde", CR/LF the cursor to row 1 col 0, then
+        // a combining mark arrives. The mark has no cell to its left on
+        // row 1 (cursor_x == 0) — should walk back to the rightmost
+        // non-filler cell of row 0 ('e') and compose via NFC → 'é'.
+        feed(&mut g, "bcde\r\n\u{0301}".as_bytes());
+        assert_eq!(
+            g.cells[3].ch, 0x00E9,
+            "'e' on row 0 col 3 composes with mark from start of row 1 → é"
+        );
+    }
+
+    #[test]
+    fn combining_mark_at_grid_origin_is_dropped() {
+        let mut g = Grid::new(4, 2);
+        // Combining mark arrives before any base character. Drop.
+        feed(&mut g, "\u{0301}a".as_bytes());
+        assert_eq!(g.cells[0].ch, b'a' as u32);
     }
 
     #[test]

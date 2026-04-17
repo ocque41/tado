@@ -18,6 +18,10 @@ crossbeam-channel = "0.5"
 # to know when a codepoint should occupy two terminal cells (CJK,
 # box-drawing wide variants, etc.). Stable since 0.1.
 unicode-width = "0.2"
+# NFC precomposition for combining marks. `Grid::compose_combining`
+# folds `"a" + U+0301` → `"á"` so accented text matches master's
+# SwiftTerm-era rendering instead of dropping the diacritic.
+unicode-normalization = "0.1"
 
 [build-dependencies]
 cbindgen = "0.28"

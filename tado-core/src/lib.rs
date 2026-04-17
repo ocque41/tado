@@ -11,6 +11,7 @@
 //! `tado_session_snapshot` each frame to get dirty cells + cursor, and writes
 //! keyboard bytes back via `tado_session_write`.
 
+pub mod composition;
 pub mod ffi;
 pub mod grid;
 pub mod performer;

@@ -419,10 +419,11 @@ impl Grid {
 
     pub fn put_char(&mut self, ch: char) {
         let w = char_width(ch);
-        // Zero-width codepoints (combining marks, ZWJ, BOM…) are not
-        // yet composed onto the previous cell. Phase 2.14 scope: skip.
-        // A future phase can fold these into the preceding Cell's
-        // `ch` via a precomposition pass.
+        // Zero-width codepoints (combining marks, ZWJ, BOM…) are routed
+        // separately by `GridPerformer::print` via `compose_combining`.
+        // Reaching `put_char` with width 0 would be a programming error;
+        // silently drop as a defensive guard so a stray caller can't
+        // corrupt the cursor position.
         if w == 0 {
             return;
         }
@@ -463,6 +464,59 @@ impl Grid {
             self.cursor_x += 1;
         }
         self.dirty_rows[self.cursor_y as usize] = true;
+    }
+
+    /// Fold a width-0 combining character onto the previous cell's `ch`
+    /// via NFC precomposition. Common case: `'a' + U+0301` → `'á'`.
+    /// When no precomposed form exists in Unicode (e.g. `'a' + U+0332`,
+    /// emoji + skin-tone modifier, ZWJ families), the mark is dropped.
+    /// That matches the plan's "acceptable fallback: renders as individual
+    /// glyphs" and beats the pre-2.21 behavior of dropping every width-0
+    /// codepoint regardless.
+    ///
+    /// Called by `GridPerformer::print` when `unicode_width` reports the
+    /// character has width 0. The cursor does NOT advance — combining
+    /// marks glue onto the prior glyph, they don't consume a cell.
+    pub fn compose_combining(&mut self, c: char) {
+        // Resolve the target cell (the one holding the base character).
+        // Normally that's the cell immediately to the left of the cursor.
+        // If the cursor has already wrapped to the next row (no cells to
+        // the left on the current row), walk back to the rightmost
+        // non-filler cell of the previous row.
+        let (tx, ty) = if self.cursor_x > 0 {
+            (self.cursor_x - 1, self.cursor_y)
+        } else if self.cursor_y > 0 {
+            let y = self.cursor_y - 1;
+            let mut x = self.cols.saturating_sub(1);
+            // Skip the trailing half of a wide glyph so we compose onto
+            // the wide-start cell (the one with the actual ch, not 0).
+            while x > 0 {
+                let idx = self.idx(x, y);
+                if self.cells[idx].attrs & ATTR_WIDE_FILLER == 0 {
+                    break;
+                }
+                x -= 1;
+            }
+            (x, y)
+        } else {
+            // Cursor at (0, 0) with nothing written yet — no base to
+            // compose onto. Drop.
+            return;
+        };
+
+        let idx = self.idx(tx, ty);
+        let prev_ch = match char::from_u32(self.cells[idx].ch) {
+            Some(ch) if ch != '\0' => ch,
+            _ => return, // blank cell — nothing to compose onto
+        };
+
+        if let Some(composed) = crate::composition::compose(prev_ch, c) {
+            self.cells[idx].ch = composed as u32;
+            if (ty as usize) < self.dirty_rows.len() {
+                self.dirty_rows[ty as usize] = true;
+            }
+        }
+        // NFC miss: drop. Side-table + renderer overlay is future work.
     }
 
     pub fn backspace(&mut self) {
