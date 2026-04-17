@@ -36,12 +36,14 @@ final class TerminalSession: Identifiable {
     weak var terminalView: LocalProcessTerminalView?
 
     /// Rust-backed PTY + VT parser, when the Metal renderer path is in use.
-    /// Populated by `TerminalManager.spawnSession` when
-    /// `AppSettings.useMetalRenderer` is true at spawn time. Nil means this
-    /// session renders via SwiftTerm (`terminalView` above). `@ObservationIgnored`
-    /// because the reference itself never changes after spawn — the underlying
-    /// Rust state mutates independently of SwiftUI.
-    @ObservationIgnored var coreSession: TadoCore.Session?
+    /// Populated by `MetalTerminalTileView.spawnIfNeeded` on the tile's
+    /// first `.onAppear` under the Metal path; nil while the tile is still
+    /// mounted under SwiftTerm or before spawn completes. Observed so
+    /// SwiftUI re-evaluates the tile body on the nil → Session transition
+    /// — without observation, the placeholder sticks forever even after
+    /// spawn succeeds. The underlying Rust grid mutates independently of
+    /// SwiftUI; those changes flow through the Metal draw loop, not here.
+    var coreSession: TadoCore.Session?
 
     /// Not rendered in any view — only consumed by ProcessSpawner/start-dir
     /// logic. Observation would be pure overhead.
