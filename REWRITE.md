@@ -22,7 +22,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.11 | Text selection + Cmd+C copy: click-drag selection, shader-side fg/bg swap highlight, pure-function `TerminalTextExtractor` with unit tests, NSPasteboard copy. | ✅ shipped |
 | 2.12 | Application cursor mode (DECCKM, DECSET 1) so vim/less arrow remaps work; bell (0x07) → NSSound.beep with per-tick coalescing. Typed-slot event drain replacing the generic `GridEvent` queue. | ✅ shipped |
 | 2.13 | `AppSettings.terminalFontSize` (9–24pt) threaded through the whole render stack; Settings UI gains a stepper. Existing tiles keep their current metrics on setting change. | ✅ shipped |
-| 2.14 | Wide-char support (East-Asian Wide via `unicode-width`): 2-cell cells with `ATTR_WIDE` / `ATTR_WIDE_FILLER`; shader extends wide-start quad and skips filler; atlas rasterizes at 2× cell width; text extractor skips filler. CJK + wide box-drawing align correctly. | ✅ shipped (45/45 tests green) |
+| 2.14 | Wide-char support (East-Asian Wide via `unicode-width`): 2-cell cells with `ATTR_WIDE` / `ATTR_WIDE_FILLER`; shader extends wide-start quad and skips filler; atlas rasterizes at 2× cell width; text extractor skips filler. CJK + wide box-drawing align correctly. | ✅ shipped |
+| 2.15 | ANSI palette theming: Grid carries a 16-slot palette consulted by SGR 30..=37/40..=47/90..=97/100..=107 + xterm-256 slots 0..15. Solarized / Dracula / Nord / Monokai / Tokyo Night themes ship canonical palettes; others keep the baked-in default. | ✅ shipped (46/46 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
