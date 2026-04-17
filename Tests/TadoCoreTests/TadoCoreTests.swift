@@ -267,6 +267,51 @@ final class TadoCoreSessionTests: XCTestCase {
         }
     }
 
+    /// Mimic the exact argv/env/cwd shape the Metal tile uses for a
+    /// plain todo (no project). If this passes but real-app spawn still
+    /// fails, the bug is specific to the `cwd: Some(projectRoot)` path;
+    /// if it fails, the error text will be in the XCTest log.
+    func testSpawnViaLoginShellZshMirrorsAppPath() throws {
+        TadoCore.lastSpawnError = nil
+
+        var envDict = ProcessInfo.processInfo.environment
+        // ProcessSpawner.environment prepends the IPC bin dir to PATH
+        // when ipcRoot is provided. Mirror with a plausible synthetic
+        // prefix so we exercise the exact code path.
+        let ipcBin = NSTemporaryDirectory() + "tado-ipc-test-bin"
+        envDict["PATH"] = ipcBin + ":" + (envDict["PATH"] ?? "/usr/bin:/bin")
+
+        guard let session = TadoCore.Session(
+            command: "/bin/zsh",
+            args: ["-l", "-c", "echo hello-metal"],
+            cwd: nil,
+            environment: envDict,
+            cols: 80,
+            rows: 24
+        ) else {
+            let err = TadoCore.lastSpawnError ?? "(no error)"
+            XCTFail("Metal-tile-shape spawn returned nil. Last error: \(err)")
+            return
+        }
+        defer { session.kill() }
+
+        let deadline = Date().addingTimeInterval(3.0)
+        var saw = false
+        while Date() < deadline {
+            if let snap = session.snapshotFull() {
+                let text = String(snap.cells.compactMap {
+                    Unicode.Scalar($0.ch).map { Character($0) }
+                })
+                if text.contains("hello-metal") {
+                    saw = true
+                    break
+                }
+            }
+            usleep(50_000)
+        }
+        XCTAssertTrue(saw, "expected 'hello-metal' to round-trip through /bin/zsh -l -c")
+    }
+
     /// A successful spawn must clear any prior error so a stale message
     /// doesn't leak into the UI on the next tile.
     func testSuccessfulSpawnClearsLastError() throws {
