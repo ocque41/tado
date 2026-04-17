@@ -19,7 +19,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.8 | Bracketed paste (DECSET 2004 + Cmd+V) · OSC 0/2 window title → `TerminalSession.title` · mouse button reporting (DECSET 1000/1006) | ✅ shipped |
 | 2.9 | Glyph lookup correctness: renderer rebuilds the GPU lookup when the atlas mutates, not only when `lookupMax` grows. Fixed latent first-frame-blank bug, extended coverage to Latin-1 + full BMP for ASCII-dense workloads. | ✅ shipped |
 | 2.10 | `TerminalTheme` propagates to Metal: `set_default_colors` sets the palette + retints factory-blank cells; `MTKView.clearColor` matches the tile bg. Randomized tile themes look identical between SwiftTerm and Metal renderers. | ✅ shipped |
-| 2.11 | Text selection + Cmd+C copy: click-drag selection, shader-side fg/bg swap highlight, pure-function `TerminalTextExtractor` with unit tests, NSPasteboard copy. | ✅ shipped (39/39 tests green) |
+| 2.11 | Text selection + Cmd+C copy: click-drag selection, shader-side fg/bg swap highlight, pure-function `TerminalTextExtractor` with unit tests, NSPasteboard copy. | ✅ shipped |
+| 2.12 | Application cursor mode (DECCKM, DECSET 1) so vim/less arrow remaps work; bell (0x07) → NSSound.beep with per-tick coalescing. Typed-slot event drain replacing the generic `GridEvent` queue. | ✅ shipped (41/41 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
@@ -101,9 +102,14 @@ landed vs. what remains. Delete once the rewrite is merged.
   is a pure function over `TadoCore.Snapshot` — unit-testable without a
   PTY. Zero-width click selections clear and pass through to mouse
   reporting; drags stay highlighted and suppress the PTY click.
-- Test coverage: **39 total, all green.** 19 Rust + 20 Swift
-  (3 FFI + 1 scrollback + 1 bracketed-paste/title + 1 themed-default +
-  4 Metal pipeline + 5 visibility + 5 selection extraction).
+- **Application cursor + bell (Phase 2.12)**: DECSET 1 (DECCKM) flips
+  arrows + Home/End between CSI (`ESC [ A`) and SS3 (`ESC O A`)
+  prefixes so vim/less arrow keybindings work. BEL (0x07) routes
+  through a typed `bell_count: AtomicU32` slot on Session; the draw
+  loop rings `NSSound.beep` once per non-zero drain. Event-drain
+  refactored from a generic `GridEvent` queue to typed slots
+  (`latest_title`, `bell_count`) so take operations don't compete.
+- Test coverage: **41 total, all green.** 21 Rust + 20 Swift.
 
 ## Phase 2.6 — flip the default and delete SwiftTerm
 
