@@ -115,6 +115,21 @@ enum TadoCore {
             tado_session_set_default_colors(UnsafeMutablePointer(handle), fg, bg)
         }
 
+        /// Replace the 16-slot ANSI palette. Indices 0..<8 are normal
+        /// (SGR 30..=37/40..=47), 8..<16 are bright (SGR
+        /// 90..=97/100..=107). Pass nil — or don't call — to keep the
+        /// gruvbox-flavored default baked into `tado-core`. Typically
+        /// invoked once per session at spawn from `TerminalTheme`.
+        func setAnsiPalette(_ palette: [UInt32]) {
+            precondition(palette.count == 16, "ANSI palette must be exactly 16 colors")
+            palette.withUnsafeBufferPointer { buf in
+                tado_session_set_ansi_palette(
+                    UnsafeMutablePointer(handle),
+                    buf.baseAddress
+                )
+            }
+        }
+
         func kill(signal: Int32 = 15) {
             tado_session_kill(UnsafeMutablePointer(handle), signal)
         }

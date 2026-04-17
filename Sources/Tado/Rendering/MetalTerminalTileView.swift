@@ -135,6 +135,13 @@ struct MetalTerminalTileView: View {
         // `session.theme` on its own to set the MTKView clear color.
         let theme = session.theme
         spawned.setDefaultColors(fg: theme.foregroundRGBA, bg: theme.backgroundRGBA)
+        // Opt-in ANSI palette: themes that carry one (Solarized, Dracula,
+        // Monokai, Nord, Tokyo Night) push their own 16 colors so the
+        // agent's SGR reds/greens match the theme. Themes without a
+        // palette keep the gruvbox-flavored default baked into tado-core.
+        if let palette = theme.ansiPalette {
+            spawned.setAnsiPalette(palette)
+        }
         session.coreSession = spawned
     }
 

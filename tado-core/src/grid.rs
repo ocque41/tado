@@ -49,6 +49,31 @@ pub const ATTR_WIDE: u32 = 1 << 6;
 /// covers the pixels.
 pub const ATTR_WIDE_FILLER: u32 = 1 << 7;
 
+/// Default 16-color ANSI palette — matches the gruvbox-flavored colors
+/// `performer::ansi_color` / `ansi_bright_color` used before Phase 2.15,
+/// so themes that don't set a palette look unchanged. Indices are
+/// packed as `0xRRGGBBAA`.
+pub const DEFAULT_ANSI_PALETTE: [u32; 16] = [
+    // Normal (SGR 30..=37 fg / 40..=47 bg)
+    0x000000FF, // 0 black
+    0xCC241DFF, // 1 red
+    0x98971AFF, // 2 green
+    0xD79921FF, // 3 yellow
+    0x458588FF, // 4 blue
+    0xB16286FF, // 5 magenta
+    0x689D6AFF, // 6 cyan
+    0xEBDBB2FF, // 7 white
+    // Bright (SGR 90..=97 fg / 100..=107 bg)
+    0x928374FF, // 8  bright black
+    0xFB4934FF, // 9  bright red
+    0xB8BB26FF, // 10 bright green
+    0xFABD2FFF, // 11 bright yellow
+    0x83A598FF, // 12 bright blue
+    0xD3869BFF, // 13 bright magenta
+    0x8EC07CFF, // 14 bright cyan
+    0xFBF1C7FF, // 15 bright white
+];
+
 /// Display width of a Unicode scalar in terminal cells. 0 for
 /// combining / zero-width codepoints (skipped by `put_char`), 1 for
 /// regular, 2 for East-Asian Wide + box-drawing wide variants. Wraps
@@ -103,6 +128,13 @@ pub struct Grid {
     /// entering alt-screen so their custom keybindings can distinguish
     /// arrow presses from escape sequences.
     pub application_cursor: bool,
+    /// 16-slot ANSI palette keyed by SGR code. Indices 0..=7 are the
+    /// "normal" colors (SGR 30..=37 fg, 40..=47 bg), 8..=15 are the
+    /// "bright" colors (SGR 90..=97 fg, 100..=107 bg). Swift-side themes
+    /// can override via `set_ansi_palette` so a session picked with
+    /// Solarized looks Solarized for colored output too, not just
+    /// blank bg/fg.
+    pub ansi_palette: [u32; 16],
     /// Saved cursor (DECSC / CSI s). Stored as (x, y, attrs) so colored
     /// segments restore correctly. None until first save.
     pub saved_cursor: Option<(u16, u16, u32, u32, u32)>,
@@ -160,7 +192,18 @@ impl Grid {
             mouse_reporting_drag: false,
             mouse_reporting_sgr: false,
             application_cursor: false,
+            ansi_palette: DEFAULT_ANSI_PALETTE,
         }
+    }
+
+    /// Replace the 16-slot ANSI palette. Expects `rgba[0..8]` normal,
+    /// `rgba[8..16]` bright. Pass `DEFAULT_ANSI_PALETTE` to restore the
+    /// built-in gruvbox-flavored default. Mutates the grid's active
+    /// palette; in-flight SGR chars retain their previously-resolved
+    /// colors so a mid-stream palette swap doesn't retint existing
+    /// text.
+    pub fn set_ansi_palette(&mut self, palette: [u32; 16]) {
+        self.ansi_palette = palette;
     }
 
     /// DECSC / CSI s — save cursor position + current SGR attrs.

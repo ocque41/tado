@@ -239,20 +239,20 @@ fn apply_sgr(grid: &mut Grid, params: &Params) {
             24 => grid.current_attrs &= !ATTR_UNDERLINE,
             27 => grid.current_attrs &= !ATTR_REVERSE,
             29 => grid.current_attrs &= !ATTR_STRIKETHROUGH,
-            30..=37 => grid.current_fg = ansi_color(p - 30),
+            30..=37 => grid.current_fg = grid.ansi_palette[(p - 30) as usize],
             39 => grid.current_fg = grid.default_fg,
-            40..=47 => grid.current_bg = ansi_color(p - 40),
+            40..=47 => grid.current_bg = grid.ansi_palette[(p - 40) as usize],
             49 => grid.current_bg = grid.default_bg,
-            90..=97 => grid.current_fg = ansi_bright_color(p - 90),
-            100..=107 => grid.current_bg = ansi_bright_color(p - 100),
+            90..=97 => grid.current_fg = grid.ansi_palette[(p - 90 + 8) as usize],
+            100..=107 => grid.current_bg = grid.ansi_palette[(p - 100 + 8) as usize],
             38 => {
                 // 24-bit or 256-color fg
-                if let Some(c) = read_extended_color(&mut iter) {
+                if let Some(c) = read_extended_color(&mut iter, &grid.ansi_palette) {
                     grid.current_fg = c;
                 }
             }
             48 => {
-                if let Some(c) = read_extended_color(&mut iter) {
+                if let Some(c) = read_extended_color(&mut iter, &grid.ansi_palette) {
                     grid.current_bg = c;
                 }
             }
@@ -261,7 +261,10 @@ fn apply_sgr(grid: &mut Grid, params: &Params) {
     }
 }
 
-fn read_extended_color<I: Iterator<Item = u16>>(iter: &mut I) -> Option<u32> {
+fn read_extended_color<I: Iterator<Item = u16>>(
+    iter: &mut I,
+    palette: &[u32; 16],
+) -> Option<u32> {
     match iter.next()? {
         2 => {
             let r = iter.next()? as u32;
@@ -271,49 +274,18 @@ fn read_extended_color<I: Iterator<Item = u16>>(iter: &mut I) -> Option<u32> {
         }
         5 => {
             let idx = iter.next()? as u8;
-            Some(xterm_256(idx))
+            Some(xterm_256(idx, palette))
         }
         _ => None,
     }
 }
 
-fn ansi_color(i: u16) -> u32 {
-    // Tado-ish palette (approximates the existing SwiftTerm default theme).
-    match i {
-        0 => 0x000000FF, // black
-        1 => 0xCC241DFF, // red
-        2 => 0x98971AFF, // green
-        3 => 0xD79921FF, // yellow
-        4 => 0x458588FF, // blue
-        5 => 0xB16286FF, // magenta
-        6 => 0x689D6AFF, // cyan
-        7 => 0xEBDBB2FF, // white
-        _ => 0xE8E8E8FF,
-    }
-}
-
-fn ansi_bright_color(i: u16) -> u32 {
-    match i {
-        0 => 0x928374FF,
-        1 => 0xFB4934FF,
-        2 => 0xB8BB26FF,
-        3 => 0xFABD2FFF,
-        4 => 0x83A598FF,
-        5 => 0xD3869BFF,
-        6 => 0x8EC07CFF,
-        7 => 0xFBF1C7FF,
-        _ => 0xFFFFFFFF,
-    }
-}
-
-fn xterm_256(i: u8) -> u32 {
-    // Reference encoding: 16 base colors, 6×6×6 cube, 24 greyscale.
+/// Resolve an xterm-256 palette index. First 16 slots consult the
+/// theme palette so `\x1b[38;5;1m` (red) matches `\x1b[31m`; cube +
+/// greyscale slots are fixed per the xterm spec.
+fn xterm_256(i: u8, palette: &[u32; 16]) -> u32 {
     if i < 16 {
-        return if i < 8 {
-            ansi_color(i as u16)
-        } else {
-            ansi_bright_color((i - 8) as u16)
-        };
+        return palette[i as usize];
     }
     if i < 232 {
         let n = i - 16;
@@ -371,6 +343,24 @@ mod tests {
         feed(&mut g, b"\x1b[31mX\x1b[0mY");
         assert_eq!(g.cells[0].fg, 0xCC241DFF);
         assert_eq!(g.cells[1].fg, g.default_fg);
+    }
+
+    #[test]
+    fn ansi_palette_override_affects_sgr_and_256color() {
+        use crate::grid::DEFAULT_ANSI_PALETTE;
+        let mut g = Grid::new(10, 3);
+        // Swap slot 1 (red) to magenta. `\x1b[31m` + `\x1b[38;5;1m`
+        // should both pick up the new value; the greyscale branch of
+        // xterm-256 stays on the xterm spec.
+        let mut palette = DEFAULT_ANSI_PALETTE;
+        palette[1] = 0xAABBCCFF;
+        g.set_ansi_palette(palette);
+        feed(&mut g, b"\x1b[31mA");
+        feed(&mut g, b"\x1b[38;5;1mB");
+        feed(&mut g, b"\x1b[38;5;232mC"); // greyscale start, unchanged by palette
+        assert_eq!(g.cells[0].fg, 0xAABBCCFF, "SGR 31 should use slot 1");
+        assert_eq!(g.cells[1].fg, 0xAABBCCFF, "38;5;1 should use slot 1");
+        assert_eq!(g.cells[2].fg, 0x080808FF, "greyscale untouched");
     }
 
     #[test]

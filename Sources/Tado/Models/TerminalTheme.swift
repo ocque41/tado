@@ -8,6 +8,28 @@ struct TerminalTheme: Hashable, Identifiable {
     let name: String
     let background: NSColor
     let foreground: NSColor
+    /// Optional 16-slot ANSI palette (`0xRRGGBBAA`). Indices 0..<8 are
+    /// normal colors (matches SGR 30..=37/40..=47), 8..<16 are bright.
+    /// Nil falls back to the gruvbox-flavored default baked into
+    /// `tado-core` so themes don't have to specify a palette to exist.
+    let ansiPalette: [UInt32]?
+
+    init(
+        id: String,
+        name: String,
+        background: NSColor,
+        foreground: NSColor,
+        ansiPalette: [UInt32]? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.background = background
+        self.foreground = foreground
+        if let p = ansiPalette {
+            precondition(p.count == 16, "ANSI palette must be exactly 16 colors")
+        }
+        self.ansiPalette = ansiPalette
+    }
 
     // MARK: - Tado / Claude
 
@@ -84,35 +106,93 @@ struct TerminalTheme: Hashable, Identifiable {
         id: "solarized-dark",
         name: "Solarized Dark",
         background: NSColor(red: 0.0, green: 0.169, blue: 0.212, alpha: 1.0),
-        foreground: NSColor(red: 0.514, green: 0.580, blue: 0.588, alpha: 1.0)
+        foreground: NSColor(red: 0.514, green: 0.580, blue: 0.588, alpha: 1.0),
+        // Official Solarized palette — https://ethanschoonover.com/solarized/
+        ansiPalette: [
+            0x073642FF, // 0  base02 (black)
+            0xDC322FFF, // 1  red
+            0x859900FF, // 2  green
+            0xB58900FF, // 3  yellow
+            0x268BD2FF, // 4  blue
+            0xD33682FF, // 5  magenta
+            0x2AA198FF, // 6  cyan
+            0xEEE8D5FF, // 7  base2 (white)
+            0x002B36FF, // 8  base03 (bright black)
+            0xCB4B16FF, // 9  orange (bright red)
+            0x586E75FF, // 10 base01 (bright green)
+            0x657B83FF, // 11 base00 (bright yellow)
+            0x839496FF, // 12 base0 (bright blue)
+            0x6C71C4FF, // 13 violet (bright magenta)
+            0x93A1A1FF, // 14 base1 (bright cyan)
+            0xFDF6E3FF  // 15 base3 (bright white)
+        ]
     )
 
     static let dracula = TerminalTheme(
         id: "dracula",
         name: "Dracula",
         background: NSColor(red: 0.157, green: 0.165, blue: 0.212, alpha: 1.0),
-        foreground: NSColor(red: 0.973, green: 0.973, blue: 0.949, alpha: 1.0)
+        foreground: NSColor(red: 0.973, green: 0.973, blue: 0.949, alpha: 1.0),
+        // Dracula theme spec — https://spec.draculatheme.com/
+        ansiPalette: [
+            0x21222CFF, // 0  black
+            0xFF5555FF, // 1  red
+            0x50FA7BFF, // 2  green
+            0xF1FA8CFF, // 3  yellow
+            0xBD93F9FF, // 4  blue (purple)
+            0xFF79C6FF, // 5  magenta (pink)
+            0x8BE9FDFF, // 6  cyan
+            0xF8F8F2FF, // 7  white
+            0x6272A4FF, // 8  bright black (comment)
+            0xFF6E6EFF, // 9  bright red
+            0x69FF94FF, // 10 bright green
+            0xFFFFA5FF, // 11 bright yellow
+            0xD6ACFFFF, // 12 bright blue
+            0xFF92DFFF, // 13 bright magenta
+            0xA4FFFFFF, // 14 bright cyan
+            0xFFFFFFFF  // 15 bright white
+        ]
     )
 
     static let nord = TerminalTheme(
         id: "nord",
         name: "Nord",
         background: NSColor(red: 0.180, green: 0.204, blue: 0.251, alpha: 1.0),
-        foreground: NSColor(red: 0.847, green: 0.871, blue: 0.914, alpha: 1.0)
+        foreground: NSColor(red: 0.847, green: 0.871, blue: 0.914, alpha: 1.0),
+        // Nord — https://www.nordtheme.com/docs/colors-and-palettes
+        ansiPalette: [
+            0x3B4252FF, 0xBF616AFF, 0xA3BE8CFF, 0xEBCB8BFF,
+            0x81A1C1FF, 0xB48EADFF, 0x88C0D0FF, 0xE5E9F0FF,
+            0x4C566AFF, 0xBF616AFF, 0xA3BE8CFF, 0xEBCB8BFF,
+            0x81A1C1FF, 0xB48EADFF, 0x8FBCBBFF, 0xECEFF4FF
+        ]
     )
 
     static let monokai = TerminalTheme(
         id: "monokai",
         name: "Monokai",
         background: NSColor(red: 0.157, green: 0.157, blue: 0.133, alpha: 1.0),
-        foreground: NSColor(red: 0.973, green: 0.973, blue: 0.949, alpha: 1.0)
+        foreground: NSColor(red: 0.973, green: 0.973, blue: 0.949, alpha: 1.0),
+        ansiPalette: [
+            0x272822FF, 0xF92672FF, 0xA6E22EFF, 0xF4BF75FF,
+            0x66D9EFFF, 0xAE81FFFF, 0xA1EFE4FF, 0xF8F8F2FF,
+            0x75715EFF, 0xF92672FF, 0xA6E22EFF, 0xF4BF75FF,
+            0x66D9EFFF, 0xAE81FFFF, 0xA1EFE4FF, 0xF9F8F5FF
+        ]
     )
 
     static let tokyoNight = TerminalTheme(
         id: "tokyo-night",
         name: "Tokyo Night",
         background: NSColor(red: 0.102, green: 0.114, blue: 0.176, alpha: 1.0),
-        foreground: NSColor(red: 0.659, green: 0.706, blue: 0.871, alpha: 1.0)
+        foreground: NSColor(red: 0.659, green: 0.706, blue: 0.871, alpha: 1.0),
+        // Tokyo Night — https://github.com/enkia/tokyo-night-vscode-theme
+        ansiPalette: [
+            0x15161EFF, 0xF7768EFF, 0x9ECE6AFF, 0xE0AF68FF,
+            0x7AA2F7FF, 0xBB9AF7FF, 0x7DCFFFFF, 0xA9B1D6FF,
+            0x414868FF, 0xF7768EFF, 0x9ECE6AFF, 0xE0AF68FF,
+            0x7AA2F7FF, 0xBB9AF7FF, 0x7DCFFFFF, 0xC0CAF5FF
+        ]
     )
 
     static let gruvbox = TerminalTheme(

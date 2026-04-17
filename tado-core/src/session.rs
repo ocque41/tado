@@ -212,6 +212,15 @@ impl Session {
         self.grid.lock().set_default_colors(fg, bg);
     }
 
+    /// Replace the 16-slot ANSI palette. Indices 0..8 are "normal"
+    /// colors (SGR 30..=37/40..=47), 8..16 are "bright" (SGR
+    /// 90..=97/100..=107). Swift-side themes opt in via this call; the
+    /// gruvbox-flavored default is baked in so themes that don't override
+    /// look unchanged.
+    pub fn set_ansi_palette(&self, palette: [u32; 16]) {
+        self.grid.lock().set_ansi_palette(palette);
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         if let Some(master) = self.master.lock().as_mut() {
             let _ = master.resize(portable_pty::PtySize {

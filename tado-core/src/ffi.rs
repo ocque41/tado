@@ -146,6 +146,27 @@ pub unsafe extern "C" fn tado_session_set_default_colors(
     });
 }
 
+/// Replace the 16-slot ANSI palette consulted by SGR 30..=37/40..=47
+/// (normal, slots 0..=7) and 90..=97/100..=107 (bright, slots 8..=15).
+/// `palette` must point to 16 `uint32_t` RGBA values. No-op on null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_set_ansi_palette(
+    session: *mut TadoSession,
+    palette: *const u32,
+) {
+    if session.is_null() || palette.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        let mut copy = [0u32; 16];
+        for i in 0..16 {
+            copy[i] = *palette.add(i);
+        }
+        s.set_ansi_palette(copy);
+    });
+}
+
 /// Kill the child process (SIGTERM-ish; exact semantics depend on OS).
 #[no_mangle]
 pub unsafe extern "C" fn tado_session_kill(session: *mut TadoSession, signal: i32) {
