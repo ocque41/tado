@@ -21,7 +21,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.10 | `TerminalTheme` propagates to Metal: `set_default_colors` sets the palette + retints factory-blank cells; `MTKView.clearColor` matches the tile bg. Randomized tile themes look identical between SwiftTerm and Metal renderers. | ✅ shipped |
 | 2.11 | Text selection + Cmd+C copy: click-drag selection, shader-side fg/bg swap highlight, pure-function `TerminalTextExtractor` with unit tests, NSPasteboard copy. | ✅ shipped |
 | 2.12 | Application cursor mode (DECCKM, DECSET 1) so vim/less arrow remaps work; bell (0x07) → NSSound.beep with per-tick coalescing. Typed-slot event drain replacing the generic `GridEvent` queue. | ✅ shipped |
-| 2.13 | `AppSettings.terminalFontSize` (9–24pt) threaded through the whole render stack; Settings UI gains a stepper. Existing tiles keep their current metrics on setting change. | ✅ shipped (41/41 tests green) |
+| 2.13 | `AppSettings.terminalFontSize` (9–24pt) threaded through the whole render stack; Settings UI gains a stepper. Existing tiles keep their current metrics on setting change. | ✅ shipped |
+| 2.14 | Wide-char support (East-Asian Wide via `unicode-width`): 2-cell cells with `ATTR_WIDE` / `ATTR_WIDE_FILLER`; shader extends wide-start quad and skips filler; atlas rasterizes at 2× cell width; text extractor skips filler. CJK + wide box-drawing align correctly. | ✅ shipped (45/45 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
