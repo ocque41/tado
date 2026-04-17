@@ -15,7 +15,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.4 | Feature-flag Metal path in `TerminalTileView` (Settings → Rendering) | ✅ shipped |
 | 3 | Canvas virtualization — off-screen tiles shed GPU resources; Rust PTY keeps running | ✅ shipped |
 | 2.5 | Scrollback + drag-drop + activity detection on Metal path | ✅ shipped |
-| 2.7 | VT sequence completeness: alt-screen (1049/1047/47), DECTCEM (25), DECSTBM, DECSC/DECRC, expanded keymap (F1-F12, Home/End, PgUp/PgDn, Option+arrow, fn+Delete) | ✅ shipped (27/27 tests green) |
+| 2.7 | VT sequence completeness: alt-screen (1049/1047/47), DECTCEM (25), DECSTBM, DECSC/DECRC, expanded keymap (F1-F12, Home/End, PgUp/PgDn, Option+arrow, fn+Delete) | ✅ shipped |
+| 2.8 | Bracketed paste (DECSET 2004 + Cmd+V) · OSC 0/2 window title → `TerminalSession.title` · mouse button reporting (DECSET 1000/1006) | ✅ shipped (31/31 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
@@ -67,9 +68,22 @@ landed vs. what remains. Delete once the rewrite is merged.
 - **Keymap depth (Phase 2.7)**: F1–F12 (xterm VT), Home/End, PgUp/PgDn,
   fn+Delete forward, Shift+Tab, Option+arrow → word movement,
   Option+letter → ESC-prefix for bash readline.
-- Test coverage: **27 total, all green.** 15 Rust (10 existing
-  grid/parser + 5 VT additions) + 12 Swift (3 FFI + 1 scrollback +
-  3 Metal pipeline + 5 visibility math).
+- **Bracketed paste + Cmd+V (Phase 2.8)**: `DECSET 2004` wires into
+  `TadoCore.Session.bracketedPasteEnabled`; `TerminalMTKView.paste(_:)`
+  wraps clipboard content with `ESC [ 200 ~ ... ESC [ 201 ~` when it's
+  on. Cmd+V is intercepted in `performKeyEquivalent`.
+- **OSC titles (Phase 2.8)**: Rust accumulates `GridEvent::TitleChanged`
+  during byte processing; `TerminalMTKView` drains `session.takeTitle()`
+  at 1 Hz alongside the idle probe and calls `onTitleChange`. Wired to
+  `TerminalSession.title` so the tile titlebar updates as the agent
+  reports a new title.
+- **Mouse reporting (Phase 2.8)**: DECSET 1000/1002/1006 tracked in the
+  grid; `TerminalMTKView` emits SGR-encoded button events on left/right
+  click/release. Legacy encoding silent-dropped (can't represent cols
+  > 95).
+- Test coverage: **31 total, all green.** 18 Rust (15 grid/parser +
+  3 new: bracketed paste toggle, mouse DECSET toggle, OSC 0/2 title) +
+  13 Swift (+ 1 new: bracketed-paste + OSC-title round-trip).
 
 ## Phase 2.6 — flip the default and delete SwiftTerm
 
