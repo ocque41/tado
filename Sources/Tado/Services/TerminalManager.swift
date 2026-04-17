@@ -7,8 +7,12 @@ final class TerminalManager {
     var sessions: [TerminalSession] = []
     var ipcBroker: IPCBroker?
     /// Mirrored from AppSettings.randomTileColor by ContentView. When true, every new
-    /// session gets a random TerminalTheme; otherwise sessions use TerminalTheme.tadoDark.
+    /// session gets a random TerminalTheme; otherwise sessions use `defaultTheme`.
     var randomTileColors: Bool = true
+    /// Theme used when `randomTileColors` is false. Mirrored from
+    /// AppSettings.defaultThemeId by ContentView. Lets users pin a specific
+    /// background/foreground without giving up full random rotation.
+    var defaultTheme: TerminalTheme = .tadoDark
     /// Theme picked for the most recently spawned session — used to avoid back-to-back
     /// repeats when randomTileColors is on.
     private var lastTheme: TerminalTheme?
@@ -26,7 +30,7 @@ final class TerminalManager {
             session.theme = theme
             lastTheme = theme
         } else {
-            session.theme = .tadoDark
+            session.theme = defaultTheme
         }
         sessions.append(session)
         if let engine = engine {

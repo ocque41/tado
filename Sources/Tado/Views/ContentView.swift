@@ -262,6 +262,7 @@ struct ContentView: View {
     private func syncTerminalManagerSettings() {
         let settings = ContentView.fetchOrCreateSettings(modelContext: modelContext)
         terminalManager.randomTileColors = settings.randomTileColor
+        terminalManager.defaultTheme = TerminalTheme.theme(id: settings.defaultThemeId)
     }
 
     private func reconnectOnLaunch() {

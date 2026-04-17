@@ -510,6 +510,52 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertEqual(families, families.sorted(), "family list must be sorted")
     }
 
+    // MARK: Scroll clamp
+
+    /// Scrolling into history must never exceed the available scrollback
+    /// rows. Before this clamp, a long trackpad flick would drift past the
+    /// top, showing blank rows + silently banking inertia that ate the
+    /// first scroll-back-down event.
+    func testScrollOffsetClampsAtAvailableScrollback() {
+        // Scroll 50 lines up when only 20 rows are buffered.
+        let result = TerminalMTKView.clampedScrollOffset(
+            current: 0, lines: 50, available: 20
+        )
+        XCTAssertEqual(result, 20, "offset must cap at available history")
+    }
+
+    /// Scrolling back toward live must bottom out at 0 — negative offsets
+    /// would crash `scrollbackSnapshot(offset:rows:)` in Rust.
+    func testScrollOffsetClampsAtZeroOnScrollDown() {
+        let result = TerminalMTKView.clampedScrollOffset(
+            current: 3, lines: -100, available: 10
+        )
+        XCTAssertEqual(result, 0)
+    }
+
+    /// Within the valid range, the clamp is a pure add — no drift, no
+    /// off-by-one on the common "wheel 1 line at a time" path.
+    func testScrollOffsetPassesThroughWithinBounds() {
+        XCTAssertEqual(
+            TerminalMTKView.clampedScrollOffset(current: 5, lines: 3, available: 100),
+            8
+        )
+        XCTAssertEqual(
+            TerminalMTKView.clampedScrollOffset(current: 5, lines: -2, available: 100),
+            3
+        )
+    }
+
+    /// Zero scrollback (fresh session, nothing evicted yet) must clamp to
+    /// 0 regardless of scroll direction — we've seen wheel events fire
+    /// before the grid has output anything.
+    func testScrollOffsetClampsAtZeroWhenNoHistory() {
+        XCTAssertEqual(
+            TerminalMTKView.clampedScrollOffset(current: 0, lines: 10, available: 0),
+            0
+        )
+    }
+
     func testRendersLiveSessionSnapshot() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")

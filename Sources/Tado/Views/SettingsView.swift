@@ -165,6 +165,20 @@ struct SettingsView: View {
                     Text("Each new terminal tile picks a random theme from a curated palette of Claude colors and macOS Terminal classics. Existing tiles keep their current color.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+
+                    Picker("Default theme:", selection: Binding(
+                        get: { settings.defaultThemeId },
+                        set: { settings.defaultThemeId = $0; try? modelContext.save() }
+                    )) {
+                        ForEach(TerminalTheme.all) { theme in
+                            Text(theme.name).tag(theme.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(settings.randomTileColor)
+                    Text("Used for new tiles when random colors is off. Sets the background + foreground and (for themes that specify one) the ANSI palette. Existing tiles keep their theme.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Tile Appearance")
                 }

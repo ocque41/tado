@@ -97,6 +97,13 @@ final class TerminalMTKView: MTKView {
     /// Pixel accumulator for trackpad scrolling; one line emitted per
     /// cellHeight of accumulated deltaY. Matches AppKit trackpad cadence.
     private var scrollPixelAccumulator: CGFloat = 0
+    /// `scrollOffset` from the previous draw tick. A `>0 → 0` transition
+    /// triggers a full-grid re-upload in the draw loop so the renderer's
+    /// local cell buffer — which `uploadScrolled` overwrote with a
+    /// scrollback composite — gets reset to the live grid. Without this,
+    /// returning to live left the composite stuck on screen ("freeze")
+    /// until new dirty rows came in to overwrite it.
+    private var lastRenderedScrollOffset: Int = 0
 
     // MARK: Cached latest live snapshot
 
@@ -456,8 +463,40 @@ final class TerminalMTKView: MTKView {
         scrollPixelAccumulator -= CGFloat(lines) * cellH
 
         // AppKit convention: positive deltaY == scroll toward older content.
-        // Our offset grows toward history, so add lines directly.
-        scrollOffset = max(0, scrollOffset + lines)
+        // Our offset grows toward history, so add lines directly. Clamp
+        // upward against the Rust-side scrollback length so a long flick
+        // can't drift past the top (which showed blank rows) or "bank"
+        // inertia that swallowed the first scroll-back-down event.
+        //
+        // Only query `scrollbackSnapshot` when lines > 0 — scrolling
+        // toward live never needs the upper bound, and each query
+        // allocates a one-row cell buffer.
+        let available: Int
+        if lines > 0 {
+            available = Int(session.scrollbackSnapshot(offset: 0, rows: 1)?.totalAvailable ?? 0)
+        } else {
+            available = scrollOffset
+        }
+        let newOffset = TerminalMTKView.clampedScrollOffset(
+            current: scrollOffset, lines: lines, available: available
+        )
+        if newOffset == 0 || newOffset == available {
+            // Hit either end — drop the accumulator so the trailing
+            // trackpad inertia doesn't silently swallow a later reversal.
+            scrollPixelAccumulator = 0
+        }
+        scrollOffset = newOffset
+    }
+
+    /// Pure version of the scroll-wheel clamp. `current` is the existing
+    /// `scrollOffset` (≥ 0). `lines` is signed: positive = scroll into
+    /// history, negative = scroll toward live. `available` is the total
+    /// scrollback rows currently buffered in Rust. The result is the
+    /// new offset, clamped to `[0, max(0, available)]`.
+    static func clampedScrollOffset(current: Int, lines: Int, available: Int) -> Int {
+        let cap = max(0, available)
+        let target = current + lines
+        return max(0, min(target, cap))
     }
 
     /// True when the cursor should currently be hidden by the blink
@@ -514,6 +553,20 @@ extension TerminalMTKView: MTKViewDelegate {
               let rpd = view.currentRenderPassDescriptor,
               let cb = renderer.commandQueue.makeCommandBuffer()
         else { return }
+
+        // Scroll-offset transition: scrolling back overwrote the renderer's
+        // local cell buffer with a scrollback composite. When we return to
+        // live (offset > 0 → 0), re-seed from a full snapshot; otherwise
+        // the last composite stays stuck on screen until new dirty rows
+        // arrive (the "freeze" bug). `snapshotFull` doesn't consume dirty
+        // flags, so this doesn't race the dirty-row path.
+        if scrollOffset == 0, lastRenderedScrollOffset > 0 {
+            if let full = session.snapshotFull() {
+                renderer.upload(snapshot: full)
+            }
+            latestLive = nil
+        }
+        lastRenderedScrollOffset = scrollOffset
 
         // Adaptive poll — keep GPU quiet for silent tiles without a real
         // CVDisplayLink. When scrolled back, always re-poll dirty so the
