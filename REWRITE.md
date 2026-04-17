@@ -20,7 +20,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.9 | Glyph lookup correctness: renderer rebuilds the GPU lookup when the atlas mutates, not only when `lookupMax` grows. Fixed latent first-frame-blank bug, extended coverage to Latin-1 + full BMP for ASCII-dense workloads. | ✅ shipped |
 | 2.10 | `TerminalTheme` propagates to Metal: `set_default_colors` sets the palette + retints factory-blank cells; `MTKView.clearColor` matches the tile bg. Randomized tile themes look identical between SwiftTerm and Metal renderers. | ✅ shipped |
 | 2.11 | Text selection + Cmd+C copy: click-drag selection, shader-side fg/bg swap highlight, pure-function `TerminalTextExtractor` with unit tests, NSPasteboard copy. | ✅ shipped |
-| 2.12 | Application cursor mode (DECCKM, DECSET 1) so vim/less arrow remaps work; bell (0x07) → NSSound.beep with per-tick coalescing. Typed-slot event drain replacing the generic `GridEvent` queue. | ✅ shipped (41/41 tests green) |
+| 2.12 | Application cursor mode (DECCKM, DECSET 1) so vim/less arrow remaps work; bell (0x07) → NSSound.beep with per-tick coalescing. Typed-slot event drain replacing the generic `GridEvent` queue. | ✅ shipped |
+| 2.13 | `AppSettings.terminalFontSize` (9–24pt) threaded through the whole render stack; Settings UI gains a stepper. Existing tiles keep their current metrics on setting change. | ✅ shipped (41/41 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
