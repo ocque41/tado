@@ -16,14 +16,25 @@ struct MetalTerminalView: NSViewRepresentable {
     let session: TadoCore.Session
     let cols: UInt16
     let rows: UInt16
+    /// Called on the main actor when the PTY produces any output this
+    /// frame. Wire to `TerminalSession.markActivity()` so the forward-mode
+    /// prompt queue drains identically to the SwiftTerm path.
+    var onDirty: (() -> Void)? = nil
+    /// Called roughly once per second when no output has arrived.
+    /// Wire to `TerminalSession.checkIdle()`.
+    var onIdleTick: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows)
+        view.onDirty = onDirty
+        view.onIdleTick = onIdleTick
         return view
     }
 
     func updateNSView(_ nsView: TerminalMTKView, context: Context) {
         nsView.resizeIfNeeded(cols: cols, rows: rows)
+        nsView.onDirty = onDirty
+        nsView.onIdleTick = onIdleTick
     }
 
     static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: ()) {
@@ -46,6 +57,27 @@ final class TerminalMTKView: MTKView {
     private var hadDirtyLastFrame: Bool = false
     /// Key-modifier adjusted ESC sequences — built lazily per keyDown.
     private lazy var keymap = TerminalKeymap()
+
+    // MARK: Scrollback state
+
+    /// Lines scrolled back from the live view. 0 = live, positive = history.
+    /// Capped by the session's scrollback length each scroll tick.
+    private(set) var scrollOffset: Int = 0
+    /// Pixel accumulator for trackpad scrolling; one line emitted per
+    /// cellHeight of accumulated deltaY. Matches AppKit trackpad cadence.
+    private var scrollPixelAccumulator: CGFloat = 0
+
+    // MARK: Cached latest live snapshot
+
+    /// Kept so scroll-back renders can compose against the current live
+    /// grid without waiting for a new dirty tick from Rust.
+    private var latestLive: TadoCore.Snapshot?
+
+    // MARK: Activity detection hooks (wired by MetalTerminalTileView)
+
+    var onDirty: (() -> Void)?
+    var onIdleTick: (() -> Void)?
+    private var lastIdleTick: TimeInterval = 0
 
     init(session: TadoCore.Session, cols: UInt16, rows: UInt16) {
         self.session = session
@@ -73,6 +105,11 @@ final class TerminalMTKView: MTKView {
                 NSLog("tado: MetalTerminalRenderer init failed: \(error)")
             }
         }
+
+        // Register for file drag-drop. Dropped URLs get written into the
+        // PTY as space-joined paths — same UX as SwiftTerm's
+        // LoggingTerminalView.
+        registerForDraggedTypes([.fileURL])
 
         // Render delegate; MTKView calls us every frame.
         self.delegate = self
@@ -107,6 +144,12 @@ final class TerminalMTKView: MTKView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Typing always snaps us back to live view — behaves like every
+        // other terminal scrollback I've used.
+        if scrollOffset != 0 {
+            scrollOffset = 0
+            scrollPixelAccumulator = 0
+        }
         let bytes = keymap.bytes(for: event)
         if !bytes.isEmpty {
             session.write(bytes)
@@ -117,6 +160,61 @@ final class TerminalMTKView: MTKView {
         // Intercept plain Cmd-less keystrokes; let SwiftUI handle Cmd+X etc.
         guard !event.modifierFlags.contains(.command) else { return false }
         keyDown(with: event)
+        return true
+    }
+
+    // MARK: - Scroll wheel → scrollback offset
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let renderer = renderer else { return }
+        // Positive deltaY = swipe fingers up on trackpad = scroll content
+        // down = show older history. AppKit reports pixels for trackpad
+        // (scrollingDeltaY) and lines for mouse (deltaY).
+        let pixelDelta: CGFloat
+        if event.hasPreciseScrollingDeltas {
+            pixelDelta = event.scrollingDeltaY
+        } else {
+            // Line-based wheels: 3 text lines per wheel notch.
+            pixelDelta = event.deltaY * renderer.metrics.cellHeight * 3
+        }
+
+        scrollPixelAccumulator += pixelDelta
+        let cellH = max(1, renderer.metrics.cellHeight)
+        let linesF = scrollPixelAccumulator / cellH
+        let lines = Int(linesF.rounded(.towardZero))
+        if lines == 0 { return }
+        scrollPixelAccumulator -= CGFloat(lines) * cellH
+
+        // AppKit convention: positive deltaY == scroll toward older content.
+        // Our offset grows toward history, so add lines directly.
+        scrollOffset = max(0, scrollOffset + lines)
+    }
+
+    // MARK: - File drag-drop (matches LoggingTerminalView)
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.canReadObject(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) ? .copy : []
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.canReadObject(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        )
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL], !urls.isEmpty else {
+            return false
+        }
+        let text = urls.map(\.path).joined(separator: " ")
+        session.write(text: text)
         return true
     }
 }
@@ -133,22 +231,44 @@ extension TerminalMTKView: MTKViewDelegate {
               let cb = renderer.commandQueue.makeCommandBuffer()
         else { return }
 
-        // Pull incremental updates from Rust. Empty dirtyRows = idle tile.
-        let snapshot: TadoCore.Snapshot?
-        if hadDirtyLastFrame == false && Int.random(in: 0..<8) != 0 {
-            // Adaptive throttle: when we've been idle, only poll ~1/8 frames.
-            // Keeps GPU quiet for silent tiles without a real CVDisplayLink.
-            snapshot = nil
-        } else {
-            snapshot = session.snapshotDirty()
+        // Adaptive poll — keep GPU quiet for silent tiles without a real
+        // CVDisplayLink. When scrolled back, always re-poll dirty so the
+        // live section (if any) keeps advancing beneath the scrollback.
+        let wantsDirty = hadDirtyLastFrame || scrollOffset == 0 || Int.random(in: 0..<4) == 0
+        let dirty = wantsDirty ? session.snapshotDirty() : nil
+        if let d = dirty, !d.dirtyRows.isEmpty {
+            hadDirtyLastFrame = true
+            onDirty?()
+            if scrollOffset == 0 {
+                // Live view path: renderer only needs the dirty rows.
+                renderer.upload(snapshot: d)
+            }
+        } else if dirty?.dirtyRows.isEmpty == true {
+            hadDirtyLastFrame = false
         }
 
-        if let snap = snapshot {
-            if !snap.dirtyRows.isEmpty {
-                renderer.upload(snapshot: snap)
-                hadDirtyLastFrame = true
-            } else {
-                hadDirtyLastFrame = false
+        // Rate-limited idle probe — once per second is enough to drive
+        // `TerminalSession.checkIdle` transitions without flooding the
+        // main actor.
+        let now = Date().timeIntervalSinceReferenceDate
+        if now - lastIdleTick >= 1.0 {
+            lastIdleTick = now
+            onIdleTick?()
+        }
+
+        // For scrollback we need the FULL live grid (the dirty-row diff
+        // doesn't describe unchanged rows). Cache the latest full snapshot
+        // and refresh on scroll changes. Cheap: ~80×24×16B = 30 KB memcpy.
+        if scrollOffset > 0 {
+            if latestLive == nil || dirty?.dirtyRows.isEmpty == false {
+                latestLive = session.snapshotFull()
+            }
+            if let live = latestLive {
+                let sb = session.scrollbackSnapshot(
+                    offset: 0,
+                    rows: scrollOffset
+                )
+                renderer.uploadScrolled(live: live, scrollback: sb, scrollOffset: scrollOffset)
             }
         }
 

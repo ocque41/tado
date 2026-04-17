@@ -131,6 +131,22 @@ enum TadoCore {
             }
             return Snapshot(raw: OpaquePointer(raw))
         }
+
+        /// Snapshot `rows` lines of scrollback starting at `offset` lines
+        /// back from the most-recently-evicted line. `offset = 0, rows = 10`
+        /// returns the ten newest evicted rows (oldest → newest in the
+        /// returned cells array).
+        func scrollbackSnapshot(offset: Int, rows: Int) -> Scrollback? {
+            guard offset >= 0, rows > 0 else { return nil }
+            guard let raw = tado_session_scrollback(
+                UnsafeMutablePointer(handle),
+                UInt(offset),
+                UInt(rows)
+            ) else {
+                return nil
+            }
+            return Scrollback(raw: OpaquePointer(raw))
+        }
     }
 
     /// Cell packed for direct upload to a Metal vertex/instance buffer.
@@ -219,6 +235,36 @@ enum TadoCore {
             self.cursorY = cursorY
             self.dirtyRows = dirtyRows
             self.cells = cells
+        }
+    }
+
+    /// Historical rows that fell off the top of the live grid. Distinct
+    /// from `Snapshot` because scrollback has no cursor/dirty concept —
+    /// it's a read-only window into the Rust-side `VecDeque<Vec<Cell>>`.
+    struct Scrollback {
+        let cols: UInt16
+        let rows: UInt16
+        /// Row-major flattened cells. Oldest row first; newest row last.
+        let cells: [Cell]
+        /// Total scrollback lines currently buffered in Rust. Useful for
+        /// scrollbar thumb sizing regardless of the current window.
+        let totalAvailable: UInt32
+
+        fileprivate init(raw: OpaquePointer) {
+            let ptr = UnsafeMutablePointer<TadoScrollback>(raw)
+            defer { tado_scrollback_free(ptr) }
+
+            self.cols = tado_scrollback_cols(ptr)
+            self.rows = tado_scrollback_rows(ptr)
+            self.totalAvailable = tado_scrollback_total_available(ptr)
+
+            let cellCount = Int(tado_scrollback_cells_len(ptr))
+            if cellCount > 0, let cellPtr = tado_scrollback_cells(ptr) {
+                let typed = UnsafeRawPointer(cellPtr).assumingMemoryBound(to: Cell.self)
+                self.cells = Array(UnsafeBufferPointer(start: typed, count: cellCount))
+            } else {
+                self.cells = []
+            }
         }
     }
 }

@@ -10,7 +10,7 @@
 //!   call only; Rust copies if it needs to retain.
 
 use crate::grid::Cell;
-use crate::session::{GridSnapshot, Session};
+use crate::session::{GridSnapshot, ScrollbackSnapshot, Session};
 use std::ffi::{c_char, CStr};
 use std::panic;
 use std::ptr;
@@ -262,6 +262,88 @@ pub unsafe extern "C" fn tado_snapshot_free(snap: *mut TadoSnapshot) {
     }
     let _ = panic::catch_unwind(|| {
         drop(Box::from_raw(snap as *mut GridSnapshot));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Scrollback FFI
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+pub struct TadoScrollback {
+    _priv: [u8; 0],
+}
+
+/// Snapshot `rows` lines of scrollback starting `offset` lines back from the
+/// most-recently-evicted line. Oldest line first inside the returned cell
+/// buffer. Caller must free with `tado_scrollback_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_scrollback(
+    session: *mut TadoSession,
+    offset: usize,
+    rows: usize,
+) -> *mut TadoScrollback {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        let snap = s.scrollback_snapshot(offset, rows);
+        Box::into_raw(Box::new(snap)) as *mut TadoScrollback
+    });
+    r.unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tado_scrollback_cols(snap: *mut TadoScrollback) -> u16 {
+    if snap.is_null() {
+        return 0;
+    }
+    (&*(snap as *const ScrollbackSnapshot)).cols
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tado_scrollback_rows(snap: *mut TadoScrollback) -> u16 {
+    if snap.is_null() {
+        return 0;
+    }
+    (&*(snap as *const ScrollbackSnapshot)).rows
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tado_scrollback_cells(snap: *mut TadoScrollback) -> *const TadoCell {
+    if snap.is_null() {
+        return ptr::null();
+    }
+    let s = &*(snap as *const ScrollbackSnapshot);
+    s.cells.as_ptr() as *const TadoCell
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tado_scrollback_cells_len(snap: *mut TadoScrollback) -> usize {
+    if snap.is_null() {
+        return 0;
+    }
+    (&*(snap as *const ScrollbackSnapshot)).cells.len()
+}
+
+/// Total scrollback lines currently buffered (independent of the most recent
+/// snapshot window). Useful for scrollbar sizing.
+#[no_mangle]
+pub unsafe extern "C" fn tado_scrollback_total_available(snap: *mut TadoScrollback) -> u32 {
+    if snap.is_null() {
+        return 0;
+    }
+    (&*(snap as *const ScrollbackSnapshot)).total_available
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tado_scrollback_free(snap: *mut TadoScrollback) {
+    if snap.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(|| {
+        drop(Box::from_raw(snap as *mut ScrollbackSnapshot));
     });
 }
 

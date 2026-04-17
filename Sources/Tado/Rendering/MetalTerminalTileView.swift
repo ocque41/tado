@@ -25,8 +25,24 @@ struct MetalTerminalTileView: View {
     var body: some View {
         Group {
             if let core = session.coreSession {
-                MetalTerminalView(session: core, cols: gridCols(for: width),
-                                  rows: gridRows(for: height))
+                MetalTerminalView(
+                    session: core,
+                    cols: gridCols(for: width),
+                    rows: gridRows(for: height),
+                    onDirty: { [weak session] in
+                        // Runs on the main thread (MTKViewDelegate.draw
+                        // callback); TerminalSession is @MainActor so this
+                        // invocation is already isolated.
+                        MainActor.assumeIsolated {
+                            session?.markActivity()
+                        }
+                    },
+                    onIdleTick: { [weak session] in
+                        MainActor.assumeIsolated {
+                            session?.checkIdle()
+                        }
+                    }
+                )
             } else {
                 // Spawn is synchronous but can fail; render a placeholder
                 // that shows the error instead of silently crashing.

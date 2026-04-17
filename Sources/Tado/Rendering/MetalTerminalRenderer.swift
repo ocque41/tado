@@ -168,15 +168,7 @@ final class MetalTerminalRenderer {
                   dstStart + colsInt <= localCells.count else { continue }
             for c in 0..<colsInt {
                 let src = snapshot.cells[srcStart + c]
-                // Memoize atlas rasterization. Brand-new glyphs trigger a
-                // lookup table rebuild at the end of this upload.
-                if src.ch < lookupMax, atlas.uvRect(for: src.ch) != nil {
-                    // already present or just inserted
-                } else if src.ch >= lookupMax, atlas.uvRect(for: src.ch) != nil {
-                    // outside our current lookup bound; expand table
-                    lookupMax = max(lookupMax, src.ch + 1)
-                    sawNewChar = true
-                }
+                rasterizeIfNew(src.ch, sawNewChar: &sawNewChar)
                 localCells[dstStart + c] = CellInstance(
                     ch: src.ch,
                     fg: src.fg,
@@ -186,25 +178,117 @@ final class MetalTerminalRenderer {
             }
         }
 
-        // Copy cell mirror into the GPU buffer.
+        commit(uniformsCursorX: UInt32(snapshot.cursorX),
+               uniformsCursorY: UInt32(snapshot.cursorY),
+               cursorVisible: 1,
+               rebuildLookup: sawNewChar)
+    }
+
+    /// Compose a view of the grid with `scrollOffset` lines of history
+    /// showing at the top. `scrollOffset = 0` behaves exactly like
+    /// `upload(snapshot:)` (all live). `scrollOffset == rows` shows pure
+    /// scrollback. Intermediate values show `scrollOffset` history rows on
+    /// top and `(rows - scrollOffset)` live rows below. Cursor is hidden
+    /// when scrolled back so users don't chase a phantom caret.
+    func uploadScrolled(
+        live: TadoCore.Snapshot,
+        scrollback: TadoCore.Scrollback?,
+        scrollOffset: Int
+    ) {
+        if UInt32(live.cols) != cols || UInt32(live.rows) != rows {
+            resize(cols: UInt32(live.cols), rows: UInt32(live.rows))
+        }
+        let colsInt = Int(cols)
+        let rowsInt = Int(rows)
+        let clampedOffset = max(0, min(rowsInt, scrollOffset))
+        var sawNewChar = false
+
+        // 1) Top `clampedOffset` rows: scrollback (oldest at top-most).
+        if clampedOffset > 0, let sb = scrollback {
+            let sbCols = Int(sb.cols)
+            // Scrollback snapshot is oldest→newest. We want to place
+            // `clampedOffset` rows starting from history_start so that the
+            // NEWEST scrollback row lands at display row `clampedOffset-1`.
+            let available = Int(sb.rows)
+            let take = min(clampedOffset, available)
+            let srcRowStart = max(0, available - take)
+            for i in 0..<take {
+                let dstRow = clampedOffset - take + i
+                for c in 0..<colsInt {
+                    let sbIdx = (srcRowStart + i) * sbCols + c
+                    let cell: CellInstance
+                    if sbIdx < sb.cells.count, c < sbCols {
+                        let src = sb.cells[sbIdx]
+                        rasterizeIfNew(src.ch, sawNewChar: &sawNewChar)
+                        cell = CellInstance(ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs)
+                    } else {
+                        cell = CellInstance(ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0)
+                    }
+                    localCells[dstRow * colsInt + c] = cell
+                }
+            }
+            // Blank any top rows we couldn't fill (more offset than history).
+            for dstRow in 0..<(clampedOffset - take) {
+                for c in 0..<colsInt {
+                    localCells[dstRow * colsInt + c] = CellInstance(
+                        ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0
+                    )
+                }
+            }
+        }
+
+        // 2) Bottom `(rows - clampedOffset)` rows: top of live grid.
+        let liveRows = rowsInt - clampedOffset
+        if liveRows > 0 {
+            // live snapshot `cells` is row-major `cols * rows`.
+            for r in 0..<liveRows {
+                for c in 0..<colsInt {
+                    let src = live.cells[r * colsInt + c]
+                    rasterizeIfNew(src.ch, sawNewChar: &sawNewChar)
+                    let dstRow = clampedOffset + r
+                    localCells[dstRow * colsInt + c] = CellInstance(
+                        ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs
+                    )
+                }
+            }
+        }
+
+        // Hide cursor when scrolled back.
+        let cursorVisible: UInt32 = clampedOffset == 0 ? 1 : 0
+        commit(uniformsCursorX: UInt32(live.cursorX),
+               uniformsCursorY: UInt32(live.cursorY) + UInt32(clampedOffset),
+               cursorVisible: cursorVisible,
+               rebuildLookup: sawNewChar)
+    }
+
+    private func rasterizeIfNew(_ ch: UInt32, sawNewChar: inout Bool) {
+        if ch < lookupMax, atlas.uvRect(for: ch) != nil {
+            return
+        }
+        if ch >= lookupMax, atlas.uvRect(for: ch) != nil {
+            lookupMax = max(lookupMax, ch + 1)
+            sawNewChar = true
+        }
+    }
+
+    private func commit(
+        uniformsCursorX: UInt32,
+        uniformsCursorY: UInt32,
+        cursorVisible: UInt32,
+        rebuildLookup: Bool
+    ) {
         let ptr = cellBuffer.contents().bindMemory(to: CellInstance.self, capacity: localCells.count)
         for i in 0..<localCells.count {
             ptr[i] = localCells[i]
         }
 
-        // Rebuild lookup if we rasterized anything new. Cheap for ASCII+Latin.
-        if sawNewChar, let lookup = atlas.buildLookupBuffer(device: device, maxCodepoint: lookupMax) {
+        if rebuildLookup, let lookup = atlas.buildLookupBuffer(device: device, maxCodepoint: lookupMax) {
             self.glyphLookup = lookup
-        } else if lookupMax > 0 {
-            // Even if no new char, glyph could have been newly rasterized
-            // into an existing slot; rebuild once per upload is OK-cheap.
-            if let lookup = atlas.buildLookupBuffer(device: device, maxCodepoint: lookupMax) {
-                self.glyphLookup = lookup
-            }
         }
 
-        uniforms.cursorX = UInt32(snapshot.cursorX)
-        uniforms.cursorY = UInt32(snapshot.cursorY)
+        uniforms.cursorX = uniformsCursorX
+        uniforms.cursorY = uniformsCursorY
+        uniforms.cursorVisible = cursorVisible
     }
 
     // MARK: - Draw

@@ -169,6 +169,26 @@ impl Session {
         }
     }
 
+    /// Snapshot `rows` lines of scrollback starting at `offset` lines back
+    /// from the most-recently-evicted line. `offset=0, rows=10` returns the
+    /// ten most-recently-evicted rows (newest last).
+    pub fn scrollback_snapshot(&self, offset: usize, rows: usize) -> ScrollbackSnapshot {
+        let g = self.grid.lock();
+        let cols = g.cols;
+        let cells = g.scrollback_snapshot(offset, rows);
+        let actual_rows = if cols == 0 {
+            0
+        } else {
+            (cells.len() / cols as usize) as u16
+        };
+        ScrollbackSnapshot {
+            cols,
+            rows: actual_rows,
+            cells,
+            total_available: g.scrollback.len() as u32,
+        }
+    }
+
     pub fn kill(&self, signal: i32) {
         // portable_pty Child has a `kill()` but no signal selector on macOS in
         // the portable API; signal is advisory here. Reader thread notices EOF.
@@ -178,6 +198,15 @@ impl Session {
         self.running.store(false, Ordering::SeqCst);
         let _ = signal; // reserved for future direct SIG delivery
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrollbackSnapshot {
+    pub cols: u16,
+    pub rows: u16,
+    pub cells: Vec<crate::grid::Cell>,
+    /// Total number of scrollback lines currently buffered (for UI sizing).
+    pub total_available: u32,
 }
 
 #[derive(Debug, Clone)]

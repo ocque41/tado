@@ -70,6 +70,42 @@ final class TadoCoreSessionTests: XCTestCase {
         XCTAssertLessThanOrEqual(second!.dirtyRows.count, first.dirtyRows.count)
     }
 
+    func testScrollbackAccumulatesOnOverflow() throws {
+        // Tiny 3-row terminal so a single `seq 10` output overflows and
+        // pushes rows into scrollback. Expect total_available >= 5 when
+        // settled (exact count depends on shell prompt echo).
+        guard let session = TadoCore.Session(
+            command: "/bin/sh",
+            args: ["-c", "for i in 1 2 3 4 5 6 7 8 9 10; do echo line$i; done"],
+            cwd: nil,
+            environment: ["PATH": "/usr/bin:/bin"],
+            cols: 20,
+            rows: 3
+        ) else {
+            XCTFail("spawn failed")
+            return
+        }
+
+        // Wait for output + scrollback fill.
+        let deadline = Date().addingTimeInterval(2.0)
+        var snap: TadoCore.Scrollback?
+        while Date() < deadline {
+            if let s = session.scrollbackSnapshot(offset: 0, rows: 20),
+               s.totalAvailable >= 5 {
+                snap = s
+                break
+            }
+            usleep(50_000)
+        }
+        guard let snap else {
+            XCTFail("scrollback never accumulated; got \(session.scrollbackSnapshot(offset: 0, rows: 1)?.totalAvailable ?? 0) lines")
+            return
+        }
+        XCTAssertGreaterThanOrEqual(snap.totalAvailable, 5)
+        XCTAssertGreaterThan(snap.cells.count, 0)
+        XCTAssertEqual(snap.cells.count, Int(snap.cols) * Int(snap.rows))
+    }
+
     func testWriteRoundTrip() throws {
         // `cat` echoes stdin back to stdout. We write a string and expect
         // it to appear in the grid.
