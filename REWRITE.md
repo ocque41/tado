@@ -18,7 +18,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.7 | VT sequence completeness: alt-screen (1049/1047/47), DECTCEM (25), DECSTBM, DECSC/DECRC, expanded keymap (F1-F12, Home/End, PgUp/PgDn, Option+arrow, fn+Delete) | ✅ shipped |
 | 2.8 | Bracketed paste (DECSET 2004 + Cmd+V) · OSC 0/2 window title → `TerminalSession.title` · mouse button reporting (DECSET 1000/1006) | ✅ shipped |
 | 2.9 | Glyph lookup correctness: renderer rebuilds the GPU lookup when the atlas mutates, not only when `lookupMax` grows. Fixed latent first-frame-blank bug, extended coverage to Latin-1 + full BMP for ASCII-dense workloads. | ✅ shipped |
-| 2.10 | `TerminalTheme` propagates to Metal: `set_default_colors` sets the palette + retints factory-blank cells; `MTKView.clearColor` matches the tile bg. Randomized tile themes look identical between SwiftTerm and Metal renderers. | ✅ shipped (34/34 tests green) |
+| 2.10 | `TerminalTheme` propagates to Metal: `set_default_colors` sets the palette + retints factory-blank cells; `MTKView.clearColor` matches the tile bg. Randomized tile themes look identical between SwiftTerm and Metal renderers. | ✅ shipped |
+| 2.11 | Text selection + Cmd+C copy: click-drag selection, shader-side fg/bg swap highlight, pure-function `TerminalTextExtractor` with unit tests, NSPasteboard copy. | ✅ shipped (39/39 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
@@ -94,11 +95,15 @@ landed vs. what remains. Delete once the rewrite is merged.
   palette and retints any "factory-blank" cells that haven't been
   written yet; `MTKView.clearColor` mirrors the tile bg. Per-tile
   random themes render identically under both renderers.
-- Test coverage: **34 total, all green.** 19 Rust (16 grid/parser +
-  3 new: bracketed paste, mouse DECSET, OSC 0/2 title, themed
-  blank-cell retint) + 15 Swift (3 FFI + 1 scrollback +
-  1 bracketed-paste/title round-trip + 1 themed-default round-trip +
-  4 Metal pipeline + 5 visibility math).
+- **Selection + Cmd+C copy (Phase 2.11)**: click-drag tracks cell
+  coords; shader swaps fg/bg on selected cells (same inversion the
+  cursor already uses). `TerminalTextExtractor.extract(from:start:end:)`
+  is a pure function over `TadoCore.Snapshot` — unit-testable without a
+  PTY. Zero-width click selections clear and pass through to mouse
+  reporting; drags stay highlighted and suppress the PTY click.
+- Test coverage: **39 total, all green.** 19 Rust + 20 Swift
+  (3 FFI + 1 scrollback + 1 bracketed-paste/title + 1 themed-default +
+  4 Metal pipeline + 5 visibility + 5 selection extraction).
 
 ## Phase 2.6 — flip the default and delete SwiftTerm
 
