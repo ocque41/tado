@@ -44,7 +44,7 @@ struct SettingsView: View {
                             HStack {
                                 Text(engine.displayName)
                                 Text("(\(engine.rawValue) \"your todo\")")
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Palette.textTertiary)
                             }
                             .tag(engine)
                         }
@@ -146,7 +146,7 @@ struct SettingsView: View {
                         .disabled(!settings.claudeNoFlicker)
                         Text("Sets CLAUDE_CODE_NO_FLICKER, CLAUDE_CODE_DISABLE_MOUSE, and CLAUDE_CODE_SCROLL_SPEED on every spawned Claude Code session. Restart the session to apply.")
                             .font(Typography.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Palette.textSecondary)
                     } else {
                         Toggle("Allow alternate-screen buffer", isOn: Binding(
                             get: { settings.codexAlternateScreen },
@@ -154,7 +154,7 @@ struct SettingsView: View {
                         ))
                         Text("Codex's equivalent of NO_FLICKER. Off keeps `--no-alt-screen` on, which is required for Codex to render correctly inside Tado tiles. Turn on only if you're testing a Codex build that handles alt-screen in embedded terminals.")
                             .font(Typography.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Palette.textSecondary)
                     }
                 } header: {
                     Text("Harness Display")
@@ -167,7 +167,7 @@ struct SettingsView: View {
                     ))
                     Text("Each new terminal tile picks a random theme from a curated palette of Claude colors and macOS Terminal classics. Existing tiles keep their current color.")
                         .font(Typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
 
                     Picker("Default theme:", selection: Binding(
                         get: { settings.defaultThemeId },
@@ -181,7 +181,7 @@ struct SettingsView: View {
                     .disabled(settings.randomTileColor)
                     Text("Used for new tiles when random colors is off. Sets the background + foreground and (for themes that specify one) the ANSI palette. Existing tiles keep their theme.")
                         .font(Typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
                 } header: {
                     Text("Tile Appearance")
                 }
@@ -200,7 +200,7 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     Text("Only fonts with the fixed-pitch trait are listed — proportional faces would break cell alignment. Picking a missing font silently falls back to SF Mono.")
                         .font(Typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
 
                     Stepper(
                         "Terminal font size: \(settings.terminalFontSize) pt",
@@ -212,7 +212,7 @@ struct SettingsView: View {
                     )
                     Text("Monospace point size used by the Metal renderer. Changes apply to tiles spawned after the setting moves; existing tiles keep their current size so scrollback geometry stays stable.")
                         .font(Typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
 
                     Toggle("Blink cursor", isOn: Binding(
                         get: { settings.cursorBlink },
@@ -220,7 +220,7 @@ struct SettingsView: View {
                     ))
                     Text("When on, the Metal renderer hides the cursor every ~530 ms (Terminal.app cadence). Off keeps the cursor solid, useful for screen recordings.")
                         .font(Typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
 
                     Picker("Bell", selection: Binding(
                         get: { settings.bellMode },
@@ -232,7 +232,7 @@ struct SettingsView: View {
                     }
                     Text("How a terminal bell (0x07) is surfaced — agents ring this for notifications. Visual flashes the tile background; useful when audio is muted.")
                         .font(Typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
                 } header: {
                     Text("Rendering")
                 }

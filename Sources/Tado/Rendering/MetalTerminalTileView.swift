@@ -91,22 +91,22 @@ struct MetalTerminalTileView: View {
                 // user can see the real cause (missing binary, bad cwd,
                 // env-related posix_spawn failure, etc.) without having
                 // to run from a terminal.
-                Color.black.overlay(
+                Palette.canvas.overlay(
                     VStack(alignment: .leading, spacing: 4) {
                         if let err = spawnError {
                             Text("tado-core spawn failed")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.red)
+                                .font(Typography.monoCallout)
+                                .foregroundStyle(Palette.danger)
                             Text(err)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .font(Typography.monoMicro)
+                                .foregroundStyle(Palette.textSecondary)
                                 .lineLimit(8)
                                 .truncationMode(.tail)
                                 .textSelection(.enabled)
                         } else {
                             Text("tado-core spawn pending…")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .font(Typography.monoCaption)
+                                .foregroundStyle(Palette.textSecondary)
                         }
                     }
                     .padding(8),
