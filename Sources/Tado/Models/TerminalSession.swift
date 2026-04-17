@@ -35,6 +35,14 @@ final class TerminalSession: Identifiable {
     var theme: TerminalTheme = .tadoDark
     weak var terminalView: LocalProcessTerminalView?
 
+    /// Rust-backed PTY + VT parser, when the Metal renderer path is in use.
+    /// Populated by `TerminalManager.spawnSession` when
+    /// `AppSettings.useMetalRenderer` is true at spawn time. Nil means this
+    /// session renders via SwiftTerm (`terminalView` above). `@ObservationIgnored`
+    /// because the reference itself never changes after spawn — the underlying
+    /// Rust state mutates independently of SwiftUI.
+    @ObservationIgnored var coreSession: TadoCore.Session?
+
     /// Not rendered in any view — only consumed by ProcessSpawner/start-dir
     /// logic. Observation would be pure overhead.
     @ObservationIgnored var lastKnownCwd: String?

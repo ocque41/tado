@@ -27,6 +27,13 @@ final class AppSettings {
     // When true, every new terminal tile picks a random theme from TerminalTheme.all.
     var randomTileColor: Bool = true
 
+    // Phase 2 feature flag: render terminal tiles with the Rust/Metal pipeline
+    // (TadoCore.Session + MetalTerminalView) instead of SwiftTerm's Cocoa view.
+    // Opt-in while Phase 2.4 stabilizes. Flip on in Settings to use the new
+    // renderer for new tiles; existing tiles keep their current renderer until
+    // they're closed and re-spawned.
+    var useMetalRenderer: Bool = false
+
     init() {
         self.id = UUID()
         self.engineRaw = TerminalEngine.claude.rawValue

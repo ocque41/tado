@@ -73,6 +73,7 @@ struct CanvasView: View {
                         effortFlags: effortFlags(for: sessionEngine),
                         modelFlags: modelFlags(for: sessionEngine),
                         claudeDisplay: claudeDisplayEnv(),
+                        useMetalRenderer: fetchSettings().useMetalRenderer,
                         scale: scale
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)

@@ -8,6 +8,7 @@ struct TerminalTileView: View {
     let effortFlags: [String]
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
+    let useMetalRenderer: Bool
     let scale: CGFloat
     var onPositionChanged: ((CGPoint) -> Void)? = nil
     @Environment(TerminalManager.self) private var terminalManager
@@ -52,6 +53,7 @@ struct TerminalTileView: View {
                 effortFlags: effortFlags,
                 modelFlags: modelFlags,
                 claudeDisplay: claudeDisplay,
+                useMetalRenderer: useMetalRenderer,
                 width: isResizing ? visualWidth : session.tileWidth,
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
             )
@@ -311,11 +313,32 @@ private struct StableTerminalContent: View {
     let effortFlags: [String]
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
+    let useMetalRenderer: Bool
     let width: CGFloat
     let height: CGFloat
 
     var body: some View {
-        TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, modelFlags: modelFlags, agentName: session.agentName, claudeDisplay: claudeDisplay)
-            .frame(width: width, height: height)
+        // Per-session render path is decided once at first body evaluation.
+        // Existing tiles keep the renderer they spawned with even if the
+        // AppSettings flag flips — so a runtime toggle takes effect only
+        // for tiles created afterward. This avoids mid-session rendering
+        // swaps that would nuke scrollback.
+        if useMetalRenderer {
+            MetalTerminalTileView(
+                session: session,
+                engine: engine,
+                ipcRoot: ipcRoot,
+                modeFlags: modeFlags,
+                effortFlags: effortFlags,
+                modelFlags: modelFlags,
+                agentName: session.agentName,
+                claudeDisplay: claudeDisplay,
+                width: width,
+                height: height
+            )
+        } else {
+            TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, modelFlags: modelFlags, agentName: session.agentName, claudeDisplay: claudeDisplay)
+                .frame(width: width, height: height)
+        }
     }
 }
