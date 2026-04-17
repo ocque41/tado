@@ -7,13 +7,14 @@ landed vs. what remains. Delete once the rewrite is merged.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Quick wins in pure Swift (release build, observation granularity, log trim, IPC consolidation, off-main log flush) | ✅ shipped + builds `make build` clean |
-| 1 | Rust `tado-core` crate (PTY + VT parser + grid + C FFI) and Swift wrapper | ✅ shipped + tests pass (`make all-test`) |
-| 2.1 | Metal shader + glyph atlas + renderer with offscreen test | ✅ shipped — renders synthetic grid to BGRA texture, 6/6 Swift tests green |
-| 2.2 | `MetalTerminalView` NSViewRepresentable + keyboard input | ✅ shipped — `TerminalMTKView` subclass with adaptive 30 fps draw loop |
-| 2.3 | Debug preview window (Cmd+Shift+M) exercising the new pipeline on a real `zsh` | ✅ shipped — accessible from Debug menu |
-| 2.4 | Swap `MetalTerminalView` into `TerminalTileView`, delete SwiftTerm | ⏳ Pending — see step-by-step below |
-| 3 | Canvas virtualization (only visible tiles mount GPU resources) | ⏳ Not started |
+| 0 | Quick wins in pure Swift (release build, observation granularity, log trim, IPC consolidation, off-main log flush) | ✅ shipped |
+| 1 | Rust `tado-core` crate (PTY + VT parser + grid + C FFI) and Swift wrapper | ✅ shipped |
+| 2.1 | Metal shader + glyph atlas + renderer with offscreen test | ✅ shipped |
+| 2.2 | `MetalTerminalView` NSViewRepresentable + keyboard input | ✅ shipped |
+| 2.3 | Debug preview window (Cmd+Shift+M) | ✅ shipped |
+| 2.4 | Feature-flag Metal path in `TerminalTileView` (Settings → Rendering) | ✅ shipped |
+| 3 | Canvas virtualization — off-screen tiles shed GPU resources; Rust PTY keeps running | ✅ shipped |
+| 2.5 | Graduate the flag: delete SwiftTerm dep once Metal path proves stable | ⏳ Pending — gated on user trial at scale |
 
 ## What works today on this branch
 
@@ -34,48 +35,61 @@ landed vs. what remains. Delete once the rewrite is merged.
   throttles to ~4 fps when idle, 30 fps when active.
 - **Debug preview**: `Cmd+Shift+M` (Debug → Metal Terminal Preview) opens
   a standalone window that spawns `/bin/zsh -l` via `TadoCore.Session`
-  and renders it with the new pipeline. Exercises every layer end-to-end
-  without touching the SwiftTerm canvas. This is how to try the rewrite
-  today: `make dev` → `Cmd+Shift+M`.
-- Test coverage: 11 total, all green. 5 Rust (grid/VT parser/colors) +
-  6 Swift (3 FFI round-trip through `/bin/echo`/`sh`/`cat`, 3 Metal
-  pipeline incl. offscreen pixel verification).
+  and renders it with the new pipeline. Non-destructive try-before-you-flip.
+- **Production toggle**: Settings → Rendering → "Use Rust + Metal renderer".
+  Per-session decision frozen at spawn; flipping the flag affects only
+  future tiles. Ship with the flag off; users opt in.
+- **Canvas virtualization (Phase 3)**: `TileVisibility` computes the
+  visible world rect from scale+offset+viewport (+ one tile width of
+  margin). Off-screen Metal tiles render a cheap placeholder rectangle;
+  their `TadoCore.Session` keeps streaming PTY output in Rust, so
+  re-mounting on pan-in picks up live state.
+- Test coverage: **16 total, all green.** 5 Rust (grid/VT parser/colors) +
+  11 Swift (3 FFI round-trip through `/bin/echo`/`sh`/`cat`, 3 Metal
+  pipeline incl. offscreen pixel verification, 5 visibility math).
 
-## Phase 2.4 — swap `MetalTerminalView` into `TerminalTileView`
+## Phase 2.5 — graduate the feature flag
 
-Phases 2.1–2.3 landed. What remains to go from "preview window works" to
-"main canvas runs on Metal":
+Everything is on the branch. The only remaining decision is when to
+remove the SwiftTerm fallback. Pre-requisites before flipping the
+default and deleting SwiftTerm:
 
-1. Add `var core: TadoCore.Session?` to `TerminalSession`
-   (`Sources/Tado/Models/TerminalSession.swift`). Populate at spawn
-   time in `TerminalManager.spawnSession` — alongside the existing
-   SwiftTerm path until the swap is complete, so regressions surface
-   gradually.
-2. In `TerminalTileView` (`Sources/Tado/Views/TerminalTileView.swift`),
-   replace `TerminalNSViewRepresentable(session: …)` with:
-   ```swift
-   if let core = session.core {
-       MetalTerminalView(session: core, cols: 80, rows: 24)
-   }
-   ```
-   Keep the SwiftTerm branch as a feature-flag fallback for one release.
-3. Grep for remaining SwiftTerm surface and rewire:
-   - `session.terminalView?.send(…)` → `session.core?.write(…)`
-   - `LocalProcessTerminalView`, `LoggingTerminalView` references
-   - `getTerminal().buffer.x/y` (activity timer) → consume
-     `session.core?.snapshotDirty()?.cursorX/Y` instead
-4. Delete once the feature flag graduates:
-   - `Sources/Tado/Views/TerminalNSViewRepresentable.swift`
-   - `Sources/Tado/Rendering/MetalTerminalPreview.swift` (the preview
-     window was a stepping stone)
-   - `SwiftTerm` dep in `Package.swift`
-5. File drop handling: port `LoggingTerminalView.performDragOperation`
-   to `TerminalMTKView` (register `.fileURL` dragged types, write
-   space-separated paths to `session.write`).
+1. Dogfood the Metal path at scale: `make dev` → Settings → Rendering
+   → on. Spawn ~20 Claude/Codex tiles across two project zones. Leave
+   running for a few hours. Watch for:
+   - Rendering correctness: mid-line SGR changes, ED/EL artifacts,
+     cursor position after scroll.
+   - Input correctness: bracketed paste, multi-line submissions,
+     Ctrl-C, Ctrl-D, arrow keys.
+   - Resource correctness: `lldb` thread list should show ~1 Rust OS
+     thread per tile; GPU idle when all tiles are off-screen.
+2. Port three edges of `LoggingTerminalView` missing from
+   `TerminalMTKView`:
+   - File drag-drop (`registerForDraggedTypes([.fileURL])`); write
+     space-separated paths to `coreSession.write`.
+   - Trackpad scrollback (today's `scrollUpLines`/`scrollDownLines`
+     hooks feed SwiftTerm's internal scrollback; Metal path needs a
+     Rust-side scroll buffer — extend `tado-core::grid` with an
+     optional scrollback deque).
+   - Tile activity detection: today's `TerminalManager.tickActivity`
+     reads `SwiftTerm.Terminal.buffer.x/y`. Replace with
+     `session.coreSession?.snapshotFull()?.cursorX/Y` or, cheaper,
+     `snapshotDirty().dirtyRows.isEmpty` as "is idle".
+3. Flip the `AppSettings.useMetalRenderer` default to `true`.
+4. Grep and remove:
+   - `import SwiftTerm` in `TerminalNSViewRepresentable.swift` /
+     `TerminalSession.swift` / `CanvasView.swift`.
+   - `TerminalNSViewRepresentable.swift` — delete the file.
+   - `MetalTerminalPreview.swift` — it was a stepping stone; the
+     main canvas is the preview now.
+   - The `SwiftTerm` dependency in `Package.swift`.
+   - `session.terminalView` and `session.isRunning` set-from-SwiftTerm
+     callsites in `TerminalManager.swift`.
 
-Estimated effort: 3–5 days. The hardest bit is the cursor/activity path —
-Phase 0 already made `lastActivityDate` observation-ignored; consume
-`snapshotDirty().dirtyRows.isEmpty` as the new "is idle" signal.
+Estimated effort for items 2 and 4: 2–3 days. The scrollback buffer
+is the biggest single piece — extending `tado_core::grid::Grid` with
+a bounded `VecDeque<Vec<Cell>>` for off-top rows and exposing a
+`scroll_snapshot(start_row, height)` FFI.
 
 ## Phase 3 — canvas virtualization (~1 week)
 
