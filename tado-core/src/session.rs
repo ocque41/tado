@@ -32,11 +32,14 @@ pub struct Session {
     master: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
     pub running: Arc<AtomicBool>,
     pub exit_code: Arc<AtomicI32>,
-    /// Events accumulated during byte processing — pulled by the Swift
-    /// side via `drain_events`. Bounded implicitly by the rate at which
-    /// Swift polls; we cap at 256 to keep a runaway OSC spam from
-    /// growing unbounded.
-    events: Arc<Mutex<Vec<GridEvent>>>,
+    /// Latest OSC 0 / OSC 2 title since the last drain. Overwritten on
+    /// each new title so a burst coalesces to the final value. Cleared
+    /// by `take_title`.
+    latest_title: Arc<Mutex<Option<String>>>,
+    /// Pending bell count. Reader thread increments via
+    /// `std::sync::atomic::AtomicU32`; Swift takes+clears with
+    /// `tado_session_take_bell_count`.
+    bell_count: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Session {
@@ -58,7 +61,8 @@ impl Session {
         let grid = Arc::new(Mutex::new(Grid::new(cols, rows)));
         let running = Arc::new(AtomicBool::new(true));
         let exit_code = Arc::new(AtomicI32::new(i32::MIN));
-        let events = Arc::new(Mutex::new(Vec::with_capacity(16)));
+        let latest_title = Arc::new(Mutex::new(None));
+        let bell_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
         let session = Arc::new(Self {
             cols,
@@ -69,10 +73,17 @@ impl Session {
             master: Arc::new(Mutex::new(Some(master))),
             running: running.clone(),
             exit_code: exit_code.clone(),
-            events: events.clone(),
+            latest_title: latest_title.clone(),
+            bell_count: bell_count.clone(),
         });
 
-        Self::start_reader(grid, events, reader, running.clone(), {
+        Self::start_reader(
+            grid,
+            latest_title,
+            bell_count,
+            reader,
+            running.clone(),
+            {
             let child = session.child.clone();
             let exit_code = exit_code.clone();
             let running = running.clone();
@@ -93,7 +104,8 @@ impl Session {
 
     fn start_reader(
         grid: Arc<Mutex<Grid>>,
-        events: Arc<Mutex<Vec<GridEvent>>>,
+        latest_title: Arc<Mutex<Option<String>>>,
+        bell_count: Arc<std::sync::atomic::AtomicU32>,
         mut reader: Box<dyn Read + Send>,
         running: Arc<AtomicBool>,
         on_eof: impl FnOnce() + Send + 'static,
@@ -117,16 +129,27 @@ impl Session {
                         for b in &buf[..n] {
                             parser.advance(&mut perf, *b);
                         }
-                        // Dropping g before locking events avoids
-                        // holding two locks simultaneously.
                         drop(g);
                         if !scratch.is_empty() {
-                            let mut e = events.lock();
-                            e.append(&mut scratch);
-                            // Cap: keep the most recent 256 events.
-                            let len = e.len();
-                            if len > 256 {
-                                e.drain(0..(len - 256));
+                            // Route events into typed slots. Title
+                            // overwrites on each update (burst coalesce
+                            // to "latest wins"); bells accumulate.
+                            let mut pending_title: Option<String> = None;
+                            let mut pending_bells: u32 = 0;
+                            for ev in scratch.drain(..) {
+                                match ev {
+                                    GridEvent::TitleChanged(t) => pending_title = Some(t),
+                                    GridEvent::Bell => pending_bells += 1,
+                                }
+                            }
+                            if pending_bells > 0 {
+                                bell_count.fetch_add(
+                                    pending_bells,
+                                    std::sync::atomic::Ordering::SeqCst,
+                                );
+                            }
+                            if let Some(t) = pending_title {
+                                *latest_title.lock() = Some(t);
                             }
                         }
                     }
@@ -138,15 +161,27 @@ impl Session {
         });
     }
 
-    /// Drain all accumulated grid events since the last call. Called
-    /// from Swift each draw-tick to pull title changes, etc.
-    pub fn drain_events(&self) -> Vec<GridEvent> {
-        let mut e = self.events.lock();
-        std::mem::take(&mut *e)
+    /// Take+clear the most recent OSC 0/2 title. Returns None if no
+    /// title landed since the last call. Bursts are coalesced to the
+    /// most recent value before this method is called.
+    pub fn take_title(&self) -> Option<String> {
+        self.latest_title.lock().take()
+    }
+
+    /// Take+clear the pending bell count. Atomic swap so concurrent
+    /// reader-thread updates during the drain are preserved (only the
+    /// value seen at swap time is returned).
+    pub fn take_bell_count(&self) -> u32 {
+        self.bell_count
+            .swap(0, std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn bracketed_paste(&self) -> bool {
         self.grid.lock().bracketed_paste
+    }
+
+    pub fn application_cursor(&self) -> bool {
+        self.grid.lock().application_cursor
     }
 
     pub fn mouse_reporting_mode(&self) -> MouseReportingMode {

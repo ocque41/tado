@@ -156,6 +156,21 @@ enum TadoCore {
             return String(cString: cstr)
         }
 
+        /// Pull + clear the pending BEL (0x07) count since the last
+        /// call. Typical wiring is `if count > 0 { NSBeep() }` in the
+        /// draw loop. Multiple bells in one frame coalesce to a single
+        /// beep; Swift decides whether to honor the count or cap.
+        func takeBellCount() -> UInt32 {
+            tado_session_take_bell_count(UnsafeMutablePointer(handle))
+        }
+
+        /// DECSET 1 (DECCKM) — the PTY wants arrow keys as SS3-prefixed
+        /// sequences (ESC O A …) instead of CSI-prefixed (ESC [ A …).
+        /// vim / less flip this when entering alt-screen.
+        var applicationCursor: Bool {
+            tado_session_application_cursor(UnsafeMutablePointer(handle)) != 0
+        }
+
         /// Snapshot just the rows that changed since the last snapshot. Cheap —
         /// intended to be called per Metal frame for every visible tile.
         func snapshotDirty() -> Snapshot? {

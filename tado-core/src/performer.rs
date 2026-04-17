@@ -17,6 +17,10 @@ use vte::{Params, Perform};
 pub enum GridEvent {
     /// OSC 0 or OSC 2 — window/tab title.
     TitleChanged(String),
+    /// BEL (0x07). Swift-side drains these and calls NSBeep. Coalesced
+    /// on the session's event queue — if the agent spams bells, Swift
+    /// only sees one per drain cycle.
+    Bell,
 }
 
 pub struct GridPerformer<'a> {
@@ -46,7 +50,10 @@ impl<'a> Perform for GridPerformer<'a> {
                 let target = next.min(self.grid.cols.saturating_sub(1));
                 self.grid.cursor_x = target;
             }
-            b'\x07' => { /* bell */ }
+            b'\x07' => {
+                // BEL — surface as an event so Swift can NSBeep.
+                self.events.push(GridEvent::Bell);
+            }
             _ => {}
         }
     }
@@ -190,6 +197,7 @@ impl<'a> GridPerformer<'a> {
                             self.grid.leave_alt_screen();
                         }
                     }
+                    1 => self.grid.application_cursor = enable,
                     1000 => self.grid.mouse_reporting_button = enable,
                     1002 => self.grid.mouse_reporting_drag = enable,
                     1006 => self.grid.mouse_reporting_sgr = enable,
@@ -448,6 +456,24 @@ mod tests {
         assert_eq!(g.cells[4].ch, b'b' as u32);
         // Row 2 should now hold what was row 3 before (c's got wiped by
         // the cursor jump + scroll)
+    }
+
+    #[test]
+    fn application_cursor_decset_toggle() {
+        let mut g = Grid::new(4, 2);
+        assert!(!g.application_cursor);
+        feed(&mut g, b"\x1b[?1h");
+        assert!(g.application_cursor);
+        feed(&mut g, b"\x1b[?1l");
+        assert!(!g.application_cursor);
+    }
+
+    #[test]
+    fn bel_emits_bell_event() {
+        let mut g = Grid::new(4, 2);
+        let mut events = Vec::new();
+        feed_with_events(&mut g, b"hi\x07\x07", &mut events);
+        assert_eq!(events, vec![GridEvent::Bell, GridEvent::Bell]);
     }
 
     #[test]

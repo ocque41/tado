@@ -205,7 +205,7 @@ final class TerminalMTKView: MTKView {
             scrollOffset = 0
             scrollPixelAccumulator = 0
         }
-        let bytes = keymap.bytes(for: event)
+        let bytes = keymap.bytes(for: event, applicationCursor: session.applicationCursor)
         if !bytes.isEmpty {
             session.write(bytes)
         }
@@ -400,6 +400,13 @@ extension TerminalMTKView: MTKViewDelegate {
             if let newTitle = session.takeTitle(), !newTitle.isEmpty {
                 onTitleChange?(newTitle)
             }
+            // Bells: agents ring BEL on notifications. We coalesce to
+            // one NSBeep per drain so a spam doesn't turn into a
+            // staccato. NSBeep honors the user's "play feedback" system
+            // preference, so users who've silenced it pay no cost.
+            if session.takeBellCount() > 0 {
+                NSSound.beep()
+            }
         }
 
         // For scrollback we need the FULL live grid (the dirty-row diff
@@ -556,14 +563,20 @@ extension String {
 }
 
 /// Keymap translates `NSEvent` into the UTF-8 / ESC sequences a PTY
-/// expects. Mirrors xterm's "application cursor / normal mode" default
-/// (normal mode here — Claude/Codex don't request application cursor).
+/// expects. Supports both normal (CSI) and application (SS3) cursor
+/// modes; vim / less / readline flip DECCKM to distinguish arrows.
 /// References: xterm ctlseqs, `infocmp xterm-256color`.
 struct TerminalKeymap {
-    func bytes(for event: NSEvent) -> [UInt8] {
+    func bytes(for event: NSEvent, applicationCursor: Bool = false) -> [UInt8] {
         let mods = event.modifierFlags
         let option = mods.contains(.option)
         let shift = mods.contains(.shift)
+
+        // Cursor / Home / End are the only sequences DECCKM changes.
+        // `\x1BO?` (SS3) in app mode, `\x1B[?` (CSI) in normal mode.
+        let cursorPrefix: [UInt8] = applicationCursor
+            ? [0x1B, 0x4F]  // ESC O
+            : [0x1B, 0x5B]  // ESC [
 
         // Raw virtual key codes — stable across locales.
         switch event.keyCode {
@@ -573,20 +586,22 @@ struct TerminalKeymap {
         case 117:    return [0x1B, 0x5B, 0x33, 0x7E]  // Delete forward (fn+Del)
         case 53:     return [0x1B]                    // Escape
         case 48:     return [0x09]                    // Tab
-        // Arrows. Option+arrow sends word-movement (xterm alt sequences).
+        // Arrows. Option+arrow is word-movement (meta-b / meta-f) in
+        // every mode; plain arrows swap CSI↔SS3 under DECCKM.
         case 123:
             return option
-                ? [0x1B, 0x62]                        // Option+Left = word-left (meta-b)
-                : [0x1B, 0x5B, 0x44]                  // Left
+                ? [0x1B, 0x62]
+                : cursorPrefix + [0x44]               // Left
         case 124:
             return option
-                ? [0x1B, 0x66]                        // Option+Right = word-right (meta-f)
-                : [0x1B, 0x5B, 0x43]                  // Right
-        case 125:    return [0x1B, 0x5B, 0x42]        // Down
-        case 126:    return [0x1B, 0x5B, 0x41]        // Up
-        // Navigation cluster (fn+arrow on Apple keyboards).
-        case 115:    return [0x1B, 0x5B, 0x48]        // Home
-        case 119:    return [0x1B, 0x5B, 0x46]        // End
+                ? [0x1B, 0x66]
+                : cursorPrefix + [0x43]               // Right
+        case 125:    return cursorPrefix + [0x42]     // Down
+        case 126:    return cursorPrefix + [0x41]     // Up
+        // Navigation cluster (fn+arrow on Apple keyboards). Home/End
+        // also track DECCKM; PgUp/PgDn don't.
+        case 115:    return cursorPrefix + [0x48]     // Home
+        case 119:    return cursorPrefix + [0x46]     // End
         case 116:    return [0x1B, 0x5B, 0x35, 0x7E]  // PageUp
         case 121:    return [0x1B, 0x5B, 0x36, 0x7E]  // PageDown
         // Function keys. Apple layouts need Fn or the "Use F1..F12 as

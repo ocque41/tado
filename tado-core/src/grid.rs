@@ -79,6 +79,12 @@ pub struct Grid {
     /// DECSET 1006 — SGR extended mouse coordinates. Preferred for
     /// modern apps since it supports columns > 95.
     pub mouse_reporting_sgr: bool,
+    /// DECSET 1 (DECCKM) — application cursor mode. When true, arrow
+    /// keys emit SS3-prefixed sequences (ESC O A) instead of the
+    /// default CSI-prefixed (ESC [ A). vim and less flip this on when
+    /// entering alt-screen so their custom keybindings can distinguish
+    /// arrow presses from escape sequences.
+    pub application_cursor: bool,
     /// Saved cursor (DECSC / CSI s). Stored as (x, y, attrs) so colored
     /// segments restore correctly. None until first save.
     pub saved_cursor: Option<(u16, u16, u32, u32, u32)>,
@@ -135,6 +141,7 @@ impl Grid {
             mouse_reporting_button: false,
             mouse_reporting_drag: false,
             mouse_reporting_sgr: false,
+            application_cursor: false,
         }
     }
 

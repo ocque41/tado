@@ -10,7 +10,6 @@
 //!   call only; Rust copies if it needs to retain.
 
 use crate::grid::Cell;
-use crate::performer::GridEvent;
 use crate::session::{GridSnapshot, MouseReportingMode, ScrollbackSnapshot, Session};
 use std::ffi::{c_char, CStr};
 use std::panic;
@@ -186,6 +185,21 @@ pub unsafe extern "C" fn tado_session_bracketed_paste(session: *mut TadoSession)
     r.unwrap_or(0)
 }
 
+/// 1 if the PTY has DECCKM application cursor mode enabled (DECSET 1).
+/// The Swift keymap reads this to emit SS3-prefixed arrows (ESC O A …)
+/// instead of CSI-prefixed (ESC [ A …) when true.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_application_cursor(session: *mut TadoSession) -> u8 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.application_cursor() as u8
+    });
+    r.unwrap_or(0)
+}
+
 /// Mouse reporting mode: 0 off, 1 button, 2 drag. Use
 /// `tado_session_mouse_sgr` to determine the encoding.
 #[no_mangle]
@@ -236,15 +250,8 @@ pub unsafe extern "C" fn tado_session_take_title(session: *mut TadoSession) -> *
     }
     let r = panic::catch_unwind(|| -> *mut c_char {
         let s = &*(session as *const Session);
-        let mut latest: Option<String> = None;
-        for ev in s.drain_events() {
-            match ev {
-                GridEvent::TitleChanged(t) => latest = Some(t),
-            }
-        }
-        match latest {
+        match s.take_title() {
             Some(t) => {
-                // `CString::new` fails on interior NUL. Drop NULs first.
                 let sanitized: Vec<u8> =
                     t.into_bytes().into_iter().filter(|b| *b != 0).collect();
                 match std::ffi::CString::new(sanitized) {
@@ -256,6 +263,21 @@ pub unsafe extern "C" fn tado_session_take_title(session: *mut TadoSession) -> *
         }
     });
     r.unwrap_or(ptr::null_mut())
+}
+
+/// Pull + clear the pending bell count. Returns 0 when no bells have
+/// arrived since the last call. Swift's draw loop reads this each
+/// idle-tick and rings NSBeep when non-zero.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_take_bell_count(session: *mut TadoSession) -> u32 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.take_bell_count()
+    });
+    r.unwrap_or(0)
 }
 
 /// Free a string returned by `tado_session_take_title` (or any other
