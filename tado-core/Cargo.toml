@@ -26,6 +26,16 @@ unicode-normalization = "0.1"
 [build-dependencies]
 cbindgen = "0.28"
 
+[dev-dependencies]
+# Criterion drives `cargo bench`. Harness = false on the bench target
+# below so criterion can install its own main(); doesn't leak into
+# `cargo test` (dev-deps only).
+criterion = "0.5"
+
+[[bench]]
+name = "grid_bench"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

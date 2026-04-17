@@ -1,4 +1,4 @@
-.PHONY: dev debug release build clean core core-clean core-test all-test
+.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench
 
 # Daily development: release-optimized Rust core + Swift app.
 dev: core
@@ -29,3 +29,12 @@ core-clean:
 
 all-test: core core-test
 	swift test
+
+# Rust microbenchmarks via criterion.
+core-bench:
+	cd tado-core && cargo bench --bench grid_bench
+
+# Full bench suite: Rust microbenchmarks + Swift renderer .measure blocks.
+# Results get written to bench/BENCH.md manually after inspection.
+bench: core-bench
+	swift test --filter RendererBenchTests
