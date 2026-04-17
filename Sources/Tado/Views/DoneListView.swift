@@ -27,7 +27,7 @@ struct DoneListView: View {
                 Spacer()
 
                 Text("Done")
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .font(Typography.title)
 
                 Spacer()
 

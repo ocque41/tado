@@ -20,7 +20,12 @@ let package = Package(
             resources: [
                 // SwiftPM compiles .metal into a .metallib inside the
                 // Tado_Tado.bundle. Loaded at runtime via Bundle.module.
-                .process("Rendering/Shaders.metal")
+                .process("Rendering/Shaders.metal"),
+                // Plus Jakarta Sans — registered at app start via
+                // `Typography.registerFonts()` and used by all UI chrome.
+                // Terminal cells keep SF Mono (proportional fonts break
+                // the grid).
+                .copy("Resources/Fonts")
             ],
             linkerSettings: [
                 // Link the Rust static library. `make core` builds it at

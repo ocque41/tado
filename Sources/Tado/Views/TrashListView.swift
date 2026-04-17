@@ -27,7 +27,7 @@ struct TrashListView: View {
                 Spacer()
 
                 Text("Trash")
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .font(Typography.title)
 
                 Spacer()
 

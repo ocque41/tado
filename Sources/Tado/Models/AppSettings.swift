@@ -25,12 +25,14 @@ final class AppSettings {
     // makes alt-screen safe inside an embedded terminal.
     var codexAlternateScreen: Bool = false
     // When true, every new terminal tile picks a random theme from TerminalTheme.all.
-    var randomTileColor: Bool = true
+    // Off by default so new installs land on the house theme (Ember) — flip
+    // on from Settings for the per-tile rotation.
+    var randomTileColor: Bool = false
 
     // Theme used when `randomTileColor` is off. String id so SwiftData
     // doesn't need a migration when the palette grows. Falls back to
     // `TerminalTheme.tadoDark` if the id isn't in the catalog.
-    var defaultThemeId: String = "tado-dark"
+    var defaultThemeId: String = "ember"
 
     // Vestigial SwiftData column from the Phase 2 rollout window. SwiftTerm
     // has been removed; the Metal renderer is now the only code path. Kept

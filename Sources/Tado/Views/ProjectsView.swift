@@ -44,7 +44,7 @@ struct ProjectsView: View {
             // Header
             HStack(spacing: 12) {
                 Text("Projects")
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .font(Typography.title)
 
                 Spacer()
 
@@ -258,7 +258,7 @@ struct ProjectsView: View {
                 Spacer()
 
                 Text(project.name)
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .font(Typography.title)
 
                 Spacer()
 

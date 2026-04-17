@@ -8,6 +8,13 @@ struct TadoApp: App {
     @State private var terminalManager = TerminalManager()
     @State private var ipcBrokerInitialized = false
 
+    init() {
+        // Register Plus Jakarta Sans with Core Text before any view
+        // asks for it. Safe to call from `init()`; only touches
+        // `CTFontManager`, not SwiftUI state.
+        Typography.registerFonts()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

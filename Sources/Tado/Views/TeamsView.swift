@@ -18,7 +18,7 @@ struct TeamsView: View {
             // Header
             HStack(spacing: 12) {
                 Text("Teams")
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .font(Typography.title)
 
                 Spacer()
 
