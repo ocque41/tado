@@ -17,7 +17,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.5 | Scrollback + drag-drop + activity detection on Metal path | ✅ shipped |
 | 2.7 | VT sequence completeness: alt-screen (1049/1047/47), DECTCEM (25), DECSTBM, DECSC/DECRC, expanded keymap (F1-F12, Home/End, PgUp/PgDn, Option+arrow, fn+Delete) | ✅ shipped |
 | 2.8 | Bracketed paste (DECSET 2004 + Cmd+V) · OSC 0/2 window title → `TerminalSession.title` · mouse button reporting (DECSET 1000/1006) | ✅ shipped |
-| 2.9 | Glyph lookup correctness: renderer rebuilds the GPU lookup when the atlas mutates, not only when `lookupMax` grows. Fixed latent first-frame-blank bug, extended coverage to Latin-1 + full BMP for ASCII-dense workloads. | ✅ shipped (32/32 tests green) |
+| 2.9 | Glyph lookup correctness: renderer rebuilds the GPU lookup when the atlas mutates, not only when `lookupMax` grows. Fixed latent first-frame-blank bug, extended coverage to Latin-1 + full BMP for ASCII-dense workloads. | ✅ shipped |
+| 2.10 | `TerminalTheme` propagates to Metal: `set_default_colors` sets the palette + retints factory-blank cells; `MTKView.clearColor` matches the tile bg. Randomized tile themes look identical between SwiftTerm and Metal renderers. | ✅ shipped (34/34 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
@@ -88,11 +89,16 @@ landed vs. what remains. Delete once the rewrite is merged.
   grows). Fixes a first-frame-blank bug where freshly rasterized ASCII
   would render as pure background. Lookup bound rounded up to 256-code-
   point boundaries to avoid per-char thrashing; capped at 0x10000 (BMP).
-- Test coverage: **32 total, all green.** 18 Rust (15 grid/parser +
-  3 new: bracketed paste, mouse DECSET, OSC 0/2 title) +
-  14 Swift (3 FFI + 1 scrollback + 1 bracketed-paste/title round-trip +
-  4 Metal pipeline incl. `testFreshGlyphRendersInFirstFrame` regression +
-  5 visibility math).
+- **Theme mapping (Phase 2.10)**: `TerminalTheme.{foregroundRGBA,backgroundRGBA}`
+  pack NSColor → sRGB → 0xRRGGBBAA. `set_default_colors` updates the
+  palette and retints any "factory-blank" cells that haven't been
+  written yet; `MTKView.clearColor` mirrors the tile bg. Per-tile
+  random themes render identically under both renderers.
+- Test coverage: **34 total, all green.** 19 Rust (16 grid/parser +
+  3 new: bracketed paste, mouse DECSET, OSC 0/2 title, themed
+  blank-cell retint) + 15 Swift (3 FFI + 1 scrollback +
+  1 bracketed-paste/title round-trip + 1 themed-default round-trip +
+  4 Metal pipeline + 5 visibility math).
 
 ## Phase 2.6 — flip the default and delete SwiftTerm
 
