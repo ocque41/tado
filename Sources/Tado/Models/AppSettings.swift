@@ -46,6 +46,15 @@ final class AppSettings {
     // frame, since the blink timer lives in the view, not the renderer.
     var cursorBlink: Bool = true
 
+    // How terminal bells (0x07) are surfaced on the Metal path. Stored
+    // as a raw string so SwiftData schema stays stable if we add modes
+    // later. Default matches Terminal.app: audible-only.
+    var bellModeRaw: String = BellMode.audible.rawValue
+    var bellMode: BellMode {
+        get { BellMode(rawValue: bellModeRaw) ?? .audible }
+        set { bellModeRaw = newValue.rawValue }
+    }
+
     init() {
         self.id = UUID()
         self.engineRaw = TerminalEngine.claude.rawValue
@@ -91,5 +100,26 @@ final class AppSettings {
     var codexModel: CodexModel {
         get { CodexModel(rawValue: codexModelRaw) ?? .gpt54 }
         set { codexModelRaw = newValue.rawValue }
+    }
+}
+
+/// How a terminal bell (0x07) is surfaced to the user. Mirrors the
+/// options Terminal.app exposes. Non-Metal (SwiftTerm) tiles don't
+/// consult this today; they defer to SwiftTerm's built-in bell which
+/// is always audible.
+enum BellMode: String, CaseIterable, Identifiable {
+    case off
+    case audible
+    case visual
+    case both
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .off:     return "Off"
+        case .audible: return "Audible only (NSBeep)"
+        case .visual:  return "Visual flash"
+        case .both:    return "Audible + visual"
+        }
     }
 }

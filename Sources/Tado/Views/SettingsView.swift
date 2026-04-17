@@ -197,6 +197,18 @@ struct SettingsView: View {
                     Text("When on, the Metal renderer hides the cursor every ~530 ms (Terminal.app cadence). Off keeps the cursor solid, useful for screen recordings.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+
+                    Picker("Bell", selection: Binding(
+                        get: { settings.bellMode },
+                        set: { settings.bellMode = $0; try? modelContext.save() }
+                    )) {
+                        ForEach(BellMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    Text("How a terminal bell (0x07) is surfaced — agents ring this for notifications. Visual flashes the tile background; useful when audio is muted. Metal path only; SwiftTerm tiles defer to the library's built-in audible bell.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Rendering")
                 }

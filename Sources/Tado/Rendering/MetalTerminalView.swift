@@ -28,6 +28,10 @@ struct MetalTerminalView: NSViewRepresentable {
     /// loop forces `uniforms.cursorVisible = 0` regardless of DECTCEM
     /// state. Flipping this to false returns to a solid cursor.
     var cursorBlink: Bool = true
+    /// How the view handles BEL (0x07). Audible → NSSound.beep. Visual →
+    /// `onVisualBell` callback fires (MetalTerminalTileView wraps the
+    /// representable in a flash overlay). Both → both.
+    var bellMode: BellMode = .audible
     /// Called on the main actor when the PTY produces any output this
     /// frame. Wire to `TerminalSession.markActivity()` so the forward-mode
     /// prompt queue drains identically to the SwiftTerm path.
@@ -38,14 +42,20 @@ struct MetalTerminalView: NSViewRepresentable {
     /// Called when the PTY emits an OSC 0 / OSC 2 title sequence.
     /// Typical wiring is `TerminalSession.title = $0`.
     var onTitleChange: ((String) -> Void)? = nil
+    /// Invoked on the main actor when a bell drains and the mode
+    /// includes a visual component. Coalesced by the Rust-side counter,
+    /// so rapid-fire bells fire this at most once per idle-tick (~1 Hz).
+    var onVisualBell: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows, metrics: metrics)
         view.applyClearColor(rgba: clearRGBA)
         view.cursorBlinkEnabled = cursorBlink
+        view.bellMode = bellMode
         view.onDirty = onDirty
         view.onIdleTick = onIdleTick
         view.onTitleChange = onTitleChange
+        view.onVisualBell = onVisualBell
         return view
     }
 
@@ -53,9 +63,11 @@ struct MetalTerminalView: NSViewRepresentable {
         nsView.resizeIfNeeded(cols: cols, rows: rows)
         nsView.applyClearColor(rgba: clearRGBA)
         nsView.cursorBlinkEnabled = cursorBlink
+        nsView.bellMode = bellMode
         nsView.onDirty = onDirty
         nsView.onIdleTick = onIdleTick
         nsView.onTitleChange = onTitleChange
+        nsView.onVisualBell = onVisualBell
     }
 
     static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: ()) {
@@ -121,6 +133,10 @@ final class TerminalMTKView: MTKView {
     var onDirty: (() -> Void)?
     var onIdleTick: (() -> Void)?
     var onTitleChange: ((String) -> Void)?
+    var onVisualBell: (() -> Void)?
+    /// Mirror of the AppSettings value; controls how the bell drain
+    /// dispatches audio + visual feedback.
+    var bellMode: BellMode = .audible
     private var lastIdleTick: TimeInterval = 0
 
     init(
@@ -443,12 +459,21 @@ extension TerminalMTKView: MTKViewDelegate {
             if let newTitle = session.takeTitle(), !newTitle.isEmpty {
                 onTitleChange?(newTitle)
             }
-            // Bells: agents ring BEL on notifications. We coalesce to
-            // one NSBeep per drain so a spam doesn't turn into a
-            // staccato. NSBeep honors the user's "play feedback" system
-            // preference, so users who've silenced it pay no cost.
+            // Bells: agents ring BEL on notifications. Coalesce to
+            // one dispatch per drain — the Rust counter already bundled
+            // rapid-fire bells. Dispatch honors `bellMode`.
             if session.takeBellCount() > 0 {
-                NSSound.beep()
+                switch bellMode {
+                case .off:
+                    break
+                case .audible:
+                    NSSound.beep()
+                case .visual:
+                    onVisualBell?()
+                case .both:
+                    NSSound.beep()
+                    onVisualBell?()
+                }
             }
         }
 

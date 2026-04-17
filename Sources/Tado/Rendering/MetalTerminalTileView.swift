@@ -21,40 +21,67 @@ struct MetalTerminalTileView: View {
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let fontSize: CGFloat
     let cursorBlink: Bool
+    let bellMode: BellMode
     let width: CGFloat
     let height: CGFloat
+
+    /// Toggled true briefly when the Metal view reports a visual bell;
+    /// drives a semi-transparent white flash overlay that SwiftUI fades
+    /// out. Kept in @State so the draw thread's callback doesn't fight
+    /// with the view tree.
+    @State private var flashActive: Bool = false
 
     private var metrics: FontMetrics { FontMetrics.defaultMono(size: fontSize) }
 
     var body: some View {
         Group {
             if let core = session.coreSession {
-                MetalTerminalView(
-                    session: core,
-                    cols: gridCols(for: width),
-                    rows: gridRows(for: height),
-                    metrics: metrics,
-                    clearRGBA: session.theme.backgroundRGBA,
-                    cursorBlink: cursorBlink,
-                    onDirty: { [weak session] in
-                        // Runs on the main thread (MTKViewDelegate.draw
-                        // callback); TerminalSession is @MainActor so this
-                        // invocation is already isolated.
-                        MainActor.assumeIsolated {
-                            session?.markActivity()
+                ZStack {
+                    MetalTerminalView(
+                        session: core,
+                        cols: gridCols(for: width),
+                        rows: gridRows(for: height),
+                        metrics: metrics,
+                        clearRGBA: session.theme.backgroundRGBA,
+                        cursorBlink: cursorBlink,
+                        bellMode: bellMode,
+                        onDirty: { [weak session] in
+                            // Runs on the main thread (MTKViewDelegate.draw
+                            // callback); TerminalSession is @MainActor so
+                            // this invocation is already isolated.
+                            MainActor.assumeIsolated {
+                                session?.markActivity()
+                            }
+                        },
+                        onIdleTick: { [weak session] in
+                            MainActor.assumeIsolated {
+                                session?.checkIdle()
+                            }
+                        },
+                        onTitleChange: { [weak session] title in
+                            MainActor.assumeIsolated {
+                                session?.title = title
+                            }
+                        },
+                        onVisualBell: {
+                            // Visual bell: full-tile white flash, fades
+                            // over ~150 ms. Brief enough not to obscure
+                            // output, bright enough to notice.
+                            flashActive = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 150_000_000)
+                                flashActive = false
+                            }
                         }
-                    },
-                    onIdleTick: { [weak session] in
-                        MainActor.assumeIsolated {
-                            session?.checkIdle()
-                        }
-                    },
-                    onTitleChange: { [weak session] title in
-                        MainActor.assumeIsolated {
-                            session?.title = title
-                        }
+                    )
+                    if flashActive {
+                        Color.white
+                            .opacity(0.35)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
                     }
-                )
+                }
+                .animation(.easeOut(duration: 0.15), value: flashActive)
             } else {
                 // Spawn is synchronous but can fail; render a placeholder
                 // that shows the error instead of silently crashing.

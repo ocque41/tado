@@ -14,6 +14,8 @@ struct TerminalTileView: View {
     let fontSize: CGFloat
     /// Blink the cursor on the Metal path. Honored live.
     let cursorBlink: Bool
+    /// How BEL (0x07) is surfaced on the Metal path. Honored live.
+    let bellMode: BellMode
     /// Phase 3 virtualization signal from CanvasView. When false and Metal
     /// is active, this tile unmounts its renderer and shows a lightweight
     /// placeholder — the underlying `TadoCore.Session` keeps running.
@@ -66,6 +68,7 @@ struct TerminalTileView: View {
                 useMetalRenderer: useMetalRenderer,
                 fontSize: fontSize,
                 cursorBlink: cursorBlink,
+                bellMode: bellMode,
                 isVisible: isVisible,
                 width: isResizing ? visualWidth : session.tileWidth,
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
@@ -329,6 +332,7 @@ private struct StableTerminalContent: View {
     let useMetalRenderer: Bool
     let fontSize: CGFloat
     let cursorBlink: Bool
+    let bellMode: BellMode
     let isVisible: Bool
     let width: CGFloat
     let height: CGFloat
@@ -352,6 +356,7 @@ private struct StableTerminalContent: View {
                     claudeDisplay: claudeDisplay,
                     fontSize: fontSize,
                     cursorBlink: cursorBlink,
+                    bellMode: bellMode,
                     width: width,
                     height: height
                 )

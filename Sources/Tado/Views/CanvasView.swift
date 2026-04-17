@@ -100,6 +100,7 @@ struct CanvasView: View {
                         useMetalRenderer: useMetal,
                         fontSize: CGFloat(fetchSettings().terminalFontSize),
                         cursorBlink: fetchSettings().cursorBlink,
+                        bellMode: fetchSettings().bellMode,
                         isVisible: visible,
                         scale: scale
                     ) { newPosition in
