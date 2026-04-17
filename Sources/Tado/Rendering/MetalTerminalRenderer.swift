@@ -48,6 +48,13 @@ final class MetalTerminalRenderer {
     /// Cell attribute bit constants — must stay in sync with `grid.rs`
     /// (`ATTR_*`) and `Shaders.metal`. Kept as a Swift namespace so
     /// callsite reads like `attrs & Attr.wide` instead of magic bits.
+    ///
+    /// Bits 0..7 mirror `grid.rs` ATTR_* constants (Rust owns them).
+    /// Bit 8 (`colorGlyph`) is renderer-local: the Rust core does not
+    /// know about fonts, so the Swift renderer ORs this bit in after
+    /// the glyph atlas tells us the resolved font is color (Apple Color
+    /// Emoji). The shader samples the color atlas instead of the mono
+    /// atlas when the bit is set.
     enum Attr {
         static let bold: UInt32          = 1 << 0
         static let italic: UInt32        = 1 << 1
@@ -57,6 +64,7 @@ final class MetalTerminalRenderer {
         static let dim: UInt32           = 1 << 5
         static let wide: UInt32          = 1 << 6
         static let wideFiller: UInt32    = 1 << 7
+        static let colorGlyph: UInt32    = 1 << 8
     }
 
     // MARK: - State
@@ -239,11 +247,12 @@ final class MetalTerminalRenderer {
             for c in 0..<colsInt {
                 let src = snapshot.cells[srcStart + c]
                 let effectiveCh = rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
+                let attrs = colorTaggedAttrs(src.attrs, realCh: src.ch)
                 localCells[dstStart + c] = CellInstance(
                     ch: effectiveCh,
                     fg: src.fg,
                     bg: src.bg,
-                    attrs: src.attrs
+                    attrs: attrs
                 )
             }
         }
@@ -288,7 +297,8 @@ final class MetalTerminalRenderer {
                     if sbIdx < sb.cells.count, c < sbCols {
                         let src = sb.cells[sbIdx]
                         let effectiveCh = rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
-                        cell = CellInstance(ch: effectiveCh, fg: src.fg, bg: src.bg, attrs: src.attrs)
+                        let attrs = colorTaggedAttrs(src.attrs, realCh: src.ch)
+                        cell = CellInstance(ch: effectiveCh, fg: src.fg, bg: src.bg, attrs: attrs)
                     } else {
                         cell = CellInstance(ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0)
                     }
@@ -313,9 +323,10 @@ final class MetalTerminalRenderer {
                 for c in 0..<colsInt {
                     let src = live.cells[r * colsInt + c]
                     let effectiveCh = rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
+                    let attrs = colorTaggedAttrs(src.attrs, realCh: src.ch)
                     let dstRow = clampedOffset + r
                     localCells[dstRow * colsInt + c] = CellInstance(
-                        ch: effectiveCh, fg: src.fg, bg: src.bg, attrs: src.attrs
+                        ch: effectiveCh, fg: src.fg, bg: src.bg, attrs: attrs
                     )
                 }
             }
@@ -375,6 +386,17 @@ final class MetalTerminalRenderer {
             lookupMax = min(rounded, Self.astralSlotEnd)
         }
         return slot
+    }
+
+    /// OR `Attr.colorGlyph` into `baseAttrs` if the atlas has rasterized
+    /// `realCh` into the color atlas. The shader uses this bit to decide
+    /// which atlas to sample. `realCh` is the original Unicode scalar —
+    /// NOT the astral slot — because the atlas keys by true codepoint.
+    private func colorTaggedAttrs(_ baseAttrs: UInt32, realCh: UInt32) -> UInt32 {
+        if atlas.isColorGlyph(realCh) {
+            return baseAttrs | Attr.colorGlyph
+        }
+        return baseAttrs
     }
 
     private func commit(
@@ -438,6 +460,7 @@ final class MetalTerminalRenderer {
         encoder.setVertexBuffer(cellBuffer, offset: 0, index: 1)
         encoder.setVertexBuffer(glyphLookup, offset: 0, index: 2)
         encoder.setFragmentTexture(atlas.texture, index: 0)
+        encoder.setFragmentTexture(atlas.colorTexture, index: 1)
         encoder.setFragmentSamplerState(sampler, index: 0)
 
         let instanceCount = Int(cols) * Int(rows)

@@ -3,57 +3,94 @@ import CoreText
 import Foundation
 import Metal
 
-/// Lazy glyph cache backed by a single `MTLTexture` (R8, 2048×2048 by default).
+/// Dual glyph cache:
+///   * `texture`       — monochrome R8 atlas for text (default 4096²).
+///   * `colorTexture`  — BGRA8 color atlas for glyphs whose resolved font
+///                       is a color font (Apple Color Emoji on macOS).
+///                       Default 2048² since RGBA is 4× mono memory per
+///                       pixel; half the side gives roughly equal bytes.
 ///
-/// API: `uvRect(for: ch)` returns a `CGRect` in 0..1 UV space. On a miss,
-/// the glyph is rasterized with CoreText and packed into the atlas via a
-/// shelf allocator (simple, good-enough for monospace — every glyph the
-/// same height, so rows never waste vertical space).
+/// Each atlas has its own shelf allocator + UV rect table. `uvRect(for:)`
+/// returns whichever atlas now owns the glyph; `isColorGlyph(_:)` lets the
+/// renderer decide which texture to sample (see `ATTR_COLOR_GLYPH` in
+/// `MetalTerminalRenderer.Attr`). Both atlases share a single `modCount`
+/// so the renderer rebuilds its GPU lookup buffer on any insertion.
 ///
-/// Phase 2.1 scope:
-/// - ASCII + Latin-1 supplementary covered by lazy insertion
+/// Notes carried forward from the R8-only era:
 /// - Blank cells (ch == 0 or space) map to a zero-area rect; the shader
-///   short-circuits to pure background
-/// - No LRU eviction yet. At 2048² R8 the atlas holds ~16k 10×16 glyphs,
-///   more than enough for Phase 2. LRU lands with CJK support in Phase 3.
+///   short-circuits to pure background.
+/// - No LRU. At 4096² R8 the atlas holds ~16k 10×16 glyphs; at 2048²
+///   RGBA ~4k color glyphs. Overflow triggers a one-shot reset of both
+///   atlases, which bumps modCount so the renderer rebuilds its lookup.
 final class GlyphAtlas {
     let device: MTLDevice
-    let texture: MTLTexture
+    let texture: MTLTexture        // mono, R8
+    let colorTexture: MTLTexture   // color, BGRA8
     let metrics: FontMetrics
     let atlasSize: Int
+    let colorAtlasSize: Int
 
+    // Mono shelf state.
     private var shelfY: Int = 0
     private var shelfX: Int = 0
     private var shelfHeight: Int = 0
-    private var rects: [UInt32: CGRect] = [:] // char -> UV rect
+    private var rects: [UInt32: CGRect] = [:]
+
+    // Color shelf state.
+    private var colorShelfY: Int = 0
+    private var colorShelfX: Int = 0
+    private var colorShelfHeight: Int = 0
+    private var colorRects: [UInt32: CGRect] = [:]
 
     /// Monotonic counter incremented on every successful (non-empty) rect
-    /// insertion. Renderers compare against their last-built modCount to
-    /// decide whether the GPU lookup buffer needs rebuilding. Cheap
-    /// approximation of a proper "dirty chars since last build" set.
+    /// insertion in either atlas. Renderers compare against their last-built
+    /// modCount to decide whether the GPU lookup buffer needs rebuilding.
     private(set) var modCount: Int = 0
 
     /// Glyphs with no visible ink (space, NBSP, control codes) — mapped to a
     /// zero rect so the shader doesn't sample the atlas for them.
     static let emptyRect = CGRect.zero
 
-    init(device: MTLDevice, metrics: FontMetrics, atlasSize: Int = 4096) throws {
+    init(
+        device: MTLDevice,
+        metrics: FontMetrics,
+        atlasSize: Int = 4096,
+        colorAtlasSize: Int = 2048
+    ) throws {
         self.device = device
         self.metrics = metrics
         self.atlasSize = atlasSize
+        self.colorAtlasSize = colorAtlasSize
 
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
+        // Mono atlas — R8, grayscale coverage.
+        let monoDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .r8Unorm,
             width: atlasSize,
             height: atlasSize,
             mipmapped: false
         )
-        desc.usage = [.shaderRead]
-        desc.storageMode = .shared
-        guard let tex = device.makeTexture(descriptor: desc) else {
+        monoDesc.usage = [.shaderRead]
+        monoDesc.storageMode = .shared
+        guard let monoTex = device.makeTexture(descriptor: monoDesc) else {
             throw RendererError.textureCreationFailed
         }
-        self.texture = tex
+        self.texture = monoTex
+
+        // Color atlas — BGRA8, holds pre-multiplied RGBA pixels rasterized
+        // from color fonts. The renderer samples from this atlas when the
+        // cell carries ATTR_COLOR_GLYPH and composites directly (no tint).
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: colorAtlasSize,
+            height: colorAtlasSize,
+            mipmapped: false
+        )
+        colorDesc.usage = [.shaderRead]
+        colorDesc.storageMode = .shared
+        guard let colorTex = device.makeTexture(descriptor: colorDesc) else {
+            throw RendererError.textureCreationFailed
+        }
+        self.colorTexture = colorTex
 
         // Reserve index 0 as the "blank" / empty-rect slot so `cell.ch == 0`
         // renders as pure background without a sampler read.
@@ -61,14 +98,26 @@ final class GlyphAtlas {
         rects[UInt32(" ".unicodeScalars.first!.value)] = GlyphAtlas.emptyRect
     }
 
-    /// Throw away every cached glyph and rewind the shelf allocator to
-    /// the top-left. Called when `uvRect(...)` can't fit a new glyph at
-    /// the current shelf position. Bumps `modCount` so renderers know
-    /// their GPU-side lookup table is stale and needs a rebuild. The
-    /// underlying MTLTexture is NOT cleared — stale pixels linger until
-    /// overwritten, but UV rects never point at them because all rect
-    /// entries are discarded. The blank/space reservations are
-    /// reinserted so `ch == 0` / `ch == 32` still short-circuit.
+    /// True when `ch` has been rasterized into the color atlas (i.e. its
+    /// resolved font is a color font — Apple Color Emoji on macOS). The
+    /// renderer uses this to tag `CellInstance.attrs` with `ATTR_COLOR_GLYPH`
+    /// before upload so the shader knows which atlas to sample. False for
+    /// mono glyphs, unrasterized codepoints, or empty/blank cells.
+    func isColorGlyph(_ ch: UInt32) -> Bool {
+        if let rect = colorRects[ch], !rect.isEmpty {
+            return true
+        }
+        return false
+    }
+
+    /// Throw away every cached glyph in both atlases and rewind the shelf
+    /// allocators. Called when `allocateRect(...)` can't fit a new glyph at
+    /// the current shelf position. Bumps `modCount` so renderers know their
+    /// GPU-side lookup table is stale and needs a rebuild. The underlying
+    /// MTLTextures are NOT cleared — stale pixels linger until overwritten,
+    /// but UV rects never point at them because all rect entries are
+    /// discarded. The blank/space reservations are reinserted so `ch == 0` /
+    /// `ch == 32` still short-circuit.
     func reset() {
         rects.removeAll(keepingCapacity: true)
         rects[0] = GlyphAtlas.emptyRect
@@ -76,18 +125,21 @@ final class GlyphAtlas {
         shelfX = 0
         shelfY = 0
         shelfHeight = 0
-        // Rebumping modCount is enough — renderers compare against their
-        // last-built snapshot, see the mismatch, rebuild lookup.
+
+        colorRects.removeAll(keepingCapacity: true)
+        colorShelfX = 0
+        colorShelfY = 0
+        colorShelfHeight = 0
+
         modCount &+= 1
     }
 
-    /// UV rect for `ch` in 0..1. Nil means "no glyph" — caller (shader)
-    /// should render pure background. Allocates into the atlas on first
-    /// request for a given char. `cellSpan` hints whether this codepoint
-    /// occupies two terminal cells (2) or one (1). Wide glyphs get a
-    /// 2× cellWidth bitmap so CJK / wide box-drawing renders at natural
-    /// proportions. The Rust grid marks wide-start cells with ATTR_WIDE
-    /// and the renderer passes `cellSpan: 2` here.
+    /// UV rect for `ch` in 0..1 of whichever atlas now owns the glyph. Nil
+    /// means "no glyph" — caller should render pure background. Allocates
+    /// into the atlas on first request. `cellSpan` hints whether this
+    /// codepoint occupies two terminal cells (2) or one (1). Wide glyphs
+    /// get a 2× cellWidth bitmap so CJK / wide box-drawing renders at
+    /// natural proportions.
     func uvRect(for ch: UInt32, cellSpan: Int = 1) -> CGRect? {
         return allocateRect(for: ch, cellSpan: cellSpan, allowReset: true)
     }
@@ -97,21 +149,58 @@ final class GlyphAtlas {
         cellSpan: Int,
         allowReset: Bool
     ) -> CGRect? {
+        // Cache: check both atlases first.
         if let cached = rects[ch] {
             return cached.isEmpty ? nil : cached
         }
-        guard let scalar = Unicode.Scalar(ch), !scalar.properties.isDefaultIgnorableCodePoint else {
+        if let cached = colorRects[ch] {
+            return cached.isEmpty ? nil : cached
+        }
+
+        guard let scalar = Unicode.Scalar(ch),
+              !scalar.properties.isDefaultIgnorableCodePoint else {
             rects[ch] = GlyphAtlas.emptyRect
             return nil
         }
 
-        // Rasterize.
-        guard let (pixelRect, pixels) = rasterize(scalar: scalar, cellSpan: max(1, cellSpan)) else {
+        // Rasterize — returns either .mono or .color depending on the
+        // resolved font. We don't know which atlas to pack into until
+        // font fallback has chosen the font.
+        guard let rasterized = rasterize(
+            scalar: scalar,
+            cellSpan: max(1, cellSpan)
+        ) else {
             rects[ch] = GlyphAtlas.emptyRect
             return nil
         }
 
-        // Shelf-pack.
+        switch rasterized {
+        case .mono(let pixelRect, let pixels):
+            return packMono(
+                ch: ch,
+                pixelRect: pixelRect,
+                pixels: pixels,
+                cellSpan: cellSpan,
+                allowReset: allowReset
+            )
+        case .color(let pixelRect, let pixels):
+            return packColor(
+                ch: ch,
+                pixelRect: pixelRect,
+                pixels: pixels,
+                cellSpan: cellSpan,
+                allowReset: allowReset
+            )
+        }
+    }
+
+    private func packMono(
+        ch: UInt32,
+        pixelRect: CGRect,
+        pixels: [UInt8],
+        cellSpan: Int,
+        allowReset: Bool
+    ) -> CGRect? {
         let w = Int(pixelRect.width)
         let h = Int(pixelRect.height)
         if w <= 0 || h <= 0 {
@@ -124,25 +213,14 @@ final class GlyphAtlas {
             shelfHeight = 0
         }
         if shelfY + h > atlasSize {
-            // Atlas full. Fall back to a one-shot reset: clear the atlas
-            // and retry once. Previously-cached rects become stale; the
-            // renderer detects this via the modCount bump and rebuilds
-            // its GPU lookup table on the next frame. A few dozen
-            // codepoints will re-rasterize; cost is bounded (~100μs
-            // each), and the pathological case only triggers if a user
-            // has somehow shown > 100k unique glyphs this session.
             if allowReset {
                 reset()
                 return allocateRect(for: ch, cellSpan: cellSpan, allowReset: false)
             }
-            // If even a fresh atlas can't fit this glyph (e.g. wider
-            // than the whole atlas width — shouldn't happen for sane
-            // cell sizes), give up.
             rects[ch] = GlyphAtlas.emptyRect
             return nil
         }
 
-        // Upload pixels.
         let region = MTLRegionMake2D(shelfX, shelfY, w, h)
         pixels.withUnsafeBufferPointer { buf in
             guard let base = buf.baseAddress else { return }
@@ -154,7 +232,6 @@ final class GlyphAtlas {
             )
         }
 
-        // UV rect in 0..1.
         let uv = CGRect(
             x: CGFloat(shelfX) / CGFloat(atlasSize),
             y: CGFloat(shelfY) / CGFloat(atlasSize),
@@ -162,7 +239,7 @@ final class GlyphAtlas {
             height: CGFloat(h) / CGFloat(atlasSize)
         )
         rects[ch] = uv
-        modCount &+= 1 // wrap-safe; renderer just checks != for inequality
+        modCount &+= 1
 
         shelfX += w
         shelfHeight = max(shelfHeight, h)
@@ -170,19 +247,75 @@ final class GlyphAtlas {
         return uv
     }
 
-    /// Rasterize a single glyph into an R8 pixel buffer with CoreText.
-    /// Returns (pixelRect, pixels) where pixelRect.size is the glyph's
-    /// bounding rect in pixels and pixels.count == width*height.
-    /// `cellSpan` controls the bitmap width: 1 for normal chars, 2 for
-    /// East-Asian Wide / CJK. Width is `cellSpan * cellWidth` pixels.
-    /// Supports astral codepoints (> U+FFFF) via surrogate-pair encoding
-    /// with font fallback — emoji glyphs still rasterize monochrome
-    /// (R8 atlas can't carry color; color-emoji support is Phase 2.20).
-    private func rasterize(scalar: Unicode.Scalar, cellSpan: Int = 1) -> (CGRect, [UInt8])? {
-        // Encode the scalar as UTF-16 so CoreText handles both BMP and
-        // astral codepoints through one code path. Astral scalars become
-        // a 2-unit surrogate pair; CTFont returns one glyph per scalar
-        // (the second slot comes back as 0).
+    private func packColor(
+        ch: UInt32,
+        pixelRect: CGRect,
+        pixels: [UInt8],
+        cellSpan: Int,
+        allowReset: Bool
+    ) -> CGRect? {
+        let w = Int(pixelRect.width)
+        let h = Int(pixelRect.height)
+        if w <= 0 || h <= 0 {
+            colorRects[ch] = GlyphAtlas.emptyRect
+            return nil
+        }
+        if colorShelfX + w > colorAtlasSize {
+            colorShelfY += colorShelfHeight
+            colorShelfX = 0
+            colorShelfHeight = 0
+        }
+        if colorShelfY + h > colorAtlasSize {
+            if allowReset {
+                reset()
+                return allocateRect(for: ch, cellSpan: cellSpan, allowReset: false)
+            }
+            colorRects[ch] = GlyphAtlas.emptyRect
+            return nil
+        }
+
+        let region = MTLRegionMake2D(colorShelfX, colorShelfY, w, h)
+        pixels.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            colorTexture.replace(
+                region: region,
+                mipmapLevel: 0,
+                withBytes: base,
+                bytesPerRow: w * 4  // BGRA
+            )
+        }
+
+        let uv = CGRect(
+            x: CGFloat(colorShelfX) / CGFloat(colorAtlasSize),
+            y: CGFloat(colorShelfY) / CGFloat(colorAtlasSize),
+            width: CGFloat(w) / CGFloat(colorAtlasSize),
+            height: CGFloat(h) / CGFloat(colorAtlasSize)
+        )
+        colorRects[ch] = uv
+        modCount &+= 1
+
+        colorShelfX += w
+        colorShelfHeight = max(colorShelfHeight, h)
+
+        return uv
+    }
+
+    private enum RasterResult {
+        case mono(CGRect, [UInt8])   // R8 bytes, length = w*h
+        case color(CGRect, [UInt8])  // BGRA bytes, length = w*h*4
+    }
+
+    /// Rasterize a single glyph with CoreText, returning whichever pixel
+    /// format fits the resolved font. Color fonts (Apple Color Emoji)
+    /// take the BGRA path; everything else is R8.
+    /// Supports astral codepoints via surrogate-pair encoding with font
+    /// fallback.
+    private func rasterize(
+        scalar: Unicode.Scalar,
+        cellSpan: Int = 1
+    ) -> RasterResult? {
+        // Encode as UTF-16 so CoreText handles both BMP and astral
+        // codepoints through one code path.
         let chars = Array(String(scalar).utf16)
         guard !chars.isEmpty else { return nil }
 
@@ -192,7 +325,9 @@ final class GlyphAtlas {
         var glyphs = [CGGlyph](repeating: 0, count: chars.count)
         _ = chars.withUnsafeBufferPointer { charBuf in
             glyphs.withUnsafeMutableBufferPointer { glyphBuf in
-                CTFontGetGlyphsForCharacters(activeFont, charBuf.baseAddress!, glyphBuf.baseAddress!, chars.count)
+                CTFontGetGlyphsForCharacters(
+                    activeFont, charBuf.baseAddress!, glyphBuf.baseAddress!, chars.count
+                )
             }
         }
         if glyphs[0] == 0 {
@@ -201,19 +336,43 @@ final class GlyphAtlas {
             activeFont = CTFontCreateForString(metrics.font, cfStr, range)
             _ = chars.withUnsafeBufferPointer { charBuf in
                 glyphs.withUnsafeMutableBufferPointer { glyphBuf in
-                    CTFontGetGlyphsForCharacters(activeFont, charBuf.baseAddress!, glyphBuf.baseAddress!, chars.count)
+                    CTFontGetGlyphsForCharacters(
+                        activeFont, charBuf.baseAddress!, glyphBuf.baseAddress!, chars.count
+                    )
                 }
             }
         }
         guard glyphs[0] != 0 else { return nil }
         let glyph = glyphs[0]
 
-        // Cell-sized bitmap so baseline positioning is consistent per row.
-        // Wide glyphs double the width so the CJK shape renders unsquished.
         let w = Int(metrics.cellWidth) * max(1, cellSpan)
         let h = Int(metrics.cellHeight)
         guard w > 0, h > 0 else { return nil }
 
+        if isColorFont(activeFont) {
+            return rasterizeColor(glyph: glyph, font: activeFont, w: w, h: h)
+        }
+        return rasterizeMono(glyph: glyph, font: activeFont, w: w, h: h)
+    }
+
+    /// Apple Color Emoji is the only color font macOS ships by default, so
+    /// family-name parity catches every case that CoreText's fallback
+    /// resolver routes to a color font. A more pedantic check would inspect
+    /// the font's sbix / COLR / CBDT tables, but this costs nothing and
+    /// is equivalent in practice.
+    private func isColorFont(_ font: CTFont) -> Bool {
+        let name = CTFontCopyFamilyName(font) as String
+        return name == "Apple Color Emoji"
+    }
+
+    /// R8 path — white ink, grayscale coverage. Unchanged from the
+    /// pre-dual-atlas era.
+    private func rasterizeMono(
+        glyph: CGGlyph,
+        font: CTFont,
+        w: Int,
+        h: Int
+    ) -> RasterResult? {
         let colorSpace = CGColorSpaceCreateDeviceGray()
         var pixels = [UInt8](repeating: 0, count: w * h)
         guard let ctx = pixels.withUnsafeMutableBufferPointer({ buf -> CGContext? in
@@ -233,36 +392,72 @@ final class GlyphAtlas {
         ctx.setShouldAntialias(true)
         ctx.setShouldSmoothFonts(true)
         ctx.setAllowsAntialiasing(true)
-        // White ink on a cleared (black) bitmap — the R channel doubles as
-        // glyph coverage for the R8 atlas.
+        // White ink on a cleared (black) bitmap — R channel doubles as
+        // glyph coverage in the R8 atlas.
         ctx.setFillColor(
-            CGColor(colorSpace: colorSpace, components: [1.0, 1.0]) ?? .init(gray: 1.0, alpha: 1.0)
+            CGColor(colorSpace: colorSpace, components: [1.0, 1.0])
+                ?? .init(gray: 1.0, alpha: 1.0)
         )
 
-        // CoreText y-origin is at baseline, pointing up. Our atlas is top-left
-        // origin. Flip so baseline lands at `cellHeight - metrics.baseline`
-        // pixels from the top.
-        var position = CGPoint(
-            x: 0,
-            y: CGFloat(h) - metrics.baseline
-        )
+        var position = CGPoint(x: 0, y: CGFloat(h) - metrics.baseline)
         var g = glyph
-        // Draw with the (possibly fallback-resolved) font so emoji /
-        // CJK glyphs land at the right size. Monochrome — color emoji
-        // requires an RGBA atlas.
-        CTFontDrawGlyphs(activeFont, &g, &position, 1, ctx)
+        CTFontDrawGlyphs(font, &g, &position, 1, ctx)
 
-        return (CGRect(x: 0, y: 0, width: w, height: h), pixels)
+        return .mono(CGRect(x: 0, y: 0, width: w, height: h), pixels)
+    }
+
+    /// BGRA8 premultiplied path — color fonts carry their own pixel colors
+    /// via embedded bitmaps (sbix on Apple Color Emoji). The fragment
+    /// shader composites directly (no tint) so the emoji renders in its
+    /// author-intended colors.
+    private func rasterizeColor(
+        glyph: CGGlyph,
+        font: CTFont,
+        w: Int,
+        h: Int
+    ) -> RasterResult? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        // Premultiplied-first + byteOrder32Little = BGRA pixel layout,
+        // matching the MTLPixelFormat.bgra8Unorm color atlas and Metal's
+        // texture read convention.
+        let bitmapInfo: UInt32 =
+            CGImageAlphaInfo.premultipliedFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = pixels.withUnsafeMutableBufferPointer({ buf -> CGContext? in
+            CGContext(
+                data: buf.baseAddress,
+                width: w,
+                height: h,
+                bitsPerComponent: 8,
+                bytesPerRow: w * 4,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            )
+        }) else {
+            return nil
+        }
+
+        ctx.setShouldAntialias(true)
+        ctx.setShouldSmoothFonts(true)
+        ctx.setAllowsAntialiasing(true)
+        // No fill color set — CTFontDrawGlyphs on a color font copies
+        // the author-authored bitmap/sbix pixels verbatim.
+
+        var position = CGPoint(x: 0, y: CGFloat(h) - metrics.baseline)
+        var g = glyph
+        CTFontDrawGlyphs(font, &g, &position, 1, ctx)
+
+        return .color(CGRect(x: 0, y: 0, width: w, height: h), pixels)
     }
 
     /// Copy the current `slot -> GlyphRect(u0,v0,u1,v1)` table into a
     /// Metal buffer sized `maxCodepoint + 1`. For BMP slots (< 0x10000)
     /// the "slot" is the Unicode codepoint itself. For astral slots
     /// (>= 0x10000), `slotMap[slot]` gives the real astral codepoint
-    /// whose UV rect to write — the renderer uses this to remap its
-    /// cell.ch from raw astral values to dense PUA-above-BMP slots that
-    /// fit within the lookup buffer's bound. Nil slotMap → BMP-only
-    /// behavior (pre-Phase 2.19).
+    /// whose UV rect to write. The UV rect comes from whichever atlas
+    /// owns the glyph — color rects first, then mono, so color takes
+    /// precedence if somehow both are populated.
     func buildLookupBuffer(
         device: MTLDevice,
         maxCodepoint: UInt32 = 0x80,
@@ -270,7 +465,10 @@ final class GlyphAtlas {
     ) -> MTLBuffer? {
         let count = Int(maxCodepoint) + 1
         let stride = MemoryLayout<SIMD4<Float>>.stride
-        guard let buffer = device.makeBuffer(length: stride * count, options: .storageModeShared) else {
+        guard let buffer = device.makeBuffer(
+            length: stride * count,
+            options: .storageModeShared
+        ) else {
             return nil
         }
         let ptr = buffer.contents().bindMemory(to: SIMD4<Float>.self, capacity: count)
@@ -284,7 +482,12 @@ final class GlyphAtlas {
                 ptr[i] = SIMD4<Float>(0, 0, 0, 0)
                 continue
             }
-            if let rect = rects[key], !rect.isEmpty {
+            if let rect = colorRects[key], !rect.isEmpty {
+                ptr[i] = SIMD4<Float>(
+                    Float(rect.minX), Float(rect.minY),
+                    Float(rect.maxX), Float(rect.maxY)
+                )
+            } else if let rect = rects[key], !rect.isEmpty {
                 ptr[i] = SIMD4<Float>(
                     Float(rect.minX), Float(rect.minY),
                     Float(rect.maxX), Float(rect.maxY)

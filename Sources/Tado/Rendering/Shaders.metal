@@ -182,12 +182,26 @@ vertex VertexOut terminal_vertex(
 fragment float4 terminal_fragment(
     VertexOut in [[stage_in]],
     texture2d<float> atlas [[texture(0)]],
+    texture2d<float> colorAtlas [[texture(1)]],
     sampler atlasSampler [[sampler(0)]]
 ) {
     float4 color = in.bg;
     if (in.hasGlyph != 0u) {
-        float coverage = atlas.sample(atlasSampler, in.uv).r;
-        color = mix(in.bg, in.fg, coverage * in.fg.a);
+        // ATTR_COLOR_GLYPH (bit 8, mask 0x100) is set by the renderer when
+        // the glyph lives in the BGRA color atlas — i.e. its resolved font
+        // is Apple Color Emoji. In that case sample the color atlas and
+        // composite the premultiplied pixels over bg. Tinting (fg) is
+        // skipped because color fonts carry their own author-authored
+        // colors; overriding would recolor emoji to the terminal fg.
+        bool isColorGlyph = (in.attrs & 0x100u) != 0u;
+        if (isColorGlyph) {
+            float4 sample = colorAtlas.sample(atlasSampler, in.uv);
+            // Premultiplied "over" composite: out = src + dst * (1 - src.a).
+            color = float4(sample.rgb + in.bg.rgb * (1.0 - sample.a), 1.0);
+        } else {
+            float coverage = atlas.sample(atlasSampler, in.uv).r;
+            color = mix(in.bg, in.fg, coverage * in.fg.a);
+        }
     }
     return color;
 }

@@ -156,15 +156,93 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertGreaterThan(atlas.modCount, beforeMod)
     }
 
+    /// Phase 2.20 — emoji rasterizes via the BGRA color atlas and ends up
+    /// with meaningfully-different R/G/B channels in the rendered frame.
+    /// Before this phase, `CTFontDrawGlyphs` onto an R8 grayscale context
+    /// produced a silhouette with R==G==B; after, the color atlas carries
+    /// Apple Color Emoji's sbix pixels verbatim and the shader composites
+    /// them without tinting.
+    func testEmojiRendersInColor() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("no Metal device")
+        }
+        let renderer = try MetalTerminalRenderer(device: device, cols: 2, rows: 1)
+        // 🎉 party popper: multi-colored (red, yellow, blue) — reliable
+        // channel-spread signal. Wide char (East-Asian Wide), so the
+        // glyph actually fills both cells.
+        let party: UInt32 = 0x1F389
+        let snapshot = syntheticSnapshot(cols: 2, rows: 1) { c, _ in
+            switch c {
+            case 0:
+                // Mark as wide; col 1 becomes the WIDE_FILLER skipped quad.
+                return TadoCore.Cell(
+                    ch: party,
+                    fg: 0xFFFFFFFF,
+                    bg: 0x000000FF,
+                    attrs: MetalTerminalRenderer.Attr.wide
+                )
+            default:
+                return TadoCore.Cell(
+                    ch: 0,
+                    fg: 0xE8E8E8FF,
+                    bg: 0x000000FF,
+                    attrs: MetalTerminalRenderer.Attr.wideFiller
+                )
+            }
+        }
+        renderer.upload(snapshot: snapshot)
+
+        let cellW = Int(renderer.metrics.cellWidth)
+        let cellH = Int(renderer.metrics.cellHeight)
+        let w = cellW * 2
+        let h = cellH
+        guard let tex = renderer.renderOffscreen(width: w, height: h) else {
+            XCTFail("renderOffscreen returned nil")
+            return
+        }
+
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        pixels.withUnsafeMutableBufferPointer { buf in
+            tex.getBytes(
+                buf.baseAddress!,
+                bytesPerRow: w * 4,
+                from: MTLRegionMake2D(0, 0, w, h),
+                mipmapLevel: 0
+            )
+        }
+
+        // Count pixels where the color channels diverge meaningfully.
+        // Layout is BGRA — byte order B, G, R, A per pixel. A monochrome
+        // emoji would have R == G == B for every lit pixel. A colored
+        // emoji yields many pixels with a spread > 32 (the threshold is
+        // chosen above AA softening but below visible differentiation).
+        var colorfulPixels = 0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let b = Int(pixels[i])
+            let g = Int(pixels[i + 1])
+            let r = Int(pixels[i + 2])
+            let minChan = min(r, min(g, b))
+            let maxChan = max(r, max(g, b))
+            if maxChan - minChan > 32 {
+                colorfulPixels += 1
+            }
+        }
+        XCTAssertGreaterThan(
+            colorfulPixels, 10,
+            "expected 🎉 to render in color via the BGRA color atlas — got only \(colorfulPixels) pixels with channel spread > 32 (monochrome regression?)"
+        )
+    }
+
     /// Astral-plane codepoints (> U+FFFF) previously returned nil
     /// unconditionally. Phase 2.19 makes the atlas try a surrogate-pair
     /// + font-fallback rasterization path. The test hits two cases:
     ///   * U+1D400 (MATHEMATICAL BOLD CAPITAL A) — part of the
     ///     mathematical alphanumeric block; broadly supported by
     ///     system fonts on macOS.
-    ///   * U+1F600 (GRINNING FACE) — emoji; Apple Color Emoji covers
-    ///     it. Rendered monochrome for now (Phase 2.20 territory for
-    ///     color), but at least it produces a glyph rect.
+    ///   * U+1F600 (GRINNING FACE) — emoji; Apple Color Emoji covers it.
+    ///     Phase 2.20 rasterizes this into the color atlas; the test
+    ///     still passes because `uvRect(for:)` returns non-nil for either
+    ///     atlas.
     func testAstralCodepointsRasterize() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
