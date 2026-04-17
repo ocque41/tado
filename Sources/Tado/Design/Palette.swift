@@ -6,20 +6,25 @@ import AppKit
 /// edit. The canvas + terminal grids still use `TerminalTheme` — they
 /// have their own concept of color (per-tile bg/fg, 16-slot ANSI).
 ///
-/// Three anchor colors, picked to read as "deep plum + ember":
+/// Three anchor colors, picked to read as "neutral dark + ember":
 ///
-/// - `background` `#1B1127`  — eggplant, just off-black. Sidebar + window.
-/// - `foreground` `#F5F5F5`  — near-white. Primary text.
+/// - `background` `#1A1A1A`  — neutral dark. Sidebar + window.
+/// - `foreground` `#F5F5F5`  — near-white (neutral). Primary text.
 /// - `accent`     `#A44718`  — burnt sienna. Focus rings, progress, links.
 ///
-/// The rest of the palette is derived from these three so tints and
-/// muted variants always stay in the same family.
+/// Every surface below is a pure neutral grey (equal R/G/B channels) so
+/// the only chromatic element in the UI is the burnt-sienna accent.
+/// Surfaces step from deepest (`canvas` `#0F0F0F`, under tiles) to window
+/// base (`#1A1A1A`) to raised (`surface` `#222222`, cards) to nested-raised
+/// (`surfaceElevated` `#2A2A2A`, tile titlebars). Text tiers use the
+/// neutral foreground at varying alphas — when composited on a neutral
+/// backdrop they render as true greys, no hue bleed.
 enum Palette {
     // MARK: Anchors
 
-    /// Deep plum — window + sidebar background.
-    static let background = Color(hex: 0x1B1127)
-    /// Near-white — primary text + active icon.
+    /// Neutral dark — window + sidebar background.
+    static let background = Color(hex: 0x1A1A1A)
+    /// Near-white neutral — primary text + active icon.
     static let foreground = Color(hex: 0xF5F5F5)
     /// Burnt sienna — focus rings, primary-button fill, active tab pill.
     static let accent = Color(hex: 0xA44718)
@@ -28,15 +33,15 @@ enum Palette {
 
     /// A hair lighter than `background` — used for raised surfaces
     /// (cards, popovers) so they read as "sitting on top of" the window.
-    static let surface = Color(hex: 0x251631)
+    static let surface = Color(hex: 0x222222)
     /// One step more elevated than `surface` — used for tile titlebars
     /// and the "click target" row of a card (a nested raised surface
     /// against `surface`).
-    static let surfaceElevated = Color(hex: 0x2E1B3D)
+    static let surfaceElevated = Color(hex: 0x2A2A2A)
     /// Canvas / terminal background — the deepest surface in the stack.
     /// A shade darker than `background` so tiles sitting on the canvas
     /// still read as "above" it.
-    static let canvas = Color(hex: 0x140A1E)
+    static let canvas = Color(hex: 0x0F0F0F)
     /// Raised surface when focused/selected. Just the accent at 12%.
     static let surfaceAccent = Color(hex: 0xA44718, alpha: 0.12)
     /// Soft accent wash for form "edit mode" strips — matches surfaceAccent
@@ -47,9 +52,11 @@ enum Palette {
 
     // MARK: Text tiers
 
-    /// Body text, labels.
+    /// Body text, labels. Pure neutral white (245/245/245).
     static let textPrimary = foreground
     /// Secondary text — help copy, descriptions, captions.
+    /// Near-white at 65% alpha; composites to pure grey on neutral
+    /// backgrounds with no hue tint.
     static let textSecondary = Color(hex: 0xF5F5F5, alpha: 0.65)
     /// Disabled text / placeholders.
     static let textTertiary = Color(hex: 0xF5F5F5, alpha: 0.35)
