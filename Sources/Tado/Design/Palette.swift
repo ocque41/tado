@@ -14,15 +14,27 @@ import AppKit
 ///
 /// Every surface below is a pure neutral grey (equal R/G/B channels) so
 /// the only chromatic element in the UI is the burnt-sienna accent.
-/// Surfaces step from deepest (`canvas` `#0F0F0F`, under tiles) to window
-/// base (`#1A1A1A`) to raised (`surface` `#222222`, cards) to nested-raised
-/// (`surfaceElevated` `#2A2A2A`, tile titlebars). Text tiers use the
-/// neutral foreground at varying alphas — when composited on a neutral
-/// backdrop they render as true greys, no hue bleed.
+///
+/// The surface stack is intentionally **flat**: `background`, `canvas`,
+/// and `surface` all resolve to the same `#1A1A1A` so the canvas, every
+/// page body, and every page header (Todos / Projects / Teams / Sidebar
+/// / Dispatch modal top bars) read as a single unbroken neutral. The
+/// existing `Divider()` strokes in each view provide structural
+/// separation between header and body instead of a fill delta.
+///
+/// Only `surfaceElevated` (`#2A2A2A`) stays slightly raised — used by
+/// tile titlebars, list-section headers, and small action pills where
+/// a fill contrast is the affordance cue ("this chip is clickable").
+/// Flattening that to `#1A1A1A` too would erase button edges against
+/// the page body.
+///
+/// Text tiers use the neutral foreground at varying alphas — when
+/// composited on the neutral backdrop they render as true greys, no
+/// hue bleed.
 enum Palette {
     // MARK: Anchors
 
-    /// Neutral dark — window + sidebar background.
+    /// Neutral dark — window + page + canvas background. All flat.
     static let background = Color(hex: 0x1A1A1A)
     /// Near-white neutral — primary text + active icon.
     static let foreground = Color(hex: 0xF5F5F5)
@@ -31,17 +43,18 @@ enum Palette {
 
     // MARK: Surfaces
 
-    /// A hair lighter than `background` — used for raised surfaces
-    /// (cards, popovers) so they read as "sitting on top of" the window.
-    static let surface = Color(hex: 0x222222)
-    /// One step more elevated than `surface` — used for tile titlebars
-    /// and the "click target" row of a card (a nested raised surface
-    /// against `surface`).
+    /// Alias for `background` — kept as a distinct token so view code
+    /// can still express intent ("this is a raised strip, even though
+    /// the fill matches the page") and a future design pass can split
+    /// them again without a rename.
+    static let surface = Color(hex: 0x1A1A1A)
+    /// The one surface that stays slightly raised — `#2A2A2A`. Used by
+    /// tile titlebars, list-section headers, and pill buttons where
+    /// the fill delta is the affordance cue.
     static let surfaceElevated = Color(hex: 0x2A2A2A)
-    /// Canvas / terminal background — the deepest surface in the stack.
-    /// A shade darker than `background` so tiles sitting on the canvas
-    /// still read as "above" it.
-    static let canvas = Color(hex: 0x0F0F0F)
+    /// Canvas background — flat with the window. Tiles are delineated
+    /// by their 1px divider border, not by a canvas/tile fill contrast.
+    static let canvas = Color(hex: 0x1A1A1A)
     /// Raised surface when focused/selected. Just the accent at 12%.
     static let surfaceAccent = Color(hex: 0xA44718, alpha: 0.12)
     /// Soft accent wash for form "edit mode" strips — matches surfaceAccent
