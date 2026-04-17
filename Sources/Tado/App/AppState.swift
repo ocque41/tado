@@ -129,20 +129,26 @@ enum CodexEffort: String, Codable, CaseIterable {
 }
 
 enum ClaudeModel: String, Codable, CaseIterable {
-    case opus46 = "claude-opus-4-6"
-    case opus46_1m = "claude-opus-4-6[1m]"
+    case opus47 = "claude-opus-4-7"
     case sonnet46 = "claude-sonnet-4-6"
     case haiku45 = "claude-haiku-4-5"
 
     var displayName: String {
         switch self {
-        case .opus46: "Opus 4.6"
-        case .opus46_1m: "Opus 4.6 1M"
+        case .opus47: "Opus 4.7"
         case .sonnet46: "Sonnet 4.6"
         case .haiku45: "Haiku 4.5"
         }
     }
 
+    /// Claude Code's `--model` flag takes a plain model id. Variants like
+    /// `opus[1m]` (1M context) are *not* resolvable through the CLI flag —
+    /// the parser rejects the bracketed suffix with "model not found". The
+    /// working entry points for 1M are the `/model opus[1m]` slash command,
+    /// `settings.json` with `"model": "opus[1m]"`, or the
+    /// `ANTHROPIC_MODEL=opus[1m]` env var. None of those belong in the
+    /// picker without a dedicated UI, so Tado's picker exposes plain ids
+    /// only and the 1M mode is reachable via the shell inside the tile.
     var cliFlags: [String] {
         return ["--model", rawValue]
     }

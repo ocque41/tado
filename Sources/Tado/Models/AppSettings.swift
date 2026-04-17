@@ -10,7 +10,7 @@ final class AppSettings {
     var codexModeRaw: String = CodexMode.defaultPermissions.rawValue
     var claudeEffortRaw: String = ClaudeEffort.high.rawValue
     var codexEffortRaw: String = CodexEffort.high.rawValue
-    var claudeModelRaw: String = ClaudeModel.opus46.rawValue
+    var claudeModelRaw: String = ClaudeModel.opus47.rawValue
     var codexModelRaw: String = CodexModel.gpt54.rawValue
 
     // Display / harness UI — defaults match Boris Cherny's "no flicker + all useful UI"
@@ -75,7 +75,7 @@ final class AppSettings {
         self.codexModeRaw = CodexMode.defaultPermissions.rawValue
         self.claudeEffortRaw = ClaudeEffort.high.rawValue
         self.codexEffortRaw = CodexEffort.high.rawValue
-        self.claudeModelRaw = ClaudeModel.opus46.rawValue
+        self.claudeModelRaw = ClaudeModel.opus47.rawValue
         self.codexModelRaw = CodexModel.gpt54.rawValue
     }
 
@@ -105,7 +105,7 @@ final class AppSettings {
     }
 
     var claudeModel: ClaudeModel {
-        get { ClaudeModel(rawValue: claudeModelRaw) ?? .opus46 }
+        get { ClaudeModel(rawValue: claudeModelRaw) ?? .opus47 }
         set { claudeModelRaw = newValue.rawValue }
     }
 

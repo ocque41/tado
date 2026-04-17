@@ -27,14 +27,15 @@ struct TeamsView: View {
                         Image(systemName: "plus")
                         Text("New Team")
                     }
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                 }
                 .buttonStyle(.plain)
                 .disabled(projects.isEmpty)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(.ultraThinMaterial)
+            .background(Palette.surface)
 
             Divider()
 
@@ -49,16 +50,16 @@ struct TeamsView: View {
                 Spacer()
                 VStack(spacing: 8) {
                     Text("No teams yet")
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.heading)
+                        .foregroundStyle(Palette.textSecondary)
                     if projects.isEmpty {
                         Text("Create a project first, then add teams")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textTertiary)
                     } else {
                         Text("Create a team to organize agents")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textTertiary)
                     }
                 }
                 Spacer()
@@ -85,15 +86,16 @@ struct TeamsView: View {
             HStack(spacing: 8) {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 11))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(Palette.accent)
                 Text(project.name.uppercased())
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(Typography.callout)
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.textSecondary)
                 Spacer()
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.05))
+            .background(Palette.surfaceElevated)
 
             ForEach(teams) { team in
                 teamRow(team, project: project)
@@ -116,40 +118,41 @@ struct TeamsView: View {
                 HStack(spacing: 10) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Palette.textTertiary)
                         .frame(width: 14)
 
                     Image(systemName: "person.3")
                         .font(.system(size: 12))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(Palette.accent)
 
                     Text(team.name)
-                        .font(.system(size: 14, weight: .medium, design: .monospaced))
+                        .font(Typography.monoDefaultEmph)
+                        .foregroundStyle(Palette.textPrimary)
 
                     Spacer()
 
                     Text("\(team.agentNames.count) agents")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.1))
+                        .background(Palette.surfaceElevated)
                         .clipShape(Capsule())
 
                     if todoCount > 0 {
                         Text("\(todoCount) todos")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.orange)
+                            .font(Typography.monoMicro)
+                            .foregroundStyle(Palette.accent)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.1))
+                            .background(Palette.surfaceAccent)
                             .clipShape(Capsule())
                     }
 
                     Button(action: { deleteTeam(team) }) {
                         Image(systemName: "trash")
                             .font(.system(size: 11))
-                            .foregroundStyle(.red.opacity(0.7))
+                            .foregroundStyle(Palette.danger.opacity(0.8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -175,24 +178,25 @@ struct TeamsView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 11))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(Palette.accent)
                     Text(agent?.name ?? agentName)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(Typography.monoRow)
+                        .foregroundStyle(Palette.textPrimary)
                     if let agent = agent {
                         Text("(\(agent.source.rawValue))")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .font(Typography.monoMicro)
+                            .foregroundStyle(Palette.textTertiary)
                     }
                     if agent == nil {
                         Text("(not found on disk)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.red)
+                            .font(Typography.monoMicro)
+                            .foregroundStyle(Palette.danger)
                     }
                     Spacer()
                     Button(action: { removeAgentFromTeam(team, agentName: agentName) }) {
                         Image(systemName: "minus.circle")
                             .font(.system(size: 11))
-                            .foregroundStyle(.red.opacity(0.7))
+                            .foregroundStyle(Palette.danger.opacity(0.8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -205,17 +209,17 @@ struct TeamsView: View {
             if !unassigned.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Add:")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textTertiary)
                     FlowLayout(spacing: 4) {
                         ForEach(unassigned) { agent in
                             Button(action: { addAgentToTeam(team, agentName: agent.id) }) {
                                 Text(agent.name)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .font(Typography.monoMicro)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 3)
-                                    .background(Color.accentColor.opacity(0.1))
-                                    .foregroundColor(.accentColor)
+                                    .background(Palette.surfaceAccent)
+                                    .foregroundColor(Palette.accent)
                                     .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
@@ -227,7 +231,7 @@ struct TeamsView: View {
             }
         }
         .padding(.bottom, 4)
-        .background(Color.accentColor.opacity(0.02))
+        .background(Palette.surfaceAccentSoft)
     }
 
     // MARK: - New Team Form
@@ -240,7 +244,8 @@ struct TeamsView: View {
             HStack(spacing: 10) {
                 TextField("Team name", text: $newTeamName)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(Typography.monoBody)
+                    .foregroundStyle(Palette.textPrimary)
 
                 Picker("Project", selection: $newTeamProjectID) {
                     Text("Select project...").tag(nil as UUID?)
@@ -249,14 +254,14 @@ struct TeamsView: View {
                     }
                 }
                 .frame(width: 160)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Typography.monoCaption)
             }
 
             if !agents.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Agents:")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.textSecondary)
                     FlowLayout(spacing: 4) {
                         ForEach(agents) { agent in
                             agentToggleButton(agent)
@@ -271,18 +276,20 @@ struct TeamsView: View {
                     showNewTeam = false
                     resetNewTeamForm()
                 }
-                .font(.system(size: 12, design: .monospaced))
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
                 .buttonStyle(.plain)
 
                 Button("Create") { createTeam() }
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                     .buttonStyle(.plain)
                     .disabled(newTeamName.isEmpty || newTeamProjectID == nil)
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(Color.accentColor.opacity(0.04))
+        .background(Palette.surfaceAccentSoft)
     }
 
     private func agentToggleButton(_ agent: AgentDefinition) -> some View {
@@ -295,15 +302,15 @@ struct TeamsView: View {
             }
         }) {
             Text(agent.name)
-                .font(.system(size: 10, design: .monospaced))
+                .font(Typography.monoMicro)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
-                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .background(isSelected ? Palette.surfaceAccent : Palette.surfaceElevated)
+                .foregroundColor(isSelected ? Palette.accent : Palette.textSecondary)
                 .clipShape(Capsule())
                 .overlay(
                     Capsule()
-                        .strokeBorder(isSelected ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
+                        .strokeBorder(isSelected ? Palette.accent.opacity(0.5) : Color.clear, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)

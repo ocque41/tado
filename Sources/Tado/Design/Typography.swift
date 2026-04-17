@@ -27,9 +27,23 @@ import CoreText
 ///  - `callout`  11pt Medium    — status chips, metadata
 ///  - `caption`  11pt Regular   — footnote / secondary descriptions
 ///  - `micro`    10pt Regular   — dense metadata, keyboard shortcut hints
-///  - `monoLabel` 12pt Medium mono — where monospace is semantically right
-///    (grid coords, session IDs, paths) — kept so the code side of the
-///    UI still reads as code.
+///
+/// Mono scale (SF Mono) — reserved for things that are *data*: todo text,
+/// paths, grid coords, keyboard hints, agent ids. UI chrome reads as
+/// Jakarta Sans; only the data sitting inside the chrome reads as code.
+///  - `monoHeading`       13pt Semibold mono — dispatch modal title
+///  - `monoBody`          13pt Regular mono  — dispatch body, project input
+///  - `monoBodyEmphasis`  13pt Medium mono   — emphasized body
+///  - `monoDefault`       14pt Regular mono  — todo row display name
+///  - `monoDefaultEmph`   14pt Medium mono   — project / team row name
+///  - `monoLabel`         12pt Medium mono   — selected agent name
+///  - `monoRow`           12pt Regular mono  — sidebar session row text
+///  - `monoCallout`       11pt Medium mono   — emphasized caption
+///  - `monoCaption`       11pt Regular mono  — paths, 11pt secondary
+///  - `monoMicro`         10pt Regular mono  — grid labels, metadata
+///  - `monoMicroEmph`     10pt Medium mono   — agent name in titlebar
+///  - `monoBadge`         10pt Bold mono     — queue/count pills
+///  - `monoBadgeSmall`     9pt Bold mono     — titlebar unread count
 enum Typography {
     // MARK: Font family
 
@@ -49,9 +63,25 @@ enum Typography {
     static let callout  = sans(size: 11, weight: .medium)
     static let caption  = sans(size: 11, weight: .regular)
     static let micro    = sans(size: 10, weight: .regular)
-    /// Monospace label — use for things that are *data* (coords, UUIDs,
-    /// paths). Keeps SF Mono so columns line up.
-    static let monoLabel = Font.system(size: 12, weight: .medium, design: .monospaced)
+    // MARK: Mono scale
+
+    /// Monospace variants — see header doc. Kept on SF Mono (system
+    /// `.monospaced` design) so columns line up; Jakarta Sans is a
+    /// proportional family and would break the "this is data / code"
+    /// reading. Ordered largest → smallest to match the sans scale.
+    static let monoHeading      = Font.system(size: 13, weight: .semibold, design: .monospaced)
+    static let monoBody         = Font.system(size: 13, weight: .regular,  design: .monospaced)
+    static let monoBodyEmphasis = Font.system(size: 13, weight: .medium,   design: .monospaced)
+    static let monoDefault      = Font.system(size: 14, weight: .regular,  design: .monospaced)
+    static let monoDefaultEmph  = Font.system(size: 14, weight: .medium,   design: .monospaced)
+    static let monoLabel        = Font.system(size: 12, weight: .medium,   design: .monospaced)
+    static let monoRow          = Font.system(size: 12, weight: .regular,  design: .monospaced)
+    static let monoCallout      = Font.system(size: 11, weight: .medium,   design: .monospaced)
+    static let monoCaption      = Font.system(size: 11, weight: .regular,  design: .monospaced)
+    static let monoMicro        = Font.system(size: 10, weight: .regular,  design: .monospaced)
+    static let monoMicroEmph    = Font.system(size: 10, weight: .medium,   design: .monospaced)
+    static let monoBadge        = Font.system(size: 10, weight: .bold,     design: .monospaced)
+    static let monoBadgeSmall   = Font.system(size: 9,  weight: .bold,     design: .monospaced)
 
     // MARK: Arbitrary sizes
 

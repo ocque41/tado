@@ -73,7 +73,7 @@ struct TerminalTileView: View {
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
             )
         }
-        .background(Color(nsColor: NSColor(white: 0.12, alpha: 1.0)))
+        .background(Palette.surface)
         .frame(
             width: isResizing ? visualWidth : session.tileWidth,
             height: isResizing ? visualHeight : session.tileHeight
@@ -81,24 +81,24 @@ struct TerminalTileView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                .stroke(Palette.divider, lineWidth: 1)
         )
         .compositingGroup()
         .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
         .overlay {
             if isResizing {
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.accentColor.opacity(0.6), lineWidth: 2)
+                    .stroke(Palette.accent.opacity(0.7), lineWidth: 2)
             }
         }
         .overlay(alignment: .bottomTrailing) {
             if isResizing {
                 Text("\(Int(visualWidth)) x \(Int(visualHeight))")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.foreground.opacity(0.85))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(.black.opacity(0.6)))
+                    .background(Capsule().fill(Palette.background.opacity(0.7)))
                     .padding(8)
             }
         }
@@ -114,49 +114,49 @@ struct TerminalTileView: View {
     private var titleBar: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(session.isRunning ? .green : .orange)
+                .fill(session.isRunning ? Palette.success : Palette.warning)
                 .frame(width: 8, height: 8)
 
             if let agent = session.agentName {
                 Text(agent)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(.accentColor)
+                    .font(Typography.monoMicroEmph)
+                    .foregroundColor(Palette.accent)
                     .lineLimit(1)
                 Text("|")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.textTertiary)
             }
 
             Text(session.todoText)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(Typography.monoCaption)
+                .foregroundStyle(Palette.textSecondary)
                 .lineLimit(1)
 
             Spacer()
 
             Text(CanvasLayout.gridLabel(forIndex: session.gridIndex))
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .font(Typography.monoMicro)
+                .foregroundStyle(Palette.textTertiary)
 
             if session.unreadMessageCount > 0 {
                 Text("\(session.unreadMessageCount)")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .font(Typography.monoBadgeSmall)
+                    .foregroundStyle(Palette.foreground)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(Capsule().fill(.blue))
+                    .background(Capsule().fill(Palette.accent))
             }
 
             Button(action: { terminalManager.terminateSession(session.id) }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.textSecondary)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color(nsColor: NSColor(white: 0.15, alpha: 1.0)))
+        .background(Palette.surfaceElevated)
         .contentShape(Rectangle())
         .gesture(tileDragGesture)
     }
@@ -246,7 +246,7 @@ struct TerminalTileView: View {
                 var path = Path()
                 path.move(to: CGPoint(x: i, y: size.height - 1))
                 path.addLine(to: CGPoint(x: size.width - 1, y: i))
-                context.stroke(path, with: .color(.white.opacity(0.3)), lineWidth: 1)
+                context.stroke(path, with: .color(Palette.foreground.opacity(0.3)), lineWidth: 1)
             }
         }
     }
@@ -371,12 +371,12 @@ private struct OffscreenTilePlaceholder: View {
 
     var body: some View {
         Rectangle()
-            .fill(Color.black)
+            .fill(Palette.canvas)
             .frame(width: width, height: height)
             .overlay(
                 Image(systemName: "pause.circle")
                     .font(.system(size: 18))
-                    .foregroundStyle(.white.opacity(0.15))
+                    .foregroundStyle(Palette.foreground.opacity(0.15))
             )
     }
 }

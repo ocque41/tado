@@ -50,8 +50,8 @@ struct CanvasView: View {
                 ForEach(Array(projectZones.enumerated()), id: \.element.name) { index, zone in
                     let xOff = zoneOffset(for: index)
                     Text(zone.name)
-                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .font(Typography.title)
+                        .foregroundStyle(Palette.foreground.opacity(0.35))
                         .position(
                             x: xOff + CanvasLayout.tileWidth * CGFloat(fetchSettings().gridColumns) / 2,
                             y: 20
@@ -144,7 +144,7 @@ struct CanvasView: View {
                 appState.pendingNavigationID = nil
             }
         }
-        .background(Color(nsColor: NSColor(white: 0.08, alpha: 1.0)))
+        .background(Palette.canvas)
         .overlay(alignment: .bottomTrailing) {
             zoomControls.padding(16)
         }
@@ -304,8 +304,8 @@ struct CanvasView: View {
             .buttonStyle(.plain)
 
             Text("\(Int(scale * 100))%")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(Typography.monoCaption)
+                .foregroundStyle(Palette.textSecondary)
                 .frame(width: 44)
 
             Button(action: { zoomAnchored(by: 0.15) }) {
@@ -412,7 +412,7 @@ struct CanvasGridBackground: View {
                         x: x - size.width, y: y - size.height,
                         width: dotSize, height: dotSize
                     )
-                    context.fill(Path(ellipseIn: rect), with: .color(.white.opacity(0.06)))
+                    context.fill(Path(ellipseIn: rect), with: .color(Palette.foreground.opacity(0.06)))
                     y += gridSpacing
                 }
                 x += gridSpacing

@@ -21,8 +21,8 @@ struct DispatchFileModal: View {
                             .font(.system(size: 11))
                         Text("Cancel")
                     }
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.red.opacity(0.85))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.danger.opacity(0.85))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
@@ -30,7 +30,8 @@ struct DispatchFileModal: View {
                 Spacer()
 
                 Text("Dispatch File — \(project.name)")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(Typography.heading)
+                    .foregroundStyle(Palette.textPrimary)
 
                 Spacer()
 
@@ -40,8 +41,8 @@ struct DispatchFileModal: View {
                         Image(systemName: "checkmark")
                             .font(.system(size: 11))
                     }
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.green)
+                    .font(Typography.label)
+                    .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Palette.textSecondary : Palette.success)
                 }
                 .buttonStyle(.plain)
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -49,7 +50,7 @@ struct DispatchFileModal: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.ultraThinMaterial)
+            .background(Palette.surface)
 
             Divider()
 
@@ -57,15 +58,15 @@ struct DispatchFileModal: View {
             ZStack(alignment: .topLeading) {
                 if draft.isEmpty {
                     Text("Describe WHAT you want built and WHY — the goal, constraints, and any known context. You don't need to plan the phases or pick tools.\n\nWhen you hit Accept, a Dispatch Architect agent spawns on the canvas. It will: research the project, break the work into phases, create a dedicated skill per phase via /skill-creator, assign agents, and write the full execution plan to .tado/dispatch/. Then you click Start to launch phase 1.\n\nThe more context you give here (users, stack, priorities, done criteria), the better the plan it builds.")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textTertiary)
                         .padding(.horizontal, 16)
                         .padding(.top, 14)
                         .allowsHitTesting(false)
                 }
 
                 TextEditor(text: $draft)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(Typography.monoBody)
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 10)
                     .padding(.top, 8)
@@ -78,16 +79,16 @@ struct DispatchFileModal: View {
                 Text(project.dispatchState == "idle"
                     ? "Accept spawns the Dispatch Architect on the canvas."
                     : "Accept replaces the existing plan and re-dispatches the architect.")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
                 Spacer()
                 Text("⌘↩ to Accept · Esc to Cancel")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textTertiary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
+            .background(Palette.surface)
         }
         .frame(minWidth: 640, minHeight: 480)
         .onAppear {

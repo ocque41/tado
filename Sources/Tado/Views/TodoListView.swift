@@ -40,23 +40,24 @@ struct TodoListView: View {
             if isForwarding, let targetText = forwardTargetText {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.right.circle.fill")
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Palette.accent)
                     Text("Forwarding to:")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.textSecondary)
                     Text(targetText)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .font(Typography.monoBodyEmphasis)
+                        .foregroundStyle(Palette.textPrimary)
                         .lineLimit(1)
                     Spacer()
                     Button(action: { appState.forwardTargetTodoID = nil }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Palette.textSecondary)
                     }
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
-                .background(Color.accentColor.opacity(0.08))
+                .background(Palette.surfaceAccent)
 
                 Divider()
             }
@@ -66,7 +67,7 @@ struct TodoListView: View {
                 Button(action: { appState.showSettings = true }) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .help("Settings (Cmd+M)")
@@ -75,15 +76,15 @@ struct TodoListView: View {
                 ZStack(alignment: .topLeading) {
                     if inputText.isEmpty {
                         Text(isForwarding ? "Type message to forward..." : "What needs to be done?")
-                            .font(.system(size: 15, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .font(Typography.monoDefault)
+                            .foregroundStyle(Palette.textTertiary)
                             .padding(.leading, 5)
                             .padding(.top, 1)
                             .allowsHitTesting(false)
                     }
 
                     TextEditor(text: $inputText)
-                        .font(.system(size: 15, design: .monospaced))
+                        .font(Typography.monoDefault)
                         .scrollContentBackground(.hidden)
                         .focused($isInputFocused)
                 }
@@ -91,14 +92,14 @@ struct TodoListView: View {
 
                 if !inputText.isEmpty {
                     Text("⌘↩")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textTertiary)
                         .padding(.top, 4)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
+            .background(Palette.surface)
             .onKeyPress(phases: .down) { keyPress in
                 if keyPress.key == .return && keyPress.modifiers.contains(.command) {
                     handleSubmit()
@@ -114,11 +115,11 @@ struct TodoListView: View {
                 Spacer()
                 VStack(spacing: 8) {
                     Text("No todos yet")
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.heading)
+                        .foregroundStyle(Palette.textSecondary)
                     Text("Type a task and press ⌘↩ to start")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textTertiary)
                 }
                 Spacer()
             } else {

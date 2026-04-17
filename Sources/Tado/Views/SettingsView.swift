@@ -22,8 +22,11 @@ struct SettingsView: View {
             HStack {
                 Text("Settings")
                     .font(Typography.title)
+                    .foregroundStyle(Palette.textPrimary)
                 Spacer()
                 Button("Done") { dismiss() }
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                     .keyboardShortcut(.escape)
             }
             .padding(20)

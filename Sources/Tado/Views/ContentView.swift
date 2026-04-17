@@ -99,12 +99,16 @@ struct ContentView: View {
                         Image(systemName: mode.icon)
                             .font(.system(size: 10))
                         Text(mode.label)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(Typography.callout)
                     }
                     .frame(width: 100, alignment: .leading)
-                    .foregroundStyle(appState.currentView == mode ? Color.accentColor : .secondary)
+                    .foregroundStyle(appState.currentView == mode ? Palette.accent : Palette.textSecondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(appState.currentView == mode ? Palette.surfaceAccent : Color.clear)
+                    )
                 }
                 .buttonStyle(.plain)
             }

@@ -19,8 +19,8 @@ struct DoneListView: View {
             HStack {
                 if !doneTodos.isEmpty {
                     Button("Empty Dones") { emptyAll() }
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.red)
+                        .font(Typography.label)
+                        .foregroundStyle(Palette.danger)
                         .buttonStyle(.plain)
                 }
 
@@ -28,11 +28,13 @@ struct DoneListView: View {
 
                 Text("Done")
                     .font(Typography.title)
+                    .foregroundStyle(Palette.textPrimary)
 
                 Spacer()
 
                 Button("Close") { dismiss() }
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.textSecondary)
                     .buttonStyle(.plain)
                     .keyboardShortcut(.escape)
             }
@@ -43,8 +45,8 @@ struct DoneListView: View {
             if doneTodos.isEmpty {
                 Spacer()
                 Text("No completed items")
-                    .font(.system(size: 15, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(Typography.heading)
+                    .foregroundStyle(Palette.textSecondary)
                 Spacer()
             } else {
                 ScrollView {
@@ -64,16 +66,17 @@ struct DoneListView: View {
         HStack(spacing: 10) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 14))
-                .foregroundStyle(.green)
+                .foregroundStyle(Palette.success)
 
             Text(todo.displayName)
-                .font(.system(size: 14, design: .monospaced))
+                .font(Typography.monoDefault)
+                .foregroundStyle(Palette.textPrimary)
                 .lineLimit(1)
 
             if let pid = todo.projectID, let pname = projects.first(where: { $0.id == pid })?.name {
                 Text("/\(pname)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textTertiary)
                     .lineLimit(1)
             }
 
@@ -83,7 +86,7 @@ struct DoneListView: View {
             Button(action: { restoreTodo(todo) }) {
                 Image(systemName: "arrow.uturn.backward.circle")
                     .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.textSecondary)
             }
             .buttonStyle(.plain)
             .help("Restore to todo list")
@@ -92,7 +95,7 @@ struct DoneListView: View {
             Button(action: { permanentDelete(todo) }) {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Palette.danger)
             }
             .buttonStyle(.plain)
             .help("Delete permanently")

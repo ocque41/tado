@@ -8,14 +8,15 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             HStack {
                 Text("Sessions")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(Typography.heading)
+                    .foregroundStyle(Palette.textPrimary)
                 Spacer()
                 Text("\(terminalManager.sessions.count)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textSecondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
-                    .background(.quaternary)
+                    .background(Palette.surfaceElevated)
                     .clipShape(Capsule())
             }
             .padding(.horizontal, 16)
@@ -26,8 +27,8 @@ struct SidebarView: View {
             if terminalManager.sessions.isEmpty {
                 Spacer()
                 Text("No active sessions")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textTertiary)
                 Spacer()
             } else {
                 ScrollView {
@@ -48,14 +49,14 @@ struct SidebarView: View {
                         Image(systemName: "xmark.circle")
                         Text("Terminate All")
                     }
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.red)
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.danger)
                 }
                 .buttonStyle(.plain)
                 .padding(12)
             }
         }
-        .background(.ultraThinMaterial)
+        .background(Palette.surface)
     }
 
     private func sessionRow(_ session: TerminalSession) -> some View {
@@ -70,12 +71,13 @@ struct SidebarView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.todoText)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(Typography.monoRow)
+                        .foregroundStyle(Palette.textPrimary)
                         .lineLimit(1)
 
                     Text(CanvasLayout.gridLabel(forIndex: session.gridIndex))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textSecondary)
                 }
 
                 Spacer()
@@ -89,11 +91,11 @@ struct SidebarView: View {
 
     private func statusColor(for session: TerminalSession) -> Color {
         switch session.status {
-        case .pending: return .gray
-        case .running: return .blue
-        case .needsInput: return .orange
-        case .completed: return .green
-        case .failed: return .red
+        case .pending: return Palette.textTertiary
+        case .running: return Palette.accent
+        case .needsInput: return Palette.warning
+        case .completed: return Palette.success
+        case .failed: return Palette.danger
         }
     }
 

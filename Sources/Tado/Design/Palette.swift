@@ -29,8 +29,19 @@ enum Palette {
     /// A hair lighter than `background` — used for raised surfaces
     /// (cards, popovers) so they read as "sitting on top of" the window.
     static let surface = Color(hex: 0x251631)
+    /// One step more elevated than `surface` — used for tile titlebars
+    /// and the "click target" row of a card (a nested raised surface
+    /// against `surface`).
+    static let surfaceElevated = Color(hex: 0x2E1B3D)
+    /// Canvas / terminal background — the deepest surface in the stack.
+    /// A shade darker than `background` so tiles sitting on the canvas
+    /// still read as "above" it.
+    static let canvas = Color(hex: 0x140A1E)
     /// Raised surface when focused/selected. Just the accent at 12%.
     static let surfaceAccent = Color(hex: 0xA44718, alpha: 0.12)
+    /// Soft accent wash for form "edit mode" strips — matches surfaceAccent
+    /// but at a lighter alpha so it reads as a highlight, not a button.
+    static let surfaceAccentSoft = Color(hex: 0xA44718, alpha: 0.04)
     /// Subtle divider line between panels.
     static let divider = Color(hex: 0xF5F5F5, alpha: 0.08)
 
@@ -75,6 +86,8 @@ extension Palette {
         static let foreground = Palette.foreground.nsColor
         static let accent = Palette.accent.nsColor
         static let surface = Palette.surface.nsColor
+        static let surfaceElevated = Palette.surfaceElevated.nsColor
+        static let canvas = Palette.canvas.nsColor
     }
 }
 

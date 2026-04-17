@@ -53,13 +53,14 @@ struct ProjectsView: View {
                         Image(systemName: "plus")
                         Text("New Project")
                     }
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(.ultraThinMaterial)
+            .background(Palette.surface)
 
             Divider()
 
@@ -74,11 +75,11 @@ struct ProjectsView: View {
                 Spacer()
                 VStack(spacing: 8) {
                     Text("No projects yet")
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.heading)
+                        .foregroundStyle(Palette.textSecondary)
                     Text("Create a project to organize todos by directory")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textTertiary)
                 }
                 Spacer()
             } else {
@@ -106,14 +107,15 @@ struct ProjectsView: View {
             HStack(spacing: 10) {
                 Image(systemName: "folder.fill")
                     .font(.system(size: 14))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(Palette.accent)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(project.name)
-                        .font(.system(size: 14, weight: .medium, design: .monospaced))
+                        .font(Typography.monoDefaultEmph)
+                        .foregroundStyle(Palette.textPrimary)
                     Text(project.rootPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -122,38 +124,38 @@ struct ProjectsView: View {
 
                 if agents.count > 0 {
                     Text("\(agents.count) agents")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.1))
+                        .background(Palette.surfaceElevated)
                         .clipShape(Capsule())
                 }
 
                 if teamCount > 0 {
                     Text("\(teamCount) teams")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.1))
+                        .background(Palette.surfaceElevated)
                         .clipShape(Capsule())
                 }
 
                 if todoCount > 0 {
                     Text("\(todoCount) todos")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.orange)
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.accent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.1))
+                        .background(Palette.surfaceAccent)
                         .clipShape(Capsule())
                 }
 
                 Button(action: { bootstrapTools(for: project) }) {
                     Image(systemName: "wrench.and.screwdriver")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange.opacity(0.8))
+                        .foregroundStyle(Palette.accent.opacity(0.85))
                 }
                 .buttonStyle(.plain)
                 .help("Bootstrap Tado A2A tools for this project")
@@ -164,7 +166,7 @@ struct ProjectsView: View {
                     Button(action: { bootstrapTeam(for: project) }) {
                         Image(systemName: "person.3.fill")
                             .font(.system(size: 12))
-                            .foregroundStyle(.cyan.opacity(0.8))
+                            .foregroundStyle(Palette.warning.opacity(0.85))
                     }
                     .buttonStyle(.plain)
                     .help("Bootstrap team awareness for this project")
@@ -173,13 +175,13 @@ struct ProjectsView: View {
                 Button(action: { deleteProject(project) }) {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
-                        .foregroundStyle(.red.opacity(0.7))
+                        .foregroundStyle(Palette.danger.opacity(0.8))
                 }
                 .buttonStyle(.plain)
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Palette.textTertiary)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -195,18 +197,20 @@ struct ProjectsView: View {
             HStack(spacing: 10) {
                 TextField("Project name", text: $newProjectName)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(Typography.monoBody)
+                    .foregroundStyle(Palette.textPrimary)
 
                 Button("Browse...") { pickDirectory() }
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                     .buttonStyle(.plain)
             }
 
             if !newProjectPath.isEmpty {
                 HStack {
                     Text(newProjectPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
@@ -220,18 +224,20 @@ struct ProjectsView: View {
                     newProjectName = ""
                     newProjectPath = ""
                 }
-                .font(.system(size: 12, design: .monospaced))
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
                 .buttonStyle(.plain)
 
                 Button("Create") { createProject() }
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                     .buttonStyle(.plain)
                     .disabled(newProjectName.isEmpty || newProjectPath.isEmpty)
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(Color.accentColor.opacity(0.04))
+        .background(Palette.surfaceAccentSoft)
     }
 
     // MARK: - Project Detail
@@ -251,7 +257,8 @@ struct ProjectsView: View {
                         Image(systemName: "chevron.left")
                         Text("Projects")
                     }
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                 }
                 .buttonStyle(.plain)
 
@@ -259,6 +266,7 @@ struct ProjectsView: View {
 
                 Text(project.name)
                     .font(Typography.title)
+                    .foregroundStyle(Palette.textPrimary)
 
                 Spacer()
 
@@ -267,13 +275,14 @@ struct ProjectsView: View {
                         Image(systemName: "plus")
                         Text("New Team")
                     }
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.accent)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(.ultraThinMaterial)
+            .background(Palette.surface)
 
             Divider()
 
@@ -287,17 +296,17 @@ struct ProjectsView: View {
             VStack(spacing: 8) {
                 HStack {
                     Text(project.rootPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     Text("\(agents.count) agents")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textSecondary)
                     Text("\(projectTeams.count) teams")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textSecondary)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
@@ -356,18 +365,19 @@ struct ProjectsView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "person.circle")
                             .font(.system(size: 12))
-                            .foregroundColor(.accentColor)
+                            .foregroundColor(Palette.accent)
                         Text(agent?.name ?? agentName)
-                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .font(Typography.monoBodyEmphasis)
+                            .foregroundStyle(Palette.textPrimary)
                         if agent == nil {
                             Text("(not found)")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.red)
+                                .font(Typography.monoMicro)
+                                .foregroundStyle(Palette.danger)
                         }
                         Spacer()
                         Text("\(agentTodos.count) todos")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .font(Typography.monoMicro)
+                            .foregroundStyle(Palette.textSecondary)
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 6)
@@ -384,24 +394,26 @@ struct ProjectsView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .font(Typography.callout)
+            .tracking(0.6)
+            .foregroundStyle(Palette.textSecondary)
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.05))
+            .background(Palette.surfaceElevated)
     }
 
     private func agentRow(_ agent: AgentDefinition) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "person.circle")
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Palette.textSecondary)
             Text(agent.name)
-                .font(.system(size: 13, design: .monospaced))
+                .font(Typography.monoBody)
+                .foregroundStyle(Palette.textPrimary)
             Text("(\(agent.source.rawValue))")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .font(Typography.monoMicro)
+                .foregroundStyle(Palette.textTertiary)
             Spacer()
         }
         .padding(.horizontal, 20)
@@ -415,14 +427,15 @@ struct ProjectsView: View {
             HStack(spacing: 10) {
                 TextField("Team name", text: $newTeamNameInProject)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(Typography.monoBody)
+                    .foregroundStyle(Palette.textPrimary)
             }
 
             if !agents.isEmpty {
                 HStack(spacing: 8) {
                     Text("Agents:")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.textSecondary)
                     ForEach(agents) { agent in
                         let isSelected = newTeamAgentsInProject.contains(agent.id)
                         Button(action: {
@@ -433,9 +446,9 @@ struct ProjectsView: View {
                                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                     .font(.system(size: 10))
                                 Text(agent.name)
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(Typography.monoCaption)
                             }
-                            .foregroundColor(isSelected ? .accentColor : .secondary)
+                            .foregroundColor(isSelected ? Palette.accent : Palette.textSecondary)
                         }
                         .buttonStyle(.plain)
                     }
@@ -450,7 +463,8 @@ struct ProjectsView: View {
                     newTeamNameInProject = ""
                     newTeamAgentsInProject = []
                 }
-                .font(.system(size: 12, design: .monospaced))
+                .font(Typography.label)
+                .foregroundStyle(Palette.textSecondary)
                 .buttonStyle(.plain)
 
                 Button("Create") {
@@ -461,14 +475,15 @@ struct ProjectsView: View {
                     newTeamNameInProject = ""
                     newTeamAgentsInProject = []
                 }
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(Typography.label)
+                .foregroundStyle(Palette.accent)
                 .buttonStyle(.plain)
                 .disabled(newTeamNameInProject.isEmpty)
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(Color.accentColor.opacity(0.04))
+        .background(Palette.surfaceAccentSoft)
     }
 
     // MARK: - Actions
@@ -516,12 +531,12 @@ struct ProjectsView: View {
                     Image(systemName: "doc.text.badge.plus")
                         .font(.system(size: 12))
                     Text("Dispatch")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(Typography.monoMicro)
                 }
-                .foregroundStyle(.blue)
+                .foregroundStyle(Palette.accent)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Color.blue.opacity(0.12))
+                .background(Palette.surfaceAccent)
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -530,10 +545,10 @@ struct ProjectsView: View {
             Button(action: { appState.dispatchModalProjectID = project.id }) {
                 Image(systemName: "arrow.counterclockwise")
                     .font(.system(size: 12))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Palette.warning)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
-                    .background(Color.orange.opacity(0.12))
+                    .background(Palette.warning.opacity(0.12))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -544,12 +559,12 @@ struct ProjectsView: View {
                     Image(systemName: "play.fill")
                         .font(.system(size: 11))
                     Text("Start")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(Typography.monoMicro)
                 }
-                .foregroundStyle(.green)
+                .foregroundStyle(Palette.success)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Color.green.opacity(0.12))
+                .background(Palette.success.opacity(0.15))
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -701,7 +716,7 @@ struct ProjectTodoInput: View {
                             }
                         }
                         .frame(width: 120)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(Typography.monoCaption)
                         .onChange(of: selectedTeamID) { _, newTeamID in
                             if let newTeamID, let team = projectTeams.first(where: { $0.id == newTeamID }) {
                                 if let agent = selectedAgentName, !team.agentNames.contains(agent) {
@@ -719,7 +734,7 @@ struct ProjectTodoInput: View {
                             }
                         }
                         .frame(width: 120)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(Typography.monoCaption)
                     }
 
                     Spacer()
@@ -731,15 +746,15 @@ struct ProjectTodoInput: View {
                 ZStack(alignment: .topLeading) {
                     if inputText.isEmpty {
                         Text("New todo for \(project.name)...")
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .font(Typography.monoBody)
+                            .foregroundStyle(Palette.textTertiary)
                             .padding(.leading, 5)
                             .padding(.top, 1)
                             .allowsHitTesting(false)
                     }
 
                     TextEditor(text: $inputText)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(Typography.monoBody)
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)
                 }
@@ -747,8 +762,8 @@ struct ProjectTodoInput: View {
 
                 if !inputText.isEmpty {
                     Text("⌘↩")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textTertiary)
                         .padding(.top, 2)
                 }
             }
