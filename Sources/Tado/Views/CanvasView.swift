@@ -190,15 +190,21 @@ struct CanvasView: View {
                 return nil
             }
 
-            // If the cursor is over a terminal tile, route the scroll into
-            // its scrollback. Previously this was gated on first-responder
-            // status, so a freshly deployed tile (never clicked) silently
-            // swallowed all scrollback gestures into a canvas pan.
-            //
-            // Two paths because SwiftTerm's `scrollWheel` only honors
-            // `event.deltaY` (classic mouse wheel). Trackpads / Magic Mouse
-            // always have `deltaY == 0` and report via `scrollingDeltaY`,
-            // so we synthesize line scrolls for them and consume the event.
+            // If the cursor is over a Metal tile, let AppKit deliver
+            // scrollWheel natively to `TerminalMTKView.scrollWheel(with:)`
+            // — it accumulates trackpad pixels and handles DECCKM-aware
+            // scrollback without needing help from this monitor. Returning
+            // the event (not nil) means we don't consume it.
+            if self.metalTileUnderCursor(for: event) != nil {
+                return event
+            }
+
+            // If the cursor is over a SwiftTerm terminal tile, route the
+            // scroll into its scrollback. SwiftTerm's `scrollWheel` only
+            // honors `event.deltaY` (classic mouse wheel). Trackpads /
+            // Magic Mouse always have `deltaY == 0` and report via
+            // `scrollingDeltaY`, so we synthesize line scrolls for them
+            // and consume the event.
             if let terminal = self.terminalUnderCursor(for: event) {
                 if event.deltaY != 0 {
                     return event
@@ -269,8 +275,8 @@ struct CanvasView: View {
     }
 
     /// Hit-test the scroll event location and return the LoggingTerminalView
-    /// under the cursor, if any. Used to route scroll events to terminals
-    /// regardless of first-responder state.
+    /// under the cursor, if any. Used to route scroll events to SwiftTerm
+    /// tiles regardless of first-responder state.
     private func terminalUnderCursor(for event: NSEvent) -> LoggingTerminalView? {
         guard let window = event.window, let contentView = window.contentView else { return nil }
         guard let hit = contentView.hitTest(event.locationInWindow) else { return nil }
@@ -282,11 +288,29 @@ struct CanvasView: View {
         return nil
     }
 
-    /// Check if a view is inside a TerminalView hierarchy
+    /// Hit-test for a Metal-rendered terminal tile under the cursor.
+    /// The Metal path handles scrollback inside its own `scrollWheel`
+    /// override, so the monitor just needs to know "is this one of those?"
+    /// to pass the event through.
+    private func metalTileUnderCursor(for event: NSEvent) -> TerminalMTKView? {
+        guard let window = event.window, let contentView = window.contentView else { return nil }
+        guard let hit = contentView.hitTest(event.locationInWindow) else { return nil }
+        var view: NSView? = hit
+        while let v = view {
+            if let mtk = v as? TerminalMTKView { return mtk }
+            view = v.superview
+        }
+        return nil
+    }
+
+    /// Check if a view is inside a terminal tile — either SwiftTerm
+    /// (`TerminalView` subclass) or Metal (`TerminalMTKView`). Used by
+    /// the click monitor to decide whether an outside-click should
+    /// resign the tile's first-responder status.
     private func isViewInsideTerminal(_ view: NSView) -> Bool {
         var current: NSView? = view
         while let v = current {
-            if v is TerminalView { return true }
+            if v is TerminalView || v is TerminalMTKView { return true }
             current = v.superview
         }
         return false
