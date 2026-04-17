@@ -219,6 +219,15 @@ pub unsafe extern "C" fn tado_snapshot_cursor_y(snap: *mut TadoSnapshot) -> u16 
     (&*(snap as *const GridSnapshot)).cursor_y
 }
 
+/// 1 if the cursor should be rendered, 0 if hidden by DECTCEM (CSI ?25l).
+#[no_mangle]
+pub unsafe extern "C" fn tado_snapshot_cursor_visible(snap: *mut TadoSnapshot) -> u8 {
+    if snap.is_null() {
+        return 1;
+    }
+    (&*(snap as *const GridSnapshot)).cursor_visible as u8
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn tado_snapshot_dirty_row_count(snap: *mut TadoSnapshot) -> usize {
     if snap.is_null() {

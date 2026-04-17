@@ -282,35 +282,80 @@ extension TerminalMTKView: MTKViewDelegate {
     }
 }
 
-/// Tiny keymap that translates `NSEvent` keystrokes into the UTF-8 / ESC
-/// sequences a PTY expects. Not comprehensive — Phase 2 covers the common
-/// cases; xterm mouse reporting and full function-key table land in Phase 3.
+/// Keymap translates `NSEvent` into the UTF-8 / ESC sequences a PTY
+/// expects. Mirrors xterm's "application cursor / normal mode" default
+/// (normal mode here — Claude/Codex don't request application cursor).
+/// References: xterm ctlseqs, `infocmp xterm-256color`.
 struct TerminalKeymap {
     func bytes(for event: NSEvent) -> [UInt8] {
-        // Special keys first.
-        let keyCode = event.keyCode
-        switch keyCode {
-        case 36, 76: return [0x0D]                    // Return
-        case 51:     return [0x7F]                    // Delete (Backspace)
+        let mods = event.modifierFlags
+        let option = mods.contains(.option)
+        let shift = mods.contains(.shift)
+
+        // Raw virtual key codes — stable across locales.
+        switch event.keyCode {
+        // Editing keys.
+        case 36, 76: return [0x0D]                    // Return / keypad Enter
+        case 51:     return [0x7F]                    // Backspace
+        case 117:    return [0x1B, 0x5B, 0x33, 0x7E]  // Delete forward (fn+Del)
         case 53:     return [0x1B]                    // Escape
         case 48:     return [0x09]                    // Tab
-        case 123:    return [0x1B, 0x5B, 0x44]        // Left
-        case 124:    return [0x1B, 0x5B, 0x43]        // Right
+        // Arrows. Option+arrow sends word-movement (xterm alt sequences).
+        case 123:
+            return option
+                ? [0x1B, 0x62]                        // Option+Left = word-left (meta-b)
+                : [0x1B, 0x5B, 0x44]                  // Left
+        case 124:
+            return option
+                ? [0x1B, 0x66]                        // Option+Right = word-right (meta-f)
+                : [0x1B, 0x5B, 0x43]                  // Right
         case 125:    return [0x1B, 0x5B, 0x42]        // Down
         case 126:    return [0x1B, 0x5B, 0x41]        // Up
+        // Navigation cluster (fn+arrow on Apple keyboards).
+        case 115:    return [0x1B, 0x5B, 0x48]        // Home
+        case 119:    return [0x1B, 0x5B, 0x46]        // End
+        case 116:    return [0x1B, 0x5B, 0x35, 0x7E]  // PageUp
+        case 121:    return [0x1B, 0x5B, 0x36, 0x7E]  // PageDown
+        // Function keys. Apple layouts need Fn or the "Use F1..F12 as
+        // standard" preference; when the app receives them their keyCodes
+        // are these.
+        case 122:    return [0x1B, 0x4F, 0x50]        // F1
+        case 120:    return [0x1B, 0x4F, 0x51]        // F2
+        case 99:     return [0x1B, 0x4F, 0x52]        // F3
+        case 118:    return [0x1B, 0x4F, 0x53]        // F4
+        case 96:     return [0x1B, 0x5B, 0x31, 0x35, 0x7E] // F5
+        case 97:     return [0x1B, 0x5B, 0x31, 0x37, 0x7E] // F6
+        case 98:     return [0x1B, 0x5B, 0x31, 0x38, 0x7E] // F7
+        case 100:    return [0x1B, 0x5B, 0x31, 0x39, 0x7E] // F8
+        case 101:    return [0x1B, 0x5B, 0x32, 0x30, 0x7E] // F9
+        case 109:    return [0x1B, 0x5B, 0x32, 0x31, 0x7E] // F10
+        case 103:    return [0x1B, 0x5B, 0x32, 0x33, 0x7E] // F11
+        case 111:    return [0x1B, 0x5B, 0x32, 0x34, 0x7E] // F12
         default: break
         }
 
-        // Character input. `charactersIgnoringModifiers` plus explicit
-        // control handling covers Ctrl-<letter>, which otherwise becomes
-        // a raw codepoint NSEvent can't represent by itself.
-        if event.modifierFlags.contains(.control),
+        // Shift+Tab is a common unbind target (e.g. shell completion back).
+        if event.keyCode == 48 && shift {
+            return [0x1B, 0x5B, 0x5A]
+        }
+
+        // Ctrl-<letter>: map A..Z/@ to 1..26/0. `charactersIgnoringModifiers`
+        // preserves the physical key regardless of the keyboard layout.
+        if mods.contains(.control),
            let chars = event.charactersIgnoringModifiers,
            let first = chars.first,
            let ascii = first.asciiValue {
-            // Map Ctrl+A..Z to 1..26, Ctrl+@ to 0, etc.
             let lower = ascii >= 0x60 ? ascii - 0x60 : (ascii >= 0x40 ? ascii - 0x40 : ascii)
             return [lower & 0x1F]
+        }
+
+        // Option+<letter> in Terminal.app defaults to Meta-prefixed (ESC
+        // then the letter). Matches bash readline expectations.
+        if option,
+           let chars = event.charactersIgnoringModifiers,
+           let first = chars.first,
+           let ascii = first.asciiValue {
+            return [0x1B, ascii]
         }
 
         if let text = event.characters {

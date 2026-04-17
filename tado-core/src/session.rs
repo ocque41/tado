@@ -142,6 +142,7 @@ impl Session {
             rows: g.rows,
             cursor_x: g.cursor_x,
             cursor_y: g.cursor_y,
+            cursor_visible: g.cursor_visible,
             cells: g.cells.clone(),
             dirty_rows: (0..g.rows).collect(),
         }
@@ -154,6 +155,7 @@ impl Session {
         let rows = g.rows;
         let cursor_x = g.cursor_x;
         let cursor_y = g.cursor_y;
+        let cursor_visible = g.cursor_visible;
         let mut cells = Vec::with_capacity(dirty.len() * cols as usize);
         for &r in &dirty {
             let start = (r as usize) * (cols as usize);
@@ -164,6 +166,7 @@ impl Session {
             rows,
             cursor_x,
             cursor_y,
+            cursor_visible,
             cells,
             dirty_rows: dirty,
         }
@@ -215,6 +218,10 @@ pub struct GridSnapshot {
     pub rows: u16,
     pub cursor_x: u16,
     pub cursor_y: u16,
+    /// Mirror of `Grid.cursor_visible` at snapshot time. The renderer
+    /// hides the cursor when this is false (TUIs toggle this during
+    /// full-screen redraws).
+    pub cursor_visible: bool,
     /// Flat list of cells: one row per entry in `dirty_rows`, in order.
     /// Each row contributes exactly `cols` cells.
     pub cells: Vec<crate::grid::Cell>,

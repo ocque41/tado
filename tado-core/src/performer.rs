@@ -49,10 +49,17 @@ impl<'a> Perform for GridPerformer<'a> {
     fn csi_dispatch(
         &mut self,
         params: &Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignore: bool,
         action: char,
     ) {
+        // DEC private sequences are prefixed with '?'. Dispatch those
+        // separately — most of them toggle modes (25=cursor, 1049=alt).
+        if intermediates.starts_with(b"?") {
+            self.dec_private(params, action);
+            return;
+        }
+
         // Flatten to u16 params. `vte` exposes Params as iterator of slices; we
         // take the first subparam of each semicolon-separated group.
         let p0 = first_or(params, 0, 0);
@@ -98,11 +105,71 @@ impl<'a> Perform for GridPerformer<'a> {
                 // SGR
                 apply_sgr(self.grid, params);
             }
+            's' => {
+                // SCP — save cursor
+                self.grid.save_cursor();
+            }
+            'u' => {
+                // RCP — restore cursor
+                self.grid.restore_cursor();
+            }
+            'r' => {
+                // DECSTBM — set top;bottom. Empty params = full screen.
+                let top = p0.saturating_sub(1);
+                let bottom = if p1 == 0 {
+                    self.grid.rows.saturating_sub(1)
+                } else {
+                    p1.saturating_sub(1)
+                };
+                self.grid.set_scroll_region(top, bottom);
+            }
             _ => {}
         }
     }
 
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            b'7' => self.grid.save_cursor(),    // DECSC
+            b'8' => self.grid.restore_cursor(), // DECRC
+            _ => {}
+        }
+    }
+}
+
+impl<'a> GridPerformer<'a> {
+    fn dec_private(&mut self, params: &Params, action: char) {
+        // Enable = 'h', disable = 'l'. Flatten the param list; DECSET/
+        // DECRST can take multiple codes in one CSI.
+        let enable = action == 'h';
+        let disable = action == 'l';
+        if !enable && !disable {
+            return;
+        }
+        for group in params.iter() {
+            for &code in group.iter() {
+                match code {
+                    25 => {
+                        // DECTCEM — cursor visibility
+                        self.grid.cursor_visible = enable;
+                    }
+                    1047 | 1049 | 47 => {
+                        // Alt screen. 1049 also saves/restores cursor;
+                        // 1047 is buffer-only; 47 is the legacy variant.
+                        // We treat all three as "switch buffers" —
+                        // cursor save/restore is handled by the grid's
+                        // own alt-screen save state, which is close
+                        // enough for all the CLIs we care about.
+                        if enable {
+                            self.grid.enter_alt_screen();
+                        } else {
+                            self.grid.leave_alt_screen();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn first_or(params: &Params, idx: usize, default: u16) -> u16 {
@@ -281,5 +348,81 @@ mod tests {
         for c in &g.cells {
             assert_eq!(c.ch, b' ' as u32);
         }
+    }
+
+    #[test]
+    fn cursor_visibility_toggle() {
+        let mut g = Grid::new(10, 2);
+        assert!(g.cursor_visible);
+        feed(&mut g, b"\x1b[?25l");
+        assert!(!g.cursor_visible);
+        feed(&mut g, b"\x1b[?25h");
+        assert!(g.cursor_visible);
+    }
+
+    #[test]
+    fn alt_screen_enter_and_leave_preserve_primary() {
+        let mut g = Grid::new(4, 2);
+        feed(&mut g, b"abcd\r\nefgh");
+        let primary_snapshot = g.cells.clone();
+        // Enter alt screen
+        feed(&mut g, b"\x1b[?1049h");
+        assert!(g.is_alt_screen());
+        // Alt buffer should be blank, primary preserved internally
+        for c in &g.cells {
+            assert_eq!(c.ch, b' ' as u32);
+        }
+        // Write to alt
+        feed(&mut g, b"ZZZZ");
+        // Leave alt — primary should return exactly as it was
+        feed(&mut g, b"\x1b[?1049l");
+        assert!(!g.is_alt_screen());
+        for (i, c) in g.cells.iter().enumerate() {
+            assert_eq!(c.ch, primary_snapshot[i].ch,
+                "cell {i} should be restored to primary", );
+        }
+    }
+
+    #[test]
+    fn save_restore_cursor() {
+        let mut g = Grid::new(10, 5);
+        feed(&mut g, b"\x1b[3;5H");   // cursor to (row=3, col=5) → (2,4) 0-idx
+        feed(&mut g, b"\x1b[31m");    // red fg
+        feed(&mut g, b"\x1b[s");      // save
+        feed(&mut g, b"\x1b[1;1H");   // move elsewhere
+        feed(&mut g, b"\x1b[0m");     // reset SGR
+        feed(&mut g, b"\x1b[u");      // restore
+        assert_eq!(g.cursor_x, 4);
+        assert_eq!(g.cursor_y, 2);
+        assert_eq!(g.current_fg, 0xCC241DFF);
+    }
+
+    #[test]
+    fn scroll_region_scrolls_only_region() {
+        let mut g = Grid::new(4, 4);
+        // fill rows 0..3 with a b c d
+        feed(&mut g, b"aaaa\r\nbbbb\r\ncccc\r\ndddd");
+        // region = rows 2..3 (1-indexed 3..4)
+        feed(&mut g, b"\x1b[3;4r");
+        // After DECSTBM cursor homes to top of region (row 2, col 0)
+        assert_eq!(g.cursor_y, 2);
+        // Force a scroll inside the region by printing past bottom
+        feed(&mut g, b"\x1b[4;1H"); // go to last row
+        feed(&mut g, b"eeee\n");   // linefeed at bottom scrolls region
+        // Rows 0..1 unchanged
+        assert_eq!(g.cells[0].ch, b'a' as u32);
+        assert_eq!(g.cells[4].ch, b'b' as u32);
+        // Row 2 should now hold what was row 3 before (c's got wiped by
+        // the cursor jump + scroll)
+    }
+
+    #[test]
+    fn esc_7_and_esc_8_save_restore() {
+        let mut g = Grid::new(10, 5);
+        feed(&mut g, b"\x1b[3;5H\x1b7"); // move + ESC 7
+        feed(&mut g, b"\x1b[1;1H");
+        feed(&mut g, b"\x1b8"); // ESC 8
+        assert_eq!(g.cursor_x, 4);
+        assert_eq!(g.cursor_y, 2);
     }
 }

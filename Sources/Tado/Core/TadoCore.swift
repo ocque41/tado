@@ -164,6 +164,8 @@ enum TadoCore {
         let rows: UInt16
         let cursorX: UInt16
         let cursorY: UInt16
+        /// DECTCEM mirror — the renderer should hide the cursor when false.
+        let cursorVisible: Bool
         let dirtyRows: [UInt16]
         /// One row of `cols` cells per entry in `dirtyRows`, flattened in
         /// row-major order. Length == `dirtyRows.count * cols`.
@@ -177,6 +179,7 @@ enum TadoCore {
             self.rows = tado_snapshot_rows(ptr)
             self.cursorX = tado_snapshot_cursor_x(ptr)
             self.cursorY = tado_snapshot_cursor_y(ptr)
+            self.cursorVisible = tado_snapshot_cursor_visible(ptr) != 0
 
             let dirtyCount = Int(tado_snapshot_dirty_row_count(ptr))
             if dirtyCount > 0, let dirtyPtr = tado_snapshot_dirty_rows(ptr) {
@@ -202,6 +205,7 @@ enum TadoCore {
             rows: UInt16,
             cursorX: UInt16 = 0,
             cursorY: UInt16 = 0,
+            cursorVisible: Bool = true,
             fill: (Int, Int) -> Cell
         ) -> Snapshot {
             var cells: [Cell] = []
@@ -216,6 +220,7 @@ enum TadoCore {
                 rows: rows,
                 cursorX: cursorX,
                 cursorY: cursorY,
+                cursorVisible: cursorVisible,
                 dirtyRows: (0..<rows).map { $0 },
                 cells: cells
             )
@@ -226,6 +231,7 @@ enum TadoCore {
             rows: UInt16,
             cursorX: UInt16,
             cursorY: UInt16,
+            cursorVisible: Bool,
             dirtyRows: [UInt16],
             cells: [Cell]
         ) {
@@ -233,6 +239,7 @@ enum TadoCore {
             self.rows = rows
             self.cursorX = cursorX
             self.cursorY = cursorY
+            self.cursorVisible = cursorVisible
             self.dirtyRows = dirtyRows
             self.cells = cells
         }

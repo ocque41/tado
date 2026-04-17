@@ -64,6 +64,37 @@ pub struct Grid {
     /// 5000 is ~2 MB of cell data for 80-col terminals and matches the
     /// default SwiftTerm scrollback; tune via `set_scrollback_cap`.
     pub scrollback_cap: usize,
+    /// DECSET 25 — cursor visibility. TUIs hide the cursor during render
+    /// to prevent flicker. Consumed by the Metal renderer.
+    pub cursor_visible: bool,
+    /// Saved cursor (DECSC / CSI s). Stored as (x, y, attrs) so colored
+    /// segments restore correctly. None until first save.
+    pub saved_cursor: Option<(u16, u16, u32, u32, u32)>,
+    /// Top and bottom of the scrolling region (DECSTBM). Inclusive;
+    /// default is 0..rows-1 (whole screen).
+    pub scroll_top: u16,
+    pub scroll_bottom: u16,
+    /// Alternate screen buffer (DECSET 1049/1047). Vim, less, htop, and
+    /// `claude` fullscreen all flip into this so the user's shell prompt
+    /// is preserved. `None` when on the primary screen.
+    alt_screen: Option<Box<AltScreenState>>,
+}
+
+/// What we stash when entering the alternate screen. Owned via `Box` so
+/// `Grid`'s size stays small for the 99% case (no alt-screen).
+struct AltScreenState {
+    cells: Vec<Cell>,
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
+    current_attrs: u32,
+    current_fg: u32,
+    current_bg: u32,
+    /// Whether the saved buffer was the primary (we restore it on exit).
+    /// Always true today; kept for future symmetry when supporting other
+    /// DECSET variants.
+    #[allow(dead_code)]
+    is_primary: bool,
 }
 
 impl Grid {
@@ -83,7 +114,100 @@ impl Grid {
             current_bg: Cell::BLANK.bg,
             scrollback: VecDeque::new(),
             scrollback_cap: 5000,
+            cursor_visible: true,
+            saved_cursor: None,
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
+            alt_screen: None,
         }
+    }
+
+    /// DECSC / CSI s — save cursor position + current SGR attrs.
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = Some((
+            self.cursor_x,
+            self.cursor_y,
+            self.current_attrs,
+            self.current_fg,
+            self.current_bg,
+        ));
+    }
+
+    /// DECRC / CSI u — restore saved cursor. No-op if never saved.
+    pub fn restore_cursor(&mut self) {
+        if let Some((x, y, attrs, fg, bg)) = self.saved_cursor {
+            self.cursor_x = x.min(self.cols.saturating_sub(1));
+            self.cursor_y = y.min(self.rows.saturating_sub(1));
+            self.current_attrs = attrs;
+            self.current_fg = fg;
+            self.current_bg = bg;
+        }
+    }
+
+    /// DECSTBM — set scrolling region `[top, bottom]`, clamped to grid.
+    /// CSI takes 1-indexed args; callers should subtract 1.
+    pub fn set_scroll_region(&mut self, top: u16, bottom: u16) {
+        let max_row = self.rows.saturating_sub(1);
+        self.scroll_top = top.min(max_row);
+        self.scroll_bottom = bottom.min(max_row).max(self.scroll_top);
+        // Per VT100, DECSTBM also homes the cursor.
+        self.cursor_x = 0;
+        self.cursor_y = self.scroll_top;
+    }
+
+    /// DECSET 1049 / 1047 — switch to the alternate screen and stash the
+    /// primary. Re-entering is a no-op (already on alt).
+    pub fn enter_alt_screen(&mut self) {
+        if self.alt_screen.is_some() {
+            return;
+        }
+        self.alt_screen = Some(Box::new(AltScreenState {
+            cells: std::mem::replace(
+                &mut self.cells,
+                vec![Cell::BLANK; (self.cols as usize) * (self.rows as usize)],
+            ),
+            cursor_x: self.cursor_x,
+            cursor_y: self.cursor_y,
+            cursor_visible: self.cursor_visible,
+            current_attrs: self.current_attrs,
+            current_fg: self.current_fg,
+            current_bg: self.current_bg,
+            is_primary: true,
+        }));
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        for d in self.dirty_rows.iter_mut() {
+            *d = true;
+        }
+    }
+
+    /// DECRST 1049 / 1047 — restore the primary screen. No-op when
+    /// already on primary.
+    pub fn leave_alt_screen(&mut self) {
+        let Some(saved) = self.alt_screen.take() else {
+            return;
+        };
+        if saved.cells.len() == self.cells.len() {
+            self.cells = saved.cells;
+        } else {
+            // Primary was sized differently — blank to new size rather than
+            // show garbled geometry.
+            self.cells =
+                vec![Cell::BLANK; (self.cols as usize) * (self.rows as usize)];
+        }
+        self.cursor_x = saved.cursor_x.min(self.cols.saturating_sub(1));
+        self.cursor_y = saved.cursor_y.min(self.rows.saturating_sub(1));
+        self.cursor_visible = saved.cursor_visible;
+        self.current_attrs = saved.current_attrs;
+        self.current_fg = saved.current_fg;
+        self.current_bg = saved.current_bg;
+        for d in self.dirty_rows.iter_mut() {
+            *d = true;
+        }
+    }
+
+    pub fn is_alt_screen(&self) -> bool {
+        self.alt_screen.is_some()
     }
 
     pub fn set_scrollback_cap(&mut self, cap: usize) {
@@ -143,6 +267,16 @@ impl Grid {
         self.cursor_x = min(self.cursor_x, cols.saturating_sub(1));
         self.cursor_y = min(self.cursor_y, rows.saturating_sub(1));
         self.dirty_rows = vec![true; rows as usize];
+
+        // Reset the scrolling region to full-screen on resize. Programs
+        // rely on this — per VT100, any DECSTBM survives until cleared,
+        // but physical resize implies a new geometry.
+        self.scroll_top = 0;
+        self.scroll_bottom = rows.saturating_sub(1);
+
+        // Drop any alt-screen buffer — its geometry is stale. Programs
+        // running in alt-screen re-render on SIGWINCH.
+        self.alt_screen = None;
     }
 
     #[inline]
@@ -176,9 +310,12 @@ impl Grid {
     }
 
     pub fn linefeed(&mut self) {
-        if self.cursor_y + 1 >= self.rows {
+        // Respect the scrolling region (DECSTBM). When the cursor is at the
+        // bottom of the region, scroll the region up; outside the region,
+        // behave like a normal linefeed within the grid.
+        if self.cursor_y == self.scroll_bottom {
             self.scroll_up(1);
-        } else {
+        } else if self.cursor_y + 1 < self.rows {
             self.cursor_y += 1;
         }
     }
@@ -189,29 +326,44 @@ impl Grid {
     }
 
     pub fn scroll_up(&mut self, n: u16) {
-        let n = min(n as usize, self.rows as usize);
+        // Scrolling is always bounded by the current DECSTBM region.
+        // When the region spans the whole grid (default), this degrades
+        // to the original full-grid scroll + scrollback push.
+        let top = self.scroll_top as usize;
+        let bot = self.scroll_bottom as usize;
+        let region_rows = bot.saturating_sub(top) + 1;
+        let n = min(n as usize, region_rows);
         if n == 0 {
             return;
         }
         let cols = self.cols as usize;
-        let total = self.cells.len();
+        let region_start = top * cols;
+        let region_end = (bot + 1) * cols;
 
-        // Push the top `n` rows into scrollback before they're overwritten.
-        // Each pushed row is an owned snapshot so later resizes don't
-        // invalidate history.
-        for r in 0..n {
-            let start = r * cols;
-            let end = start + cols;
-            let row: Vec<Cell> = self.cells[start..end].to_vec();
-            self.scrollback.push_back(row);
-            while self.scrollback.len() > self.scrollback_cap {
-                self.scrollback.pop_front();
+        // Only push to scrollback when we're on the primary screen AND the
+        // whole grid is the scroll region. DECSTBM-bounded scrolls within
+        // vim/less shouldn't pollute history, and alt-screen never should.
+        let push_scrollback = self.alt_screen.is_none()
+            && self.scroll_top == 0
+            && self.scroll_bottom == self.rows.saturating_sub(1);
+        if push_scrollback {
+            for r in 0..n {
+                let start = (top + r) * cols;
+                let end = start + cols;
+                let row: Vec<Cell> = self.cells[start..end].to_vec();
+                self.scrollback.push_back(row);
+                while self.scrollback.len() > self.scrollback_cap {
+                    self.scrollback.pop_front();
+                }
             }
         }
 
-        self.cells.copy_within(n * cols..total, 0);
-        let blank_from = (self.rows as usize - n) * cols;
-        for c in self.cells[blank_from..].iter_mut() {
+        // Shift rows within the region up by `n`.
+        self.cells
+            .copy_within((region_start + n * cols)..region_end, region_start);
+        // Blank the bottom `n` rows of the region.
+        let blank_from = region_end - n * cols;
+        for c in self.cells[blank_from..region_end].iter_mut() {
             *c = Cell {
                 ch: b' ' as u32,
                 fg: self.default_fg,
@@ -219,8 +371,11 @@ impl Grid {
                 attrs: 0,
             };
         }
-        for d in self.dirty_rows.iter_mut() {
-            *d = true;
+        // Only mark region rows dirty — faster per-frame upload.
+        for r in top..=bot {
+            if r < self.dirty_rows.len() {
+                self.dirty_rows[r] = true;
+            }
         }
     }
 

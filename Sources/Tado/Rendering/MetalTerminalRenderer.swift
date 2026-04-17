@@ -180,7 +180,7 @@ final class MetalTerminalRenderer {
 
         commit(uniformsCursorX: UInt32(snapshot.cursorX),
                uniformsCursorY: UInt32(snapshot.cursorY),
-               cursorVisible: 1,
+               cursorVisible: snapshot.cursorVisible ? 1 : 0,
                rebuildLookup: sawNewChar)
     }
 
@@ -253,8 +253,9 @@ final class MetalTerminalRenderer {
             }
         }
 
-        // Hide cursor when scrolled back.
-        let cursorVisible: UInt32 = clampedOffset == 0 ? 1 : 0
+        // Hide cursor when scrolled back OR when DECTCEM has hidden it.
+        let cursorVisible: UInt32 =
+            (clampedOffset == 0 && live.cursorVisible) ? 1 : 0
         commit(uniformsCursorX: UInt32(live.cursorX),
                uniformsCursorY: UInt32(live.cursorY) + UInt32(clampedOffset),
                cursorVisible: cursorVisible,

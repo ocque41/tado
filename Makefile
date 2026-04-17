@@ -27,5 +27,5 @@ core-test:
 core-clean:
 	cd tado-core && cargo clean
 
-all-test: core-test
+all-test: core core-test
 	swift test
