@@ -312,6 +312,84 @@ final class TadoCoreSessionTests: XCTestCase {
         XCTAssertTrue(saw, "expected 'hello-metal' to round-trip through /bin/zsh -l -c")
     }
 
+    /// Uses the actual `ProcessSpawner.command` + `ProcessSpawner.environment`
+    /// helpers the app calls at spawn time, so any shape drift between the
+    /// stubbed mirror test and the real code path is caught.
+    func testSpawnUsingRealProcessSpawnerHelpers() throws {
+        TadoCore.lastSpawnError = nil
+
+        let tmpIPC = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tado-ipc-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpIPC, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: tmpIPC.appendingPathComponent("bin"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: tmpIPC) }
+
+        let (executable, args) = ProcessSpawner.command(
+            for: "echo hello-from-spawner",
+            engine: .claude
+        )
+        // Override: we don't actually want to invoke `claude`, so replace
+        // the command string inside args[2] with a harmless echo.
+        let patchedArgs = ["-l", "-c", "echo hello-from-spawner"]
+        XCTAssertEqual(executable, "/bin/zsh", "ProcessSpawner.command should use zsh -l -c")
+        XCTAssertEqual(args.count, 3, "ProcessSpawner.command should produce 3 args")
+
+        let envArray = ProcessSpawner.environment(
+            sessionID: UUID(),
+            sessionName: "echo hello-from-spawner",
+            engine: .claude,
+            ipcRoot: tmpIPC,
+            projectName: nil,
+            projectRoot: nil,
+            teamName: nil,
+            teamID: nil,
+            agentName: nil,
+            teamAgents: nil,
+            claudeDisplay: .defaults
+        )
+        var envDict: [String: String] = [:]
+        for entry in envArray {
+            if let eq = entry.firstIndex(of: "=") {
+                let key = String(entry[entry.startIndex..<eq])
+                let value = String(entry[entry.index(after: eq)...])
+                envDict[key] = value
+            }
+        }
+
+        guard let session = TadoCore.Session(
+            command: executable,
+            args: patchedArgs,
+            cwd: nil,
+            environment: envDict,
+            cols: 80,
+            rows: 24
+        ) else {
+            let err = TadoCore.lastSpawnError ?? "(no error)"
+            XCTFail("Real-spawner-shape spawn returned nil. Last error: \(err)")
+            return
+        }
+        defer { session.kill() }
+
+        let deadline = Date().addingTimeInterval(3.0)
+        var saw = false
+        while Date() < deadline {
+            if let snap = session.snapshotFull() {
+                let text = String(snap.cells.compactMap {
+                    Unicode.Scalar($0.ch).map { Character($0) }
+                })
+                if text.contains("hello-from-spawner") {
+                    saw = true
+                    break
+                }
+            }
+            usleep(50_000)
+        }
+        XCTAssertTrue(saw, "expected 'hello-from-spawner' to land in the grid")
+    }
+
     /// A successful spawn must clear any prior error so a stale message
     /// doesn't leak into the UI on the next tile.
     func testSuccessfulSpawnClearsLastError() throws {
