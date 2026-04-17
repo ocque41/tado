@@ -1,7 +1,7 @@
 import AppKit
 
 /// Curated terminal color palette — blends Claude brand colors and macOS Terminal.app
-/// classics. Used to randomize the background/foreground of each new SwiftTerm tile
+/// classics. Used to randomize the background/foreground of each new terminal tile
 /// when AppSettings.randomTileColor is true.
 struct TerminalTheme: Hashable, Identifiable {
     let id: String

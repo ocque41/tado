@@ -1,5 +1,4 @@
 import Foundation
-import SwiftTerm
 import AppKit
 
 enum SessionStatus: String, Equatable {
@@ -33,16 +32,15 @@ final class TerminalSession: Identifiable {
     var tileWidth: CGFloat = CanvasLayout.contentWidth
     var tileHeight: CGFloat = CanvasLayout.contentHeight
     var theme: TerminalTheme = .tadoDark
-    weak var terminalView: LocalProcessTerminalView?
 
-    /// Rust-backed PTY + VT parser, when the Metal renderer path is in use.
-    /// Populated by `MetalTerminalTileView.spawnIfNeeded` on the tile's
-    /// first `.onAppear` under the Metal path; nil while the tile is still
-    /// mounted under SwiftTerm or before spawn completes. Observed so
-    /// SwiftUI re-evaluates the tile body on the nil → Session transition
-    /// — without observation, the placeholder sticks forever even after
-    /// spawn succeeds. The underlying Rust grid mutates independently of
-    /// SwiftUI; those changes flow through the Metal draw loop, not here.
+    /// Rust-backed PTY + VT parser. Populated by
+    /// `MetalTerminalTileView.spawnIfNeeded` on the tile's first
+    /// `.onAppear`; nil until the spawn completes. Observed so SwiftUI
+    /// re-evaluates the tile body on the nil → Session transition —
+    /// without observation, the placeholder sticks forever even after
+    /// spawn succeeds. The underlying Rust grid mutates independently
+    /// of SwiftUI; those changes flow through the Metal draw loop, not
+    /// here.
     var coreSession: TadoCore.Session?
 
     /// Not rendered in any view — only consumed by ProcessSpawner/start-dir
@@ -92,25 +90,29 @@ final class TerminalSession: Identifiable {
         self.engine = engine
     }
 
-    /// Send text to the terminal followed by Enter
+    /// Send text to the terminal followed by Enter. Runs through the
+    /// Rust PTY writer; bracketed-paste framing (DECSET 2004, escape
+    /// sequences `ESC [ 200 ~` / `ESC [ 201 ~`) is applied for
+    /// multi-line text when the PTY has the mode enabled.
     private func sendToTerminal(_ text: String) {
-        guard let view = terminalView else { return }
+        guard let core = coreSession else { return }
 
-        let terminal = view.getTerminal()
-
-        // Wrap multi-line text in bracketed paste sequences if terminal supports it
-        if text.contains("\n"), terminal.bracketedPasteMode {
-            view.send(data: EscapeSequences.bracketedPasteStart[0...])
-            view.send(txt: text)
-            view.send(data: EscapeSequences.bracketedPasteEnd[0...])
+        if text.contains("\n"), core.bracketedPasteEnabled {
+            let start: [UInt8] = [0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E]
+            let end:   [UInt8] = [0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E]
+            core.write(start)
+            core.write(text: text)
+            core.write(end)
         } else {
-            view.send(txt: text)
+            core.write(text: text)
         }
 
-        // Scale delay based on text length: 50ms base + 1ms per 100 bytes, capped at 2s
+        // Scale delay based on text length: 50 ms base + 1 ms per 100
+        // bytes, capped at 2 s. Matches the historical SwiftTerm cadence
+        // so agents that pace on newline-arrival don't see regressions.
         let delay = min(0.05 + Double(text.utf8.count) / 100_000.0, 2.0)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            view.send(txt: "\r")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.coreSession?.write(text: "\r")
         }
     }
 

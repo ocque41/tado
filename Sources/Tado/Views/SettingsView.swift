@@ -170,14 +170,6 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("Use Rust + Metal renderer (experimental)", isOn: Binding(
-                        get: { settings.useMetalRenderer },
-                        set: { settings.useMetalRenderer = $0; try? modelContext.save() }
-                    ))
-                    Text("Phase 2 pipeline: tado-core (Rust PTY + VT parser) with a GPU-accelerated glyph grid instead of SwiftTerm. Only affects tiles spawned after the toggle flips; existing tiles keep their current renderer until closed. Try Cmd+Shift+M to preview on a standalone shell window without enabling this globally.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-
                     Stepper(
                         "Terminal font size: \(settings.terminalFontSize) pt",
                         value: Binding(
@@ -206,7 +198,7 @@ struct SettingsView: View {
                             Text(mode.label).tag(mode)
                         }
                     }
-                    Text("How a terminal bell (0x07) is surfaced — agents ring this for notifications. Visual flashes the tile background; useful when audio is muted. Metal path only; SwiftTerm tiles defer to the library's built-in audible bell.")
+                    Text("How a terminal bell (0x07) is surfaced — agents ring this for notifications. Visual flashes the tile background; useful when audio is muted.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 } header: {

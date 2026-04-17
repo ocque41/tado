@@ -6,9 +6,7 @@ let package = Package(
     platforms: [
         .macOS(.v14)
     ],
-    dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0")
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "CTadoCore",
@@ -17,7 +15,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "Tado",
-            dependencies: ["SwiftTerm", "CTadoCore"],
+            dependencies: ["CTadoCore"],
             path: "Sources/Tado",
             resources: [
                 // SwiftPM compiles .metal into a .metallib inside the

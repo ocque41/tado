@@ -8,18 +8,15 @@ struct TerminalTileView: View {
     let effortFlags: [String]
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
-    let useMetalRenderer: Bool
-    /// Monospace point size for the Metal renderer. Ignored on SwiftTerm
-    /// path (which fixes to 13pt internally).
+    /// Monospace point size for the Metal renderer.
     let fontSize: CGFloat
-    /// Blink the cursor on the Metal path. Honored live.
+    /// Blink the cursor. Honored live.
     let cursorBlink: Bool
-    /// How BEL (0x07) is surfaced on the Metal path. Honored live.
+    /// How BEL (0x07) is surfaced. Honored live.
     let bellMode: BellMode
-    /// Phase 3 virtualization signal from CanvasView. When false and Metal
-    /// is active, this tile unmounts its renderer and shows a lightweight
-    /// placeholder — the underlying `TadoCore.Session` keeps running.
-    /// Ignored on the SwiftTerm path (would kill the PTY).
+    /// Virtualization signal from CanvasView. When false, this tile
+    /// unmounts its renderer and shows a lightweight placeholder — the
+    /// underlying `TadoCore.Session` keeps running in Rust.
     let isVisible: Bool
     let scale: CGFloat
     var onPositionChanged: ((CGPoint) -> Void)? = nil
@@ -65,7 +62,6 @@ struct TerminalTileView: View {
                 effortFlags: effortFlags,
                 modelFlags: modelFlags,
                 claudeDisplay: claudeDisplay,
-                useMetalRenderer: useMetalRenderer,
                 fontSize: fontSize,
                 cursorBlink: cursorBlink,
                 bellMode: bellMode,
@@ -329,7 +325,6 @@ private struct StableTerminalContent: View {
     let effortFlags: [String]
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
-    let useMetalRenderer: Bool
     let fontSize: CGFloat
     let cursorBlink: Bool
     let bellMode: BellMode
@@ -338,36 +333,24 @@ private struct StableTerminalContent: View {
     let height: CGFloat
 
     var body: some View {
-        // Per-session render path is decided once at first body evaluation.
-        // Existing tiles keep the renderer they spawned with even if the
-        // AppSettings flag flips — so a runtime toggle takes effect only
-        // for tiles created afterward. This avoids mid-session rendering
-        // swaps that would nuke scrollback.
-        if useMetalRenderer {
-            if isVisible {
-                MetalTerminalTileView(
-                    session: session,
-                    engine: engine,
-                    ipcRoot: ipcRoot,
-                    modeFlags: modeFlags,
-                    effortFlags: effortFlags,
-                    modelFlags: modelFlags,
-                    agentName: session.agentName,
-                    claudeDisplay: claudeDisplay,
-                    fontSize: fontSize,
-                    cursorBlink: cursorBlink,
-                    bellMode: bellMode,
-                    width: width,
-                    height: height
-                )
-            } else {
-                OffscreenTilePlaceholder(session: session, width: width, height: height)
-            }
+        if isVisible {
+            MetalTerminalTileView(
+                session: session,
+                engine: engine,
+                ipcRoot: ipcRoot,
+                modeFlags: modeFlags,
+                effortFlags: effortFlags,
+                modelFlags: modelFlags,
+                agentName: session.agentName,
+                claudeDisplay: claudeDisplay,
+                fontSize: fontSize,
+                cursorBlink: cursorBlink,
+                bellMode: bellMode,
+                width: width,
+                height: height
+            )
         } else {
-            // SwiftTerm path: always render. Unmounting the NSView would
-            // terminate the PTY since SwiftTerm owns the child process.
-            TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, modelFlags: modelFlags, agentName: session.agentName, claudeDisplay: claudeDisplay)
-                .frame(width: width, height: height)
+            OffscreenTilePlaceholder(session: session, width: width, height: height)
         }
     }
 }

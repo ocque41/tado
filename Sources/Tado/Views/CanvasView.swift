@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import SwiftTerm
 import AppKit
 
 struct CanvasView: View {
@@ -61,17 +60,15 @@ struct CanvasView: View {
 
                 // Session tiles with zone offsets.
                 //
-                // Phase 3 virtualization: compute the visible world-space
-                // rect once per body eval; skip mounting heavy renderers
-                // for tiles fully outside it. Only applied on the Metal
-                // path — SwiftTerm tiles must always mount (their PTY is
-                // owned by the NSView).
+                // Virtualization: compute the visible world-space rect
+                // once per body eval; skip mounting heavy renderers for
+                // tiles fully outside it. Every tile uses the Metal
+                // renderer, so virtualization applies uniformly.
                 let visibleRect = TileVisibility.visibleWorldRect(
                     viewportSize: viewportSize,
                     scale: scale,
                     offset: offset
                 )
-                let useMetal = fetchSettings().useMetalRenderer
 
                 ForEach(terminalManager.sessions) { session in
                     let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
@@ -84,7 +81,7 @@ struct CanvasView: View {
                         tileWidth: session.tileWidth,
                         tileHeight: session.tileHeight
                     )
-                    let visible = !useMetal || TileVisibility.isVisible(
+                    let visible = TileVisibility.isVisible(
                         tileRect: tileRect,
                         visibleRect: visibleRect
                     )
@@ -97,7 +94,6 @@ struct CanvasView: View {
                         effortFlags: effortFlags(for: sessionEngine),
                         modelFlags: modelFlags(for: sessionEngine),
                         claudeDisplay: claudeDisplayEnv(),
-                        useMetalRenderer: useMetal,
                         fontSize: CGFloat(fetchSettings().terminalFontSize),
                         cursorBlink: fetchSettings().cursorBlink,
                         bellMode: fetchSettings().bellMode,
@@ -192,32 +188,11 @@ struct CanvasView: View {
 
             // If the cursor is over a Metal tile, let AppKit deliver
             // scrollWheel natively to `TerminalMTKView.scrollWheel(with:)`
-            // — it accumulates trackpad pixels and handles DECCKM-aware
-            // scrollback without needing help from this monitor. Returning
-            // the event (not nil) means we don't consume it.
+            // — it accumulates trackpad pixels and drives scrollback
+            // without needing help from this monitor. Returning the
+            // event (not nil) means we don't consume it.
             if self.metalTileUnderCursor(for: event) != nil {
                 return event
-            }
-
-            // If the cursor is over a SwiftTerm terminal tile, route the
-            // scroll into its scrollback. SwiftTerm's `scrollWheel` only
-            // honors `event.deltaY` (classic mouse wheel). Trackpads /
-            // Magic Mouse always have `deltaY == 0` and report via
-            // `scrollingDeltaY`, so we synthesize line scrolls for them
-            // and consume the event.
-            if let terminal = self.terminalUnderCursor(for: event) {
-                if event.deltaY != 0 {
-                    return event
-                }
-                let pixels = event.scrollingDeltaY
-                if pixels == 0 { return nil }
-                let lines = max(1, min(20, Int(abs(pixels) / 12)))
-                if pixels > 0 {
-                    terminal.scrollUpLines(lines)
-                } else {
-                    terminal.scrollDownLines(lines)
-                }
-                return nil
             }
 
             // Otherwise pan the canvas
@@ -274,24 +249,10 @@ struct CanvasView: View {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 
-    /// Hit-test the scroll event location and return the LoggingTerminalView
-    /// under the cursor, if any. Used to route scroll events to SwiftTerm
-    /// tiles regardless of first-responder state.
-    private func terminalUnderCursor(for event: NSEvent) -> LoggingTerminalView? {
-        guard let window = event.window, let contentView = window.contentView else { return nil }
-        guard let hit = contentView.hitTest(event.locationInWindow) else { return nil }
-        var view: NSView? = hit
-        while let v = view {
-            if let term = v as? LoggingTerminalView { return term }
-            view = v.superview
-        }
-        return nil
-    }
-
     /// Hit-test for a Metal-rendered terminal tile under the cursor.
     /// The Metal path handles scrollback inside its own `scrollWheel`
-    /// override, so the monitor just needs to know "is this one of those?"
-    /// to pass the event through.
+    /// override, so the scroll monitor just needs to know "is this one
+    /// of those?" to pass the event through.
     private func metalTileUnderCursor(for event: NSEvent) -> TerminalMTKView? {
         guard let window = event.window, let contentView = window.contentView else { return nil }
         guard let hit = contentView.hitTest(event.locationInWindow) else { return nil }
@@ -303,14 +264,13 @@ struct CanvasView: View {
         return nil
     }
 
-    /// Check if a view is inside a terminal tile — either SwiftTerm
-    /// (`TerminalView` subclass) or Metal (`TerminalMTKView`). Used by
-    /// the click monitor to decide whether an outside-click should
-    /// resign the tile's first-responder status.
+    /// Check if a view is inside a Metal terminal tile. Used by the
+    /// click monitor to decide whether an outside-click should resign
+    /// the tile's first-responder status.
     private func isViewInsideTerminal(_ view: NSView) -> Bool {
         var current: NSView? = view
         while let v = current {
-            if v is TerminalView || v is TerminalMTKView { return true }
+            if v is TerminalMTKView { return true }
             current = v.superview
         }
         return false

@@ -37,7 +37,7 @@ final class TerminalManager {
 
     func terminateSession(_ id: UUID) {
         if let session = sessions.first(where: { $0.id == id }) {
-            session.terminalView?.send(txt: "\u{3}")
+            session.coreSession?.write(text: "\u{3}")
             session.isRunning = false
             ipcBroker?.unregisterSession(id)
         }
@@ -46,7 +46,7 @@ final class TerminalManager {
 
     func terminateSessionForTodo(_ todoID: UUID) {
         if let session = sessions.first(where: { $0.todoID == todoID }) {
-            session.terminalView?.send(txt: "\u{3}")
+            session.coreSession?.write(text: "\u{3}")
             session.isRunning = false
             ipcBroker?.unregisterSession(session.id)
             sessions.removeAll { $0.id == session.id }

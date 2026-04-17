@@ -1,15 +1,10 @@
 import SwiftUI
 import AppKit
 
-/// Phase 2.4 counterpart to `TerminalNSViewRepresentable` that renders via
-/// `MetalTerminalView` + `TadoCore.Session` instead of SwiftTerm.
-///
-/// Mirrors the init signature so `StableTerminalContent` can branch on
-/// `AppSettings.useMetalRenderer` without reshaping its callers. On first
-/// body evaluation it lazily spawns a `TadoCore.Session` via
-/// `ProcessSpawner.command` + `ProcessSpawner.environment` — the exact same
-/// argv and env the SwiftTerm path would have used, so Claude/Codex CLIs
-/// see an identical world.
+/// Renders a single terminal tile using `MetalTerminalView` +
+/// `TadoCore.Session`. On first body evaluation it lazily spawns the
+/// PTY via `ProcessSpawner.command` + `ProcessSpawner.environment`, then
+/// swaps in the Metal view as soon as `session.coreSession` is set.
 struct MetalTerminalTileView: View {
     let session: TerminalSession
     let engine: TerminalEngine

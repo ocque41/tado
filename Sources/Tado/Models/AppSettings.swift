@@ -27,18 +27,16 @@ final class AppSettings {
     // When true, every new terminal tile picks a random theme from TerminalTheme.all.
     var randomTileColor: Bool = true
 
-    // Phase 2 feature flag: render terminal tiles with the Rust/Metal pipeline
-    // (TadoCore.Session + MetalTerminalView) instead of SwiftTerm's Cocoa view.
-    // Opt-in while Phase 2.4 stabilizes. Flip on in Settings to use the new
-    // renderer for new tiles; existing tiles keep their current renderer until
-    // they're closed and re-spawned.
-    var useMetalRenderer: Bool = false
+    // Vestigial SwiftData column from the Phase 2 rollout window. SwiftTerm
+    // has been removed; the Metal renderer is now the only code path. Kept
+    // as a stored property so SwiftData migrations don't have to drop the
+    // column — the value is ignored by all call sites. A later migration
+    // can formally remove it.
+    var useMetalRenderer: Bool = true
 
     // Monospace point size used by the Metal renderer. Changes take effect
     // for tiles spawned after the setting flips; existing tiles keep their
-    // current metrics so scrollback geometry stays stable. SwiftTerm path
-    // reads its size separately from TerminalNSViewRepresentable; matching
-    // the two is the user's responsibility if they switch back and forth.
+    // current metrics so scrollback geometry stays stable.
     var terminalFontSize: Int = 13
 
     // Whether the Metal renderer blinks the cursor. Matches Terminal.app's
@@ -104,9 +102,8 @@ final class AppSettings {
 }
 
 /// How a terminal bell (0x07) is surfaced to the user. Mirrors the
-/// options Terminal.app exposes. Non-Metal (SwiftTerm) tiles don't
-/// consult this today; they defer to SwiftTerm's built-in bell which
-/// is always audible.
+/// options Terminal.app exposes. Honored by the Metal renderer's bell
+/// drain each idle-tick.
 enum BellMode: String, CaseIterable, Identifiable {
     case off
     case audible

@@ -4,9 +4,7 @@ import MetalKit
 import SwiftUI
 
 /// SwiftUI bridge for a Metal-rendered terminal tile backed by a
-/// `TadoCore.Session`. This is the Phase 2 replacement for
-/// `TerminalNSViewRepresentable` (SwiftTerm + Cocoa). Mount in
-/// `TerminalTileView` behind the `useMetalRenderer` feature flag.
+/// `TadoCore.Session`. Sole terminal rendering path.
 ///
 /// Render loop: the underlying `TerminalMTKView` schedules itself to draw
 /// at ~30 fps when output is active; falls idle when nothing changes, so
@@ -172,9 +170,8 @@ final class TerminalMTKView: MTKView {
             }
         }
 
-        // Register for file drag-drop. Dropped URLs get written into the
-        // PTY as space-joined paths — same UX as SwiftTerm's
-        // LoggingTerminalView.
+        // Register for file drag-drop. Dropped URLs get written into
+        // the PTY as space-joined paths.
         registerForDraggedTypes([.fileURL])
 
         // Render delegate; MTKView calls us every frame.
@@ -389,7 +386,7 @@ final class TerminalMTKView: MTKView {
         return phase >= Self.blinkPeriod
     }
 
-    // MARK: - File drag-drop (matches LoggingTerminalView)
+    // MARK: - File drag-drop
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         sender.draggingPasteboard.canReadObject(

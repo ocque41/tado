@@ -3,10 +3,9 @@ import CTadoCore
 
 /// Swift-side namespace for the Rust `tado-core` bindings.
 ///
-/// `TadoCore.Session` wraps the opaque `TadoSession *` and is what Phase 1's
-/// `TerminalManager` uses instead of `LocalProcessTerminalView.startProcess`.
-/// Phase 2 replaces the `SwiftTerm`-backed rendering with a Metal view that
-/// consumes `snapshotDirty()` each frame.
+/// `TadoCore.Session` wraps the opaque `TadoSession *` that `TerminalManager`
+/// uses to spawn and drive a terminal process. The Metal renderer consumes
+/// `snapshotDirty()` each frame to paint the grid.
 ///
 /// Threading: the underlying PTY reader runs on a Rust-owned OS thread, so
 /// `snapshotDirty()` can be called from any thread. Writes are also
