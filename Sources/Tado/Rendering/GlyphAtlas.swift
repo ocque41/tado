@@ -63,8 +63,12 @@ final class GlyphAtlas {
 
     /// UV rect for `ch` in 0..1. Nil means "no glyph" — caller (shader)
     /// should render pure background. Allocates into the atlas on first
-    /// request for a given char.
-    func uvRect(for ch: UInt32) -> CGRect? {
+    /// request for a given char. `cellSpan` hints whether this codepoint
+    /// occupies two terminal cells (2) or one (1). Wide glyphs get a
+    /// 2× cellWidth bitmap so CJK / wide box-drawing renders at natural
+    /// proportions. The Rust grid marks wide-start cells with ATTR_WIDE
+    /// and the renderer passes `cellSpan: 2` here.
+    func uvRect(for ch: UInt32, cellSpan: Int = 1) -> CGRect? {
         if let cached = rects[ch] {
             return cached.isEmpty ? nil : cached
         }
@@ -74,7 +78,7 @@ final class GlyphAtlas {
         }
 
         // Rasterize.
-        guard let (pixelRect, pixels) = rasterize(scalar: scalar) else {
+        guard let (pixelRect, pixels) = rasterize(scalar: scalar, cellSpan: max(1, cellSpan)) else {
             rects[ch] = GlyphAtlas.emptyRect
             return nil
         }
@@ -129,7 +133,9 @@ final class GlyphAtlas {
     /// Rasterize a single glyph into an R8 pixel buffer with CoreText.
     /// Returns (pixelRect, pixels) where pixelRect.size is the glyph's
     /// bounding rect in pixels and pixels.count == width*height.
-    private func rasterize(scalar: Unicode.Scalar) -> (CGRect, [UInt8])? {
+    /// `cellSpan` controls the bitmap width: 1 for normal chars, 2 for
+    /// East-Asian Wide / CJK. Width is `cellSpan * cellWidth` pixels.
+    private func rasterize(scalar: Unicode.Scalar, cellSpan: Int = 1) -> (CGRect, [UInt8])? {
         var ch: UniChar = UInt16(clamping: scalar.value)
         var glyph: CGGlyph = 0
         if scalar.value > 0xFFFF {
@@ -140,7 +146,8 @@ final class GlyphAtlas {
         guard ok, glyph != 0 else { return nil }
 
         // Cell-sized bitmap so baseline positioning is consistent per row.
-        let w = Int(metrics.cellWidth)
+        // Wide glyphs double the width so the CJK shape renders unsquished.
+        let w = Int(metrics.cellWidth) * max(1, cellSpan)
         let h = Int(metrics.cellHeight)
         guard w > 0, h > 0 else { return nil }
 

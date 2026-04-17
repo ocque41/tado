@@ -539,7 +539,14 @@ enum TerminalTextExtractor {
                 for c in startCol...min(endCol, cols - 1) {
                     let idx = r * cols + c
                     guard idx < snap.cells.count else { break }
-                    let ch = snap.cells[idx].ch
+                    let cell = snap.cells[idx]
+                    // Skip the right half of wide glyphs — they're a
+                    // rendering-only filler; the wide-start cell already
+                    // emitted the real character.
+                    if (cell.attrs & MetalTerminalRenderer.Attr.wideFiller) != 0 {
+                        continue
+                    }
+                    let ch = cell.ch
                     if ch == 0 {
                         line.append(" ")
                     } else if let scalar = Unicode.Scalar(ch) {

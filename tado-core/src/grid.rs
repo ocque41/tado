@@ -40,6 +40,24 @@ pub const ATTR_UNDERLINE: u32 = 1 << 2;
 pub const ATTR_REVERSE: u32 = 1 << 3;
 pub const ATTR_STRIKETHROUGH: u32 = 1 << 4;
 pub const ATTR_DIM: u32 = 1 << 5;
+/// Left half of a 2-cell-wide glyph (CJK, some box-drawing). The
+/// renderer extends this cell's quad to span two columns. Mutually
+/// exclusive with ATTR_WIDE_FILLER on any cell.
+pub const ATTR_WIDE: u32 = 1 << 6;
+/// Right half of a 2-cell-wide glyph. `ch` is 0. Shader skips
+/// rasterization for these cells — the WIDE-start quad already
+/// covers the pixels.
+pub const ATTR_WIDE_FILLER: u32 = 1 << 7;
+
+/// Display width of a Unicode scalar in terminal cells. 0 for
+/// combining / zero-width codepoints (skipped by `put_char`), 1 for
+/// regular, 2 for East-Asian Wide + box-drawing wide variants. Wraps
+/// the `unicode-width` crate so the mapping stays consistent with
+/// other terminal emulators.
+pub fn char_width(ch: char) -> u8 {
+    use unicode_width::UnicodeWidthChar;
+    ch.width().unwrap_or(1) as u8
+}
 
 pub struct Grid {
     pub cols: u16,
@@ -357,18 +375,51 @@ impl Grid {
     }
 
     pub fn put_char(&mut self, ch: char) {
-        if self.cursor_x >= self.cols {
+        let w = char_width(ch);
+        // Zero-width codepoints (combining marks, ZWJ, BOM…) are not
+        // yet composed onto the previous cell. Phase 2.14 scope: skip.
+        // A future phase can fold these into the preceding Cell's
+        // `ch` via a precomposition pass.
+        if w == 0 {
+            return;
+        }
+        // Wide glyph needs two cells. If only one cell remains on the
+        // current row, wrap to the next so the glyph never straddles
+        // the right edge.
+        if w == 2 && self.cursor_x + 1 >= self.cols {
+            self.newline();
+        } else if self.cursor_x >= self.cols {
             self.newline();
         }
+
         let i = self.idx(self.cursor_x, self.cursor_y);
-        self.cells[i] = Cell {
-            ch: ch as u32,
-            fg: self.current_fg,
-            bg: self.current_bg,
-            attrs: self.current_attrs,
-        };
+        if w == 2 {
+            self.cells[i] = Cell {
+                ch: ch as u32,
+                fg: self.current_fg,
+                bg: self.current_bg,
+                attrs: self.current_attrs | ATTR_WIDE,
+            };
+            // Right-half filler: ch=0 so the shader short-circuits;
+            // ATTR_WIDE_FILLER tells the renderer to skip its quad.
+            let j = self.idx(self.cursor_x + 1, self.cursor_y);
+            self.cells[j] = Cell {
+                ch: 0,
+                fg: self.current_fg,
+                bg: self.current_bg,
+                attrs: ATTR_WIDE_FILLER,
+            };
+            self.cursor_x += 2;
+        } else {
+            self.cells[i] = Cell {
+                ch: ch as u32,
+                fg: self.current_fg,
+                bg: self.current_bg,
+                attrs: self.current_attrs,
+            };
+            self.cursor_x += 1;
+        }
         self.dirty_rows[self.cursor_y as usize] = true;
-        self.cursor_x += 1;
     }
 
     pub fn backspace(&mut self) {

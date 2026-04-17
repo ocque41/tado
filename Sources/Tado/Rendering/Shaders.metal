@@ -91,8 +91,31 @@ vertex VertexOut terminal_vertex(
     uint row = iid / u.cols;
     float2 corner = kQuadCorners[vid];
 
+    // Wide-char handling:
+    // * ATTR_WIDE (bit 6) — this cell's quad spans two cells so the 2x
+    //   glyph bitmap renders at natural proportions. Extend the right
+    //   edge by one extra cellWidth.
+    // * ATTR_WIDE_FILLER (bit 7) — the right half of a wide pair. The
+    //   wide-start quad already covers these pixels. Emit a degenerate
+    //   quad far off-screen to make the rasterizer drop it.
+    bool isWide = (cell.attrs & 0x40u) != 0u;
+    bool isFiller = (cell.attrs & 0x80u) != 0u;
+    if (isFiller) {
+        VertexOut skipped;
+        // Point way outside clip space → discarded after clipping.
+        skipped.position = float4(2.0, 2.0, 0.0, 1.0);
+        skipped.uv = float2(0.0);
+        skipped.fg = float4(0.0);
+        skipped.bg = float4(0.0);
+        skipped.attrs = cell.attrs;
+        skipped.hasGlyph = 0u;
+        return skipped;
+    }
+
+    float widthMul = isWide ? 2.0 : 1.0;
+    float2 cellExtent = float2(u.cellSize.x * widthMul, u.cellSize.y);
     // Pixel-space position of the corner.
-    float2 px = float2(float(col), float(row)) * u.cellSize + corner * u.cellSize;
+    float2 px = float2(float(col), float(row)) * u.cellSize + corner * cellExtent;
     // Clip space (top-left origin → Metal's +Y-up clip space).
     float2 clip = float2(
          (px.x / u.viewport.x) * 2.0 - 1.0,

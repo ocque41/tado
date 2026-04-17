@@ -469,6 +469,44 @@ mod tests {
     }
 
     #[test]
+    fn wide_char_occupies_two_cells() {
+        use crate::grid::{ATTR_WIDE, ATTR_WIDE_FILLER};
+        let mut g = Grid::new(4, 2);
+        // Feed a single CJK ideograph (U+4E2D "中") via UTF-8.
+        feed(&mut g, "中".as_bytes());
+        assert_eq!(g.cells[0].ch, 0x4E2D);
+        assert!(g.cells[0].attrs & ATTR_WIDE != 0);
+        assert_eq!(g.cells[1].ch, 0);
+        assert!(g.cells[1].attrs & ATTR_WIDE_FILLER != 0);
+        assert_eq!(g.cursor_x, 2);
+    }
+
+    #[test]
+    fn wide_char_wraps_when_one_col_left() {
+        use crate::grid::{ATTR_WIDE, ATTR_WIDE_FILLER};
+        let mut g = Grid::new(3, 2);
+        feed(&mut g, b"ab"); // cursor at col 2 with 1 col left
+        feed(&mut g, "中".as_bytes()); // should wrap to row 1
+        assert_eq!(g.cells[0].ch, b'a' as u32);
+        assert_eq!(g.cells[1].ch, b'b' as u32);
+        // Row 1, cols 0..1 should hold the wide glyph
+        assert_eq!(g.cells[3].ch, 0x4E2D);
+        assert!(g.cells[3].attrs & ATTR_WIDE != 0);
+        assert!(g.cells[4].attrs & ATTR_WIDE_FILLER != 0);
+        assert_eq!(g.cursor_y, 1);
+    }
+
+    #[test]
+    fn zero_width_combining_marks_are_skipped() {
+        let mut g = Grid::new(4, 2);
+        // "a" followed by a combining acute accent (U+0301, zero width).
+        // Phase 2.14 scope: skip combining. The "a" should be alone.
+        feed(&mut g, "a\u{0301}b".as_bytes());
+        assert_eq!(g.cells[0].ch, b'a' as u32);
+        assert_eq!(g.cells[1].ch, b'b' as u32);
+    }
+
+    #[test]
     fn bel_emits_bell_event() {
         let mut g = Grid::new(4, 2);
         let mut events = Vec::new();

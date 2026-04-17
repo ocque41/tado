@@ -45,6 +45,20 @@ final class MetalTerminalRenderer {
         var attrs: UInt32
     }
 
+    /// Cell attribute bit constants — must stay in sync with `grid.rs`
+    /// (`ATTR_*`) and `Shaders.metal`. Kept as a Swift namespace so
+    /// callsite reads like `attrs & Attr.wide` instead of magic bits.
+    enum Attr {
+        static let bold: UInt32          = 1 << 0
+        static let italic: UInt32        = 1 << 1
+        static let underline: UInt32     = 1 << 2
+        static let reverse: UInt32       = 1 << 3
+        static let strikethrough: UInt32 = 1 << 4
+        static let dim: UInt32           = 1 << 5
+        static let wide: UInt32          = 1 << 6
+        static let wideFiller: UInt32    = 1 << 7
+    }
+
     // MARK: - State
 
     let device: MTLDevice
@@ -195,7 +209,7 @@ final class MetalTerminalRenderer {
                   dstStart + colsInt <= localCells.count else { continue }
             for c in 0..<colsInt {
                 let src = snapshot.cells[srcStart + c]
-                rasterizeIfNew(src.ch)
+                rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
                 localCells[dstStart + c] = CellInstance(
                     ch: src.ch,
                     fg: src.fg,
@@ -244,7 +258,7 @@ final class MetalTerminalRenderer {
                     let cell: CellInstance
                     if sbIdx < sb.cells.count, c < sbCols {
                         let src = sb.cells[sbIdx]
-                        rasterizeIfNew(src.ch)
+                        rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
                         cell = CellInstance(ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs)
                     } else {
                         cell = CellInstance(ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0)
@@ -269,7 +283,7 @@ final class MetalTerminalRenderer {
             for r in 0..<liveRows {
                 for c in 0..<colsInt {
                     let src = live.cells[r * colsInt + c]
-                    rasterizeIfNew(src.ch)
+                    rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
                     let dstRow = clampedOffset + r
                     localCells[dstRow * colsInt + c] = CellInstance(
                         ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs
@@ -291,14 +305,15 @@ final class MetalTerminalRenderer {
     /// whether to rebuild the GPU lookup buffer by comparing the atlas's
     /// modCount against the last built one — that signal is accurate even
     /// when this method doesn't do anything observable (no in/out bool
-    /// needed).
-    private func rasterizeIfNew(_ ch: UInt32) {
+    /// needed). `isWide` controls the atlas bitmap width: 2x cellWidth
+    /// for CJK / box-drawing wide variants.
+    private func rasterizeIfNew(_ ch: UInt32, isWide: Bool = false) {
         // Zero means "blank cell" (handled by shader short-circuit) — never
         // rasterize. Also cap at BMP: beyond that we'd need sparse lookup,
         // so fall back to a visible placeholder row instead of blowing
         // memory on a 4 MB lookup buffer for one emoji.
         guard ch != 0, ch < 0x10000 else { return }
-        _ = atlas.uvRect(for: ch)
+        _ = atlas.uvRect(for: ch, cellSpan: isWide ? 2 : 1)
         if ch >= lookupMax {
             // Grow lookup bound to cover this codepoint. Round up to the
             // next 256-codepoint boundary so we don't thrash the GPU

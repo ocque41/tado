@@ -70,6 +70,39 @@ final class SelectionExtractorTests: XCTestCase {
         XCTAssertEqual(got, "\n\n")
     }
 
+    func testWideCharFillerCellIsSkippedInExtract() {
+        // Build a row containing a wide CJK char "中" (U+4E2D) followed
+        // by "ok". `中` occupies cols 0..1; the cell at col 1 is a
+        // WIDE_FILLER. The extractor must return "中ok", not "中 ok"
+        // (which would be the naive space-pad result).
+        let wide: UInt32 = 0x4E2D
+        let snap = TadoCore.Snapshot.synthetic(cols: 10, rows: 1) { col, _ in
+            switch col {
+            case 0: return TadoCore.Cell(
+                ch: wide,
+                fg: 0xFFFFFFFF, bg: 0x000000FF,
+                attrs: MetalTerminalRenderer.Attr.wide
+            )
+            case 1: return TadoCore.Cell(
+                ch: 0,
+                fg: 0xFFFFFFFF, bg: 0x000000FF,
+                attrs: MetalTerminalRenderer.Attr.wideFiller
+            )
+            case 2: return TadoCore.Cell(ch: UInt32("o".unicodeScalars.first!.value),
+                                         fg: 0xFFFFFFFF, bg: 0x000000FF, attrs: 0)
+            case 3: return TadoCore.Cell(ch: UInt32("k".unicodeScalars.first!.value),
+                                         fg: 0xFFFFFFFF, bg: 0x000000FF, attrs: 0)
+            default: return TadoCore.Cell(ch: 0, fg: 0xFFFFFFFF, bg: 0x000000FF, attrs: 0)
+            }
+        }
+        let got = TerminalTextExtractor.extract(
+            from: snap,
+            start: CellCoord(col: 0, row: 0),
+            end:   CellCoord(col: 9, row: 0)
+        )
+        XCTAssertEqual(got, "中ok")
+    }
+
     func testZeroWidthSelectionOnEmptyRow() {
         let snap = snapshot(rows: ["foo", "", "bar"])
         let got = TerminalTextExtractor.extract(
