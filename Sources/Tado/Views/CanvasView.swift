@@ -59,11 +59,35 @@ struct CanvasView: View {
                         )
                 }
 
-                // Session tiles with zone offsets
+                // Session tiles with zone offsets.
+                //
+                // Phase 3 virtualization: compute the visible world-space
+                // rect once per body eval; skip mounting heavy renderers
+                // for tiles fully outside it. Only applied on the Metal
+                // path — SwiftTerm tiles must always mount (their PTY is
+                // owned by the NSView).
+                let visibleRect = TileVisibility.visibleWorldRect(
+                    viewportSize: viewportSize,
+                    scale: scale,
+                    offset: offset
+                )
+                let useMetal = fetchSettings().useMetalRenderer
+
                 ForEach(terminalManager.sessions) { session in
                     let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
                     let xOff = zoneOffset(for: zoneIndex)
                     let sessionEngine = session.engine ?? currentEngine
+
+                    let tileRect = TileVisibility.tileWorldRect(
+                        canvasCenter: session.canvasPosition,
+                        zoneX: xOff,
+                        tileWidth: session.tileWidth,
+                        tileHeight: session.tileHeight
+                    )
+                    let visible = !useMetal || TileVisibility.isVisible(
+                        tileRect: tileRect,
+                        visibleRect: visibleRect
+                    )
 
                     TerminalTileView(
                         session: session,
@@ -73,7 +97,8 @@ struct CanvasView: View {
                         effortFlags: effortFlags(for: sessionEngine),
                         modelFlags: modelFlags(for: sessionEngine),
                         claudeDisplay: claudeDisplayEnv(),
-                        useMetalRenderer: fetchSettings().useMetalRenderer,
+                        useMetalRenderer: useMetal,
+                        isVisible: visible,
                         scale: scale
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)

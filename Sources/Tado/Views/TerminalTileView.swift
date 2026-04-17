@@ -9,6 +9,11 @@ struct TerminalTileView: View {
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let useMetalRenderer: Bool
+    /// Phase 3 virtualization signal from CanvasView. When false and Metal
+    /// is active, this tile unmounts its renderer and shows a lightweight
+    /// placeholder — the underlying `TadoCore.Session` keeps running.
+    /// Ignored on the SwiftTerm path (would kill the PTY).
+    let isVisible: Bool
     let scale: CGFloat
     var onPositionChanged: ((CGPoint) -> Void)? = nil
     @Environment(TerminalManager.self) private var terminalManager
@@ -54,6 +59,7 @@ struct TerminalTileView: View {
                 modelFlags: modelFlags,
                 claudeDisplay: claudeDisplay,
                 useMetalRenderer: useMetalRenderer,
+                isVisible: isVisible,
                 width: isResizing ? visualWidth : session.tileWidth,
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
             )
@@ -314,6 +320,7 @@ private struct StableTerminalContent: View {
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let useMetalRenderer: Bool
+    let isVisible: Bool
     let width: CGFloat
     let height: CGFloat
 
@@ -324,21 +331,48 @@ private struct StableTerminalContent: View {
         // for tiles created afterward. This avoids mid-session rendering
         // swaps that would nuke scrollback.
         if useMetalRenderer {
-            MetalTerminalTileView(
-                session: session,
-                engine: engine,
-                ipcRoot: ipcRoot,
-                modeFlags: modeFlags,
-                effortFlags: effortFlags,
-                modelFlags: modelFlags,
-                agentName: session.agentName,
-                claudeDisplay: claudeDisplay,
-                width: width,
-                height: height
-            )
+            if isVisible {
+                MetalTerminalTileView(
+                    session: session,
+                    engine: engine,
+                    ipcRoot: ipcRoot,
+                    modeFlags: modeFlags,
+                    effortFlags: effortFlags,
+                    modelFlags: modelFlags,
+                    agentName: session.agentName,
+                    claudeDisplay: claudeDisplay,
+                    width: width,
+                    height: height
+                )
+            } else {
+                OffscreenTilePlaceholder(session: session, width: width, height: height)
+            }
         } else {
+            // SwiftTerm path: always render. Unmounting the NSView would
+            // terminate the PTY since SwiftTerm owns the child process.
             TerminalNSViewRepresentable(session: session, engine: engine, ipcRoot: ipcRoot, modeFlags: modeFlags, effortFlags: effortFlags, modelFlags: modelFlags, agentName: session.agentName, claudeDisplay: claudeDisplay)
                 .frame(width: width, height: height)
         }
+    }
+}
+
+/// Cheap placeholder shown for Metal-rendered tiles that are currently
+/// off-screen. Preserves the tile shape so pan/zoom visuals don't jitter
+/// when a tile crosses the visibility threshold. The session's PTY keeps
+/// running in Rust; only the GPU resources are released.
+private struct OffscreenTilePlaceholder: View {
+    let session: TerminalSession
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.black)
+            .frame(width: width, height: height)
+            .overlay(
+                Image(systemName: "pause.circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white.opacity(0.15))
+            )
     }
 }
