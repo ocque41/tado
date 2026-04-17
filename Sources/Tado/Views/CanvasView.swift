@@ -98,6 +98,7 @@ struct CanvasView: View {
                         modelFlags: modelFlags(for: sessionEngine),
                         claudeDisplay: claudeDisplayEnv(),
                         useMetalRenderer: useMetal,
+                        fontSize: CGFloat(fetchSettings().terminalFontSize),
                         isVisible: visible,
                         scale: scale
                     ) { newPosition in

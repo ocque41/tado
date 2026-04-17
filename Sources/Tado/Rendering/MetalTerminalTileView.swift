@@ -19,8 +19,11 @@ struct MetalTerminalTileView: View {
     let modelFlags: [String]
     let agentName: String?
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
+    let fontSize: CGFloat
     let width: CGFloat
     let height: CGFloat
+
+    private var metrics: FontMetrics { FontMetrics.defaultMono(size: fontSize) }
 
     var body: some View {
         Group {
@@ -29,6 +32,7 @@ struct MetalTerminalTileView: View {
                     session: core,
                     cols: gridCols(for: width),
                     rows: gridRows(for: height),
+                    metrics: metrics,
                     clearRGBA: session.theme.backgroundRGBA,
                     onDirty: { [weak session] in
                         // Runs on the main thread (MTKViewDelegate.draw
@@ -136,16 +140,13 @@ struct MetalTerminalTileView: View {
 
     // MARK: - Cell-size math
 
-    /// Convert a pixel width to a terminal column count using the shared
-    /// default monospace metrics. Phase 3 replaces this with a fully cached
-    /// FontMetrics that follows the SwiftUI font size.
+    /// Convert a pixel width to a terminal column count using the size
+    /// resolved from AppSettings. Tiles with a small font get more cols.
     private func gridCols(for width: CGFloat) -> UInt16 {
-        let cellW = FontMetrics.defaultMono().cellWidth
-        return UInt16(max(10, Int(width / cellW)))
+        UInt16(max(10, Int(width / metrics.cellWidth)))
     }
 
     private func gridRows(for height: CGFloat) -> UInt16 {
-        let cellH = FontMetrics.defaultMono().cellHeight
-        return UInt16(max(4, Int(height / cellH)))
+        UInt16(max(4, Int(height / metrics.cellHeight)))
     }
 }

@@ -34,6 +34,13 @@ final class AppSettings {
     // they're closed and re-spawned.
     var useMetalRenderer: Bool = false
 
+    // Monospace point size used by the Metal renderer. Changes take effect
+    // for tiles spawned after the setting flips; existing tiles keep their
+    // current metrics so scrollback geometry stays stable. SwiftTerm path
+    // reads its size separately from TerminalNSViewRepresentable; matching
+    // the two is the user's responsibility if they switch back and forth.
+    var terminalFontSize: Int = 13
+
     init() {
         self.id = UUID()
         self.engineRaw = TerminalEngine.claude.rawValue

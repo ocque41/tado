@@ -16,6 +16,9 @@ struct MetalTerminalView: NSViewRepresentable {
     let session: TadoCore.Session
     let cols: UInt16
     let rows: UInt16
+    /// Cell metrics for the renderer. Default matches the historical
+    /// 13pt SF Mono; callers forward `AppSettings.terminalFontSize`.
+    var metrics: FontMetrics = FontMetrics.defaultMono()
     /// Background color used for the MTKView's clear color (letterboxing
     /// between cells and the view edge). Packed 0xRRGGBBAA. Default is
     /// pure black; MetalTerminalTileView passes the tile theme's bg.
@@ -32,7 +35,7 @@ struct MetalTerminalView: NSViewRepresentable {
     var onTitleChange: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> TerminalMTKView {
-        let view = TerminalMTKView(session: session, cols: cols, rows: rows)
+        let view = TerminalMTKView(session: session, cols: cols, rows: rows, metrics: metrics)
         view.applyClearColor(rgba: clearRGBA)
         view.onDirty = onDirty
         view.onIdleTick = onIdleTick
@@ -100,7 +103,12 @@ final class TerminalMTKView: MTKView {
     var onTitleChange: ((String) -> Void)?
     private var lastIdleTick: TimeInterval = 0
 
-    init(session: TadoCore.Session, cols: UInt16, rows: UInt16) {
+    init(
+        session: TadoCore.Session,
+        cols: UInt16,
+        rows: UInt16,
+        metrics: FontMetrics = FontMetrics.defaultMono()
+    ) {
         self.session = session
         self.cols = cols
         self.rows = rows
@@ -119,6 +127,7 @@ final class TerminalMTKView: MTKView {
             do {
                 self.renderer = try MetalTerminalRenderer(
                     device: device,
+                    metrics: metrics,
                     cols: UInt32(cols),
                     rows: UInt32(rows)
                 )

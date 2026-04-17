@@ -177,6 +177,18 @@ struct SettingsView: View {
                     Text("Phase 2 pipeline: tado-core (Rust PTY + VT parser) with a GPU-accelerated glyph grid instead of SwiftTerm. Only affects tiles spawned after the toggle flips; existing tiles keep their current renderer until closed. Try Cmd+Shift+M to preview on a standalone shell window without enabling this globally.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+
+                    Stepper(
+                        "Terminal font size: \(settings.terminalFontSize) pt",
+                        value: Binding(
+                            get: { settings.terminalFontSize },
+                            set: { settings.terminalFontSize = $0; try? modelContext.save() }
+                        ),
+                        in: 9...24
+                    )
+                    Text("Monospace point size used by the Metal renderer. Changes apply to tiles spawned after the setting moves; existing tiles keep their current size so scrollback geometry stays stable.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Rendering")
                 }
