@@ -143,9 +143,7 @@ enum TadoCore {
         var attrs: UInt32
     }
 
-    final class Snapshot {
-        private let raw: OpaquePointer
-
+    struct Snapshot {
         let cols: UInt16
         let rows: UInt16
         let cursorX: UInt16
@@ -156,8 +154,9 @@ enum TadoCore {
         let cells: [Cell]
 
         fileprivate init(raw: OpaquePointer) {
-            self.raw = raw
             let ptr = UnsafeMutablePointer<TadoSnapshot>(raw)
+            defer { tado_snapshot_free(ptr) }
+
             self.cols = tado_snapshot_cols(ptr)
             self.rows = tado_snapshot_rows(ptr)
             self.cursorX = tado_snapshot_cursor_x(ptr)
@@ -179,8 +178,47 @@ enum TadoCore {
             }
         }
 
-        deinit {
-            tado_snapshot_free(UnsafeMutablePointer(raw))
+        /// Synthetic snapshot factory for tests and non-PTY callers (e.g.,
+        /// a placeholder tile rendered with an empty grid). Bypasses the
+        /// Rust FFI entirely. `fill(col, row)` is invoked for each cell.
+        static func synthetic(
+            cols: UInt16,
+            rows: UInt16,
+            cursorX: UInt16 = 0,
+            cursorY: UInt16 = 0,
+            fill: (Int, Int) -> Cell
+        ) -> Snapshot {
+            var cells: [Cell] = []
+            cells.reserveCapacity(Int(cols) * Int(rows))
+            for r in 0..<Int(rows) {
+                for c in 0..<Int(cols) {
+                    cells.append(fill(c, r))
+                }
+            }
+            return Snapshot(
+                cols: cols,
+                rows: rows,
+                cursorX: cursorX,
+                cursorY: cursorY,
+                dirtyRows: (0..<rows).map { $0 },
+                cells: cells
+            )
+        }
+
+        private init(
+            cols: UInt16,
+            rows: UInt16,
+            cursorX: UInt16,
+            cursorY: UInt16,
+            dirtyRows: [UInt16],
+            cells: [Cell]
+        ) {
+            self.cols = cols
+            self.rows = rows
+            self.cursorX = cursorX
+            self.cursorY = cursorY
+            self.dirtyRows = dirtyRows
+            self.cells = cells
         }
     }
 }

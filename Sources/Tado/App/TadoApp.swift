@@ -64,6 +64,14 @@ struct TadoApp: App {
                 }
                 .keyboardShortcut("t", modifiers: .command)
             }
+            // Phase 2 — Metal renderer preview. The command lives under
+            // Debug so it's discoverable without cluttering the product UX.
+            CommandMenu("Debug") {
+                Button("Metal Terminal Preview") {
+                    MetalTerminalPreviewWindowController.show()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+            }
         }
     }
 }

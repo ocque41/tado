@@ -19,6 +19,11 @@ let package = Package(
             name: "Tado",
             dependencies: ["SwiftTerm", "CTadoCore"],
             path: "Sources/Tado",
+            resources: [
+                // SwiftPM compiles .metal into a .metallib inside the
+                // Tado_Tado.bundle. Loaded at runtime via Bundle.module.
+                .process("Rendering/Shaders.metal")
+            ],
             linkerSettings: [
                 // Link the Rust static library. `make core` builds it at
                 // `tado-core/target/release/libtado_core.a` before `swift build`.
