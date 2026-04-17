@@ -202,28 +202,34 @@ struct TerminalTheme: Hashable, Identifiable {
         foreground: NSColor(red: 0.922, green: 0.859, blue: 0.698, alpha: 1.0)
     )
 
-    /// Tado's house theme. Deep plum + near-white + burnt-sienna accent.
-    /// Matches `Palette.background/foreground/accent` so the terminal
-    /// tile reads as part of the same surface as the app chrome (no
-    /// jarring color discontinuity at the tile edge). ANSI palette is
-    /// derived from the same three anchors: all hues stay warm / earthy
-    /// so a `ls --color` output blends into the background instead of
-    /// popping at you.
+    /// Tado's house theme. Deep neutral black (`#0A0A0A`) + near-white +
+    /// burnt-sienna accent. The terminal content is intentionally DARKER
+    /// than the app chrome — surface hierarchy reads deepest → shallowest:
+    /// terminal body (`#0A0A0A`) → page body / canvas (`#1A1A1A`) →
+    /// page headers + tile titlebars (`#2A2A2A`). No chromatic bleed:
+    /// the bg is pure neutral so it sits naturally under `Palette.canvas`
+    /// at the tile edge.
+    ///
+    /// ANSI palette keeps the burnt-sienna accent family for the warm
+    /// hues (red/yellow/magenta) and muted sage/teal for green/cyan so
+    /// `ls --color` output stays earthy rather than popping at you.
+    /// Slot 0 (SGR 40) is locked to `#0A0A0A` so a black background
+    /// escape doesn't flash a different color mid-stream.
     static let ember = TerminalTheme(
         id: "ember",
         name: "Ember",
-        background: NSColor(red: 0x1B / 255.0, green: 0x11 / 255.0, blue: 0x27 / 255.0, alpha: 1.0),
+        background: NSColor(red: 0x0A / 255.0, green: 0x0A / 255.0, blue: 0x0A / 255.0, alpha: 1.0),
         foreground: NSColor(red: 0xF5 / 255.0, green: 0xF5 / 255.0, blue: 0xF5 / 255.0, alpha: 1.0),
         ansiPalette: [
-            0x1B1127FF, // 0  black      — matches bg so SGR 40 doesn't flash
+            0x0A0A0AFF, // 0  black      — matches bg so SGR 40 doesn't flash
             0xA44718FF, // 1  red        — primary accent (burnt sienna)
             0x7A8F5AFF, // 2  green      — muted sage, reads earthy
             0xD4A043FF, // 3  yellow     — warm gold (leans orange, not lemon)
-            0x6A5A95FF, // 4  blue       — desaturated plum-blue, echoes bg
+            0x6A6A95FF, // 4  blue       — desaturated neutral blue
             0xA8518BFF, // 5  magenta    — dusty rose
             0x5A8D95FF, // 6  cyan       — muted teal, sits cooler than accent
             0xD8D8D8FF, // 7  white      — off-white for normal text
-            0x3F2F4CFF, // 8  bright black — purple-gray, visible on bg
+            0x3A3A3AFF, // 8  bright black — neutral gray, visible on #0A0A0A
             0xC5613AFF, // 9  bright red — brighter burnt orange
             0x98AC7BFF, // 10 bright green — brighter sage
             0xE6BE5EFF, // 11 bright yellow
