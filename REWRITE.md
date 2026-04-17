@@ -14,7 +14,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.3 | Debug preview window (Cmd+Shift+M) | ✅ shipped |
 | 2.4 | Feature-flag Metal path in `TerminalTileView` (Settings → Rendering) | ✅ shipped |
 | 3 | Canvas virtualization — off-screen tiles shed GPU resources; Rust PTY keeps running | ✅ shipped |
-| 2.5 | Scrollback + drag-drop + activity detection on Metal path | ✅ shipped (22/22 tests green) |
+| 2.5 | Scrollback + drag-drop + activity detection on Metal path | ✅ shipped |
+| 2.7 | VT sequence completeness: alt-screen (1049/1047/47), DECTCEM (25), DECSTBM, DECSC/DECRC, expanded keymap (F1-F12, Home/End, PgUp/PgDn, Option+arrow, fn+Delete) | ✅ shipped (27/27 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
@@ -57,8 +58,17 @@ landed vs. what remains. Delete once the rewrite is merged.
   Metal draw loop invoke `TerminalSession.markActivity()` /
   `.checkIdle()` on the main actor — forward-mode prompt queue drains
   identically to the SwiftTerm path.
-- Test coverage: **22 total, all green.** 10 Rust (grid/VT parser/colors
-  + 5 scrollback) + 12 Swift (3 FFI + 1 scrollback accumulation +
+- **VT sequence depth (Phase 2.7)**: alternate screen (DECSET 1049/1047/47)
+  with full state preservation, cursor visibility (DECTCEM), save/restore
+  cursor (DECSC/DECRC, CSI s/u with SGR capture), scrolling region
+  (DECSTBM — linefeed + scroll_up bounded, scrollback suppressed for
+  in-region scrolls). Claude's interactive UI / vim / less render
+  correctly on the Metal path.
+- **Keymap depth (Phase 2.7)**: F1–F12 (xterm VT), Home/End, PgUp/PgDn,
+  fn+Delete forward, Shift+Tab, Option+arrow → word movement,
+  Option+letter → ESC-prefix for bash readline.
+- Test coverage: **27 total, all green.** 15 Rust (10 existing
+  grid/parser + 5 VT additions) + 12 Swift (3 FFI + 1 scrollback +
   3 Metal pipeline + 5 visibility math).
 
 ## Phase 2.6 — flip the default and delete SwiftTerm
