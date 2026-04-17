@@ -35,7 +35,7 @@ struct TeamsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
-            .background(Palette.surface)
+            .background(Palette.surfaceElevated)
 
             Divider()
 

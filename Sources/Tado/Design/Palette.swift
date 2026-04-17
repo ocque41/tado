@@ -15,18 +15,22 @@ import AppKit
 /// Every surface below is a pure neutral grey (equal R/G/B channels) so
 /// the only chromatic element in the UI is the burnt-sienna accent.
 ///
-/// The surface stack is intentionally **flat**: `background`, `canvas`,
-/// and `surface` all resolve to the same `#1A1A1A` so the canvas, every
-/// page body, and every page header (Todos / Projects / Teams / Sidebar
-/// / Dispatch modal top bars) read as a single unbroken neutral. The
-/// existing `Divider()` strokes in each view provide structural
-/// separation between header and body instead of a fill delta.
+/// The **body** stack is intentionally flat: `background`, `canvas`,
+/// and `surface` all resolve to the same `#1A1A1A`. The canvas, every
+/// page body, the Settings sheet, and all scroll content read as a
+/// single unbroken neutral.
 ///
-/// Only `surfaceElevated` (`#2A2A2A`) stays slightly raised — used by
-/// tile titlebars, list-section headers, and small action pills where
-/// a fill contrast is the affordance cue ("this chip is clickable").
-/// Flattening that to `#1A1A1A` too would erase button edges against
-/// the page body.
+/// `surfaceElevated` (`#2A2A2A`) is the raised tier — used for every
+/// place the UI needs a fill delta to communicate structure:
+/// - **Page headers** (Todos / Projects / Teams / Dispatch modal
+///   top+footer bars / Sidebar "Sessions" strip) — a raised strip
+///   anchors the top of each page above the flat body.
+/// - **Tile titlebars** in the canvas.
+/// - **List-section headers** inside scroll content.
+/// - **Small action pills** where the fill contrast IS the affordance
+///   cue ("this chip is clickable"). When a pill sits inside a raised
+///   header it instead uses `surface` (flat `#1A1A1A`) so it reads as
+///   an inset against the elevated strip.
 ///
 /// Text tiers use the neutral foreground at varying alphas — when
 /// composited on the neutral backdrop they render as true greys, no

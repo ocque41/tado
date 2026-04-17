@@ -16,11 +16,12 @@ struct SidebarView: View {
                     .foregroundStyle(Palette.textSecondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
-                    .background(Palette.surfaceElevated)
+                    .background(Palette.surface)
                     .clipShape(Capsule())
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            .background(Palette.surfaceElevated)
 
             Divider()
 

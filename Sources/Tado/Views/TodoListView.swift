@@ -99,7 +99,7 @@ struct TodoListView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
-            .background(Palette.surface)
+            .background(Palette.surfaceElevated)
             .onKeyPress(phases: .down) { keyPress in
                 if keyPress.key == .return && keyPress.modifiers.contains(.command) {
                     handleSubmit()

@@ -56,6 +56,12 @@ struct ContentView: View {
         // doesn't is guaranteed to read `Palette.background` instead
         // of the system default window colour.
         .background(Palette.background)
+        // Blur the main window when Settings is presented. The sheet
+        // itself sits in a separate window layer and is NOT blurred —
+        // only the backdrop is, so Settings reads as a clearly
+        // modal frame over a defocused app.
+        .blur(radius: appState.showSettings ? 10 : 0)
+        .animation(.easeInOut(duration: 0.2), value: appState.showSettings)
         .animation(.easeInOut(duration: 0.2), value: appState.currentView)
         .animation(.easeInOut(duration: 0.2), value: appState.showSidebar)
         .sheet(isPresented: Binding(

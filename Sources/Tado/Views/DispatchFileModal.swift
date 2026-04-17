@@ -50,7 +50,7 @@ struct DispatchFileModal: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Palette.surface)
+            .background(Palette.surfaceElevated)
 
             Divider()
 
@@ -88,7 +88,7 @@ struct DispatchFileModal: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(Palette.surface)
+            .background(Palette.surfaceElevated)
         }
         .frame(minWidth: 640, minHeight: 480)
         .background(Palette.background)
