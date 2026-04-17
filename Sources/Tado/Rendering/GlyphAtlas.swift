@@ -37,7 +37,7 @@ final class GlyphAtlas {
     /// zero rect so the shader doesn't sample the atlas for them.
     static let emptyRect = CGRect.zero
 
-    init(device: MTLDevice, metrics: FontMetrics, atlasSize: Int = 2048) throws {
+    init(device: MTLDevice, metrics: FontMetrics, atlasSize: Int = 4096) throws {
         self.device = device
         self.metrics = metrics
         self.atlasSize = atlasSize
@@ -61,6 +61,26 @@ final class GlyphAtlas {
         rects[UInt32(" ".unicodeScalars.first!.value)] = GlyphAtlas.emptyRect
     }
 
+    /// Throw away every cached glyph and rewind the shelf allocator to
+    /// the top-left. Called when `uvRect(...)` can't fit a new glyph at
+    /// the current shelf position. Bumps `modCount` so renderers know
+    /// their GPU-side lookup table is stale and needs a rebuild. The
+    /// underlying MTLTexture is NOT cleared — stale pixels linger until
+    /// overwritten, but UV rects never point at them because all rect
+    /// entries are discarded. The blank/space reservations are
+    /// reinserted so `ch == 0` / `ch == 32` still short-circuit.
+    func reset() {
+        rects.removeAll(keepingCapacity: true)
+        rects[0] = GlyphAtlas.emptyRect
+        rects[UInt32(" ".unicodeScalars.first!.value)] = GlyphAtlas.emptyRect
+        shelfX = 0
+        shelfY = 0
+        shelfHeight = 0
+        // Rebumping modCount is enough — renderers compare against their
+        // last-built snapshot, see the mismatch, rebuild lookup.
+        modCount &+= 1
+    }
+
     /// UV rect for `ch` in 0..1. Nil means "no glyph" — caller (shader)
     /// should render pure background. Allocates into the atlas on first
     /// request for a given char. `cellSpan` hints whether this codepoint
@@ -69,6 +89,14 @@ final class GlyphAtlas {
     /// proportions. The Rust grid marks wide-start cells with ATTR_WIDE
     /// and the renderer passes `cellSpan: 2` here.
     func uvRect(for ch: UInt32, cellSpan: Int = 1) -> CGRect? {
+        return allocateRect(for: ch, cellSpan: cellSpan, allowReset: true)
+    }
+
+    private func allocateRect(
+        for ch: UInt32,
+        cellSpan: Int,
+        allowReset: Bool
+    ) -> CGRect? {
         if let cached = rects[ch] {
             return cached.isEmpty ? nil : cached
         }
@@ -96,8 +124,20 @@ final class GlyphAtlas {
             shelfHeight = 0
         }
         if shelfY + h > atlasSize {
-            // Atlas full. Return nil — callers fall back to bg. Phase 3
-            // replaces this with LRU eviction.
+            // Atlas full. Fall back to a one-shot reset: clear the atlas
+            // and retry once. Previously-cached rects become stale; the
+            // renderer detects this via the modCount bump and rebuilds
+            // its GPU lookup table on the next frame. A few dozen
+            // codepoints will re-rasterize; cost is bounded (~100μs
+            // each), and the pathological case only triggers if a user
+            // has somehow shown > 100k unique glyphs this session.
+            if allowReset {
+                reset()
+                return allocateRect(for: ch, cellSpan: cellSpan, allowReset: false)
+            }
+            // If even a fresh atlas can't fit this glyph (e.g. wider
+            // than the whole atlas width — shouldn't happen for sane
+            // cell sizes), give up.
             rects[ch] = GlyphAtlas.emptyRect
             return nil
         }

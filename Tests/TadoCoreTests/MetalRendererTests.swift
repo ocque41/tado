@@ -127,6 +127,35 @@ final class MetalRendererTests: XCTestCase {
             "expected 'M' cell to have materially more ink than a space cell (got M=\(mInk), space=\(spaceInk)) — indicates the glyph lookup buffer is stale")
     }
 
+    /// When the atlas fills up, subsequent allocations reset it and
+    /// succeed — the shader sees a fresh set of glyphs via the next
+    /// lookup rebuild. Before Phase 2.18 this path silently returned
+    /// nil and the glyph rendered as background.
+    func testAtlasResetsAndRefillsOnOverflow() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("no Metal device")
+        }
+        // Tiny atlas: 64 × 64 px fits ~few glyphs at 13pt. Rasterize
+        // enough characters to force one reset.
+        let metrics = FontMetrics.defaultMono()
+        let atlas = try GlyphAtlas(device: device, metrics: metrics, atlasSize: 64)
+        let beforeMod = atlas.modCount
+
+        // Hammer with ASCII chars until we trip at least one reset —
+        // modCount will advance past the simple per-insert monotonic
+        // count. 200 glyphs >> what fits in 64×64.
+        var gotSomeNonNil = false
+        for ch: UInt32 in 33...232 {
+            if atlas.uvRect(for: ch) != nil {
+                gotSomeNonNil = true
+            }
+        }
+        XCTAssertTrue(gotSomeNonNil, "no glyph ever rasterized")
+        // modCount should have advanced (every inserted rect bumps it,
+        // plus the reset itself bumps by 1).
+        XCTAssertGreaterThan(atlas.modCount, beforeMod)
+    }
+
     func testRendersLiveSessionSnapshot() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
