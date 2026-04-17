@@ -27,9 +27,14 @@ final class MetalTerminalRenderer {
         var cursorX: UInt32 = 0
         var cursorY: UInt32 = 0
         var cursorVisible: UInt32 = 1
-        var _pad0: UInt32 = 0
-        var _pad1: UInt32 = 0
-        var _pad2: UInt32 = 0
+        // Normalized selection rect, inclusive on both ends. `selActive=0`
+        // disables the highlight; the sel* fields are ignored in that case.
+        // Matches `struct Uniforms` in Shaders.metal exactly.
+        var selStartCol: UInt32 = 0
+        var selStartRow: UInt32 = 0
+        var selEndCol: UInt32 = 0
+        var selEndRow: UInt32 = 0
+        var selActive: UInt32 = 0
     }
 
     /// Matches `TadoCore.Cell` and `grid::Cell` exactly.
@@ -142,6 +147,21 @@ final class MetalTerminalRenderer {
     }
 
     // MARK: - Upload
+
+    /// Set the selection overlay. Coords are cell-space, inclusive on
+    /// both ends. The caller passes normalized coords (reading order);
+    /// the shader trusts the rectangle semantics as-is. Nil clears.
+    func setSelection(start: (col: Int, row: Int)?, end: (col: Int, row: Int)?) {
+        guard let start, let end else {
+            uniforms.selActive = 0
+            return
+        }
+        uniforms.selStartCol = UInt32(start.col)
+        uniforms.selStartRow = UInt32(start.row)
+        uniforms.selEndCol = UInt32(end.col)
+        uniforms.selEndRow = UInt32(end.row)
+        uniforms.selActive = 1
+    }
 
     func resize(cols: UInt32, rows: UInt32) {
         guard cols != self.cols || rows != self.rows else { return }

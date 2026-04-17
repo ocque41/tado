@@ -30,10 +30,16 @@ struct Uniforms {
     uint32_t rows;
     uint32_t cursorX;
     uint32_t cursorY;
-    uint32_t cursorVisible;  // 0/1
-    uint32_t _pad0;
-    uint32_t _pad1;
-    uint32_t _pad2;
+    uint32_t cursorVisible;   // 0/1
+    // Normalized selection rect (inclusive). Swift passes coords in
+    // reading order, so walking (selStart..selEnd) per-row gives the
+    // right set of cells without extra min/max. selActive=0 disables
+    // the highlight — sel* fields are then ignored.
+    uint32_t selStartCol;
+    uint32_t selStartRow;
+    uint32_t selEndCol;
+    uint32_t selEndRow;
+    uint32_t selActive;
 };
 
 // Atlas lookup: glyph index -> (uvRect.xy, uvRect.zw) in 0..1.
@@ -113,6 +119,31 @@ vertex VertexOut terminal_vertex(
         float4 tmp = fg;
         fg = bg;
         bg = tmp;
+    }
+
+    // Selection highlight: invert fg/bg on cells inside the selection
+    // rect. Per-row semantics: first row starts at selStartCol, last row
+    // ends at selEndCol, middle rows run full width. Single-row
+    // selections take the intersection.
+    if (u.selActive != 0u) {
+        uint sr0 = u.selStartRow;
+        uint sr1 = u.selEndRow;
+        bool inRows = (row >= sr0 && row <= sr1);
+        bool inCols;
+        if (sr0 == sr1) {
+            inCols = (col >= u.selStartCol && col <= u.selEndCol);
+        } else if (row == sr0) {
+            inCols = (col >= u.selStartCol);
+        } else if (row == sr1) {
+            inCols = (col <= u.selEndCol);
+        } else {
+            inCols = true;
+        }
+        if (inRows && inCols) {
+            float4 tmp = fg;
+            fg = bg;
+            bg = tmp;
+        }
     }
 
     VertexOut out;

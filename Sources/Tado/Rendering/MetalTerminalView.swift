@@ -84,6 +84,15 @@ final class TerminalMTKView: MTKView {
     /// grid without waiting for a new dirty tick from Rust.
     private var latestLive: TadoCore.Snapshot?
 
+    // MARK: Selection state
+
+    /// Active click-drag selection range. `start` is the cell under the
+    /// initial mouseDown; `end` follows the cursor during drag and freezes
+    /// on mouseUp. Nil means "no selection" — single-cell clicks still
+    /// clear here so Cmd+C against nothing is a no-op.
+    private var selectionStart: CellCoord?
+    private var selectionEnd: CellCoord?
+
     // MARK: Activity detection hooks (wired by MetalTerminalTileView)
 
     var onDirty: (() -> Void)?
@@ -165,7 +174,28 @@ final class TerminalMTKView: MTKView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // Begin a selection. A mouseDown that isn't followed by a
+        // mouseDragged will be interpreted as "start + end at the same
+        // cell" → zero-width selection cleared on next single click.
+        // mouseDown itself doesn't report to PTY — mouseUp does, if the
+        // selection ended up empty (classical terminal UX).
+        if let cell = cellCoord(for: event) {
+            selectionStart = cell
+            selectionEnd = cell
+        }
         super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if let cell = cellCoord(for: event) {
+            // If we didn't get a valid mouseDown cell (e.g., click started
+            // off-view then dragged in), begin the selection here.
+            if selectionStart == nil {
+                selectionStart = cell
+            }
+            selectionEnd = cell
+        }
+        super.mouseDragged(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -182,17 +212,30 @@ final class TerminalMTKView: MTKView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Cmd+V → paste from clipboard into the PTY. Honors bracketed
-        // paste mode so the shell can distinguish pasted content.
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers?.lowercased() == "v" {
-            paste(nil)
-            return true
+        if event.modifierFlags.contains(.command) {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v":
+                paste(nil)
+                return true
+            case "c":
+                copy(nil)
+                return true
+            default:
+                return false
+            }
         }
-        // Other Cmd combos — let SwiftUI / menu system handle them.
-        guard !event.modifierFlags.contains(.command) else { return false }
         keyDown(with: event)
         return true
+    }
+
+    /// Copy the current selection to the general pasteboard. No-op when
+    /// selection is empty. Menu bar Edit → Copy also funnels here via
+    /// the responder chain.
+    @objc func copy(_ sender: Any?) {
+        guard let text = selectedText(), !text.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
     }
 
     /// NSResponder paste action — reached via Cmd+V or Edit → Paste.
@@ -217,7 +260,14 @@ final class TerminalMTKView: MTKView {
     // MARK: - Mouse reporting
 
     override func mouseUp(with event: NSEvent) {
-        reportMouse(event: event, button: 0, isPress: false)
+        // Zero-width selections (pure click, no drag) clear the highlight
+        // AND pass the click through to the PTY when mouse reporting is
+        // on. Non-empty drags stay selected; the PTY sees nothing.
+        if let start = selectionStart, let end = selectionEnd, start == end {
+            selectionStart = nil
+            selectionEnd = nil
+            reportMouse(event: event, button: 0, isPress: false)
+        }
         super.mouseUp(with: event)
     }
 
@@ -368,6 +418,18 @@ extension TerminalMTKView: MTKViewDelegate {
             }
         }
 
+        // Pass selection (if any) through to the renderer. Normalized
+        // to reading order so the shader can walk start→end per-row.
+        if let sel = activeSelection {
+            let (lo, hi) = normalized(sel.start, sel.end)
+            renderer.setSelection(
+                start: (col: lo.col, row: lo.row),
+                end:   (col: hi.col, row: hi.row)
+            )
+        } else {
+            renderer.setSelection(start: nil, end: nil)
+        }
+
         let viewportPx = CGSize(
             width: CGFloat(drawable.texture.width),
             height: CGFloat(drawable.texture.height)
@@ -375,6 +437,121 @@ extension TerminalMTKView: MTKViewDelegate {
         renderer.encode(into: cb, passDescriptor: rpd, viewportPixels: viewportPx)
         cb.present(drawable)
         cb.commit()
+    }
+}
+
+// MARK: - Cell coordinate helpers + selection text
+
+/// Zero-indexed cell location in a terminal grid. `col` advances left →
+/// right, `row` advances top → bottom. Equatable so `start == end`
+/// detects a zero-width selection (pure click).
+struct CellCoord: Equatable {
+    let col: Int
+    let row: Int
+}
+
+extension TerminalMTKView {
+    /// Map an NSEvent's location (window coords, y-up) to a cell
+    /// coordinate. Returns nil if the renderer isn't ready or the click
+    /// fell outside the grid region (between the last row and the view
+    /// edge during letterboxing).
+    func cellCoord(for event: NSEvent) -> CellCoord? {
+        guard let renderer = renderer else { return nil }
+        let local = convert(event.locationInWindow, from: nil)
+        // Flip y — NSView has origin bottom-left, grid has top-left.
+        let flippedY = bounds.height - local.y
+        let col = Int(local.x / renderer.metrics.cellWidth)
+        let row = Int(flippedY / renderer.metrics.cellHeight)
+        guard col >= 0, row >= 0, col < Int(cols), row < Int(rows) else {
+            return nil
+        }
+        return CellCoord(col: col, row: row)
+    }
+
+    /// Current active selection as a pair of cell coords in drag order,
+    /// or nil when no selection or a zero-width one (pure click).
+    /// Exposed for the renderer hand-off.
+    var activeSelection: (start: CellCoord, end: CellCoord)? {
+        guard let s = selectionStart, let e = selectionEnd, s != e else { return nil }
+        return (s, e)
+    }
+
+    /// Extract selected text from the live grid snapshot. Returns nil if
+    /// the selection is empty (start == end) or unset.
+    func selectedText() -> String? {
+        guard let sel = activeSelection else { return nil }
+        guard let snap = session.snapshotFull() else { return nil }
+        let (lo, hi) = normalized(sel.start, sel.end)
+        return TerminalTextExtractor.extract(from: snap, start: lo, end: hi)
+    }
+
+    /// Reorder the selection endpoints into reading order regardless of
+    /// drag direction. Used both for text extraction and for passing a
+    /// normalized range to the shader.
+    func normalized(_ a: CellCoord, _ b: CellCoord) -> (CellCoord, CellCoord) {
+        if a.row < b.row || (a.row == b.row && a.col <= b.col) {
+            return (a, b)
+        }
+        return (b, a)
+    }
+}
+
+/// Pure text extraction used by `TerminalMTKView.selectedText()`. Kept
+/// `internal` + free-function-shaped so unit tests can exercise it with
+/// synthetic snapshots rather than spinning up a live PTY.
+enum TerminalTextExtractor {
+    /// Walk the selected cells in reading order and return the text.
+    /// `start` and `end` must already be normalized (reading order).
+    /// Multi-row selections include the full width of middle rows;
+    /// single-row selections clamp to the inclusive `start.col..end.col`
+    /// range. Matches Terminal.app / iTerm conventions. Trailing
+    /// whitespace on each row is trimmed before joining.
+    static func extract(
+        from snap: TadoCore.Snapshot,
+        start: CellCoord,
+        end: CellCoord
+    ) -> String {
+        let cols = Int(snap.cols)
+        guard cols > 0, snap.rows > 0, start.row <= end.row else { return "" }
+
+        var lines: [String] = []
+        for r in start.row...end.row {
+            let startCol = (r == start.row) ? start.col : 0
+            let endCol = (r == end.row) ? end.col : cols - 1
+            var line = ""
+            if startCol <= endCol {
+                for c in startCol...min(endCol, cols - 1) {
+                    let idx = r * cols + c
+                    guard idx < snap.cells.count else { break }
+                    let ch = snap.cells[idx].ch
+                    if ch == 0 {
+                        line.append(" ")
+                    } else if let scalar = Unicode.Scalar(ch) {
+                        line.unicodeScalars.append(scalar)
+                    }
+                }
+            }
+            lines.append(line.trimmingTrailingWhitespace())
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+extension String {
+    /// Trim trailing spaces — terminal rows are padded with spaces to
+    /// the right edge, but paste targets almost always want the trimmed
+    /// line. Matches Terminal.app / iTerm copy semantics.
+    func trimmingTrailingWhitespace() -> String {
+        var idx = endIndex
+        while idx > startIndex {
+            let prev = index(before: idx)
+            if self[prev] == " " || self[prev] == "\t" {
+                idx = prev
+            } else {
+                break
+            }
+        }
+        return String(self[startIndex..<idx])
     }
 }
 
