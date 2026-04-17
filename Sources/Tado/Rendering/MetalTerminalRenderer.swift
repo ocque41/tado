@@ -447,7 +447,13 @@ final class MetalTerminalRenderer {
         viewportPixels: CGSize
     ) {
         uniforms.viewport = SIMD2<Float>(Float(viewportPixels.width), Float(viewportPixels.height))
-        uniforms.cellSize = SIMD2<Float>(Float(metrics.cellWidth), Float(metrics.cellHeight))
+        // Viewport is in drawable pixels; cellSize must be in the same
+        // space. FontMetrics stores logical points, so scale up by the
+        // backing factor. On non-Retina (`scale == 1`) this is a no-op.
+        uniforms.cellSize = SIMD2<Float>(
+            Float(metrics.cellWidth * metrics.scale),
+            Float(metrics.cellHeight * metrics.scale)
+        )
         uniforms.atlasSize = SIMD2<Float>(Float(atlas.atlasSize), Float(atlas.atlasSize))
         uniforms.cols = cols
         uniforms.rows = rows
@@ -475,6 +481,10 @@ final class MetalTerminalRenderer {
 
     /// Convenience for offscreen tests — renders into a fresh `MTLTexture`
     /// and returns it. Never call from the hot render path.
+    ///
+    /// `width` / `height` are in **drawable pixels**, matching the
+    /// shader's viewport unit. Callers that think in points (SwiftUI
+    /// sizes) should multiply by `metrics.scale` before calling.
     func renderOffscreen(width: Int, height: Int) -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,

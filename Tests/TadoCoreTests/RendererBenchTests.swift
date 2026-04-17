@@ -17,7 +17,7 @@ final class RendererBenchTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        let renderer = try MetalTerminalRenderer(device: device, cols: 80, rows: 24)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 80, rows: 24)
         // Dense ASCII grid so every cell carries a real glyph.
         let snap = TadoCore.Snapshot.synthetic(cols: 80, rows: 24) { col, row in
             let base = UInt32("A".unicodeScalars.first!.value)
@@ -45,7 +45,7 @@ final class RendererBenchTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        let renderer = try MetalTerminalRenderer(device: device, cols: 200, rows: 50)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 200, rows: 50)
         let snap = TadoCore.Snapshot.synthetic(cols: 200, rows: 50) { col, row in
             let base = UInt32("a".unicodeScalars.first!.value)
             return TadoCore.Cell(
@@ -72,7 +72,7 @@ final class RendererBenchTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        let renderer = try MetalTerminalRenderer(device: device, cols: 40, rows: 10)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 40, rows: 10)
         let w = Int(renderer.metrics.cellWidth) * 40
         let h = Int(renderer.metrics.cellHeight) * 10
 

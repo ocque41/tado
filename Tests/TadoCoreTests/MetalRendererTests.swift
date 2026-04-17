@@ -15,7 +15,12 @@ final class MetalRendererTests: XCTestCase {
         }
         // The renderer init loads the shader library and builds the
         // pipeline — any shader syntax error surfaces here.
-        let renderer = try MetalTerminalRenderer(device: device, cols: 10, rows: 3)
+        let renderer = try MetalTerminalRenderer(
+            device: device,
+            metrics: FontMetrics.defaultMono(size: 13, scale: 1),
+            cols: 10,
+            rows: 3
+        )
         XCTAssertEqual(renderer.cols, 10)
         XCTAssertEqual(renderer.rows, 3)
     }
@@ -24,7 +29,7 @@ final class MetalRendererTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        let renderer = try MetalTerminalRenderer(device: device, cols: 20, rows: 3)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 20, rows: 3)
 
         // Hand-crafted snapshot: first row says "HI" on cells 0–1, rest blank.
         let snapshot = syntheticSnapshot(cols: 20, rows: 3) { c, _ in
@@ -81,7 +86,7 @@ final class MetalRendererTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        let renderer = try MetalTerminalRenderer(device: device, cols: 4, rows: 1)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 4, rows: 1)
         let snapshot = syntheticSnapshot(cols: 4, rows: 1) { c, _ in
             switch c {
             case 0: return TadoCore.Cell(ch: UInt32("M".unicodeScalars.first!.value),
@@ -166,7 +171,7 @@ final class MetalRendererTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        let renderer = try MetalTerminalRenderer(device: device, cols: 2, rows: 1)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 2, rows: 1)
         // 🎉 party popper: multi-colored (red, yellow, blue) — reliable
         // channel-spread signal. Wide char (East-Asian Wide), so the
         // glyph actually fills both cells.
@@ -297,7 +302,7 @@ final class MetalRendererTests: XCTestCase {
             return
         }
 
-        let renderer = try MetalTerminalRenderer(device: device, cols: 10, rows: 2)
+        let renderer = try MetalTerminalRenderer(device: device, metrics: FontMetrics.defaultMono(size: 13, scale: 1), cols: 10, rows: 2)
         renderer.upload(snapshot: snap)
 
         let w = Int(renderer.metrics.cellWidth) * 10

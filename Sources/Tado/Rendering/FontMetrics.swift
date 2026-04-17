@@ -1,24 +1,50 @@
+import AppKit
 import CoreText
 import Foundation
 
 /// Fixed-pitch font metrics for terminal cell sizing.
 ///
-/// Call `FontMetrics(font:)` once per font+size change. Keep cells aligned
-/// to integer pixels — sub-pixel cell boundaries make the glyph atlas
-/// sampler blur text unacceptably.
+/// All public fields are **logical (point-space)** measurements. Use the
+/// `raster*` accessors when sizing the glyph atlas bitmap — they multiply
+/// by `scale` so Retina backing stores hold 2×-dense pixels without the
+/// shader having to convert. Logical values are what SwiftUI / cols-math
+/// consumes; raster values are what Core Text draws into.
+///
+/// Call `FontMetrics.defaultMono(size:scale:)` once per font+size+scale
+/// change. Keep cells aligned to integer pixels — sub-pixel cell
+/// boundaries make the glyph atlas sampler blur text unacceptably.
 struct FontMetrics {
+    /// Logical font at the requested point size. Used for measurement
+    /// + fallback resolution (`CTFontCreateForString`).
     let font: CTFont
-    /// Width of one monospace cell in pixels. Computed from a digit glyph's
-    /// advance — more reliable than `advance.x` on variable-width fallbacks.
+    /// Scaled-up copy of `font` at `size × scale`. Used when drawing
+    /// into the atlas bitmap so retina backing stores get crisp
+    /// pixel-perfect glyphs. Falls back to `font` when `scale == 1`.
+    let rasterFont: CTFont
+    /// Logical width of one monospace cell in points. Computed from a
+    /// digit glyph's advance — more reliable than `advance.x` on
+    /// variable-width fallbacks.
     let cellWidth: CGFloat
-    /// Height of one cell in pixels — `ascent + descent + leading`, rounded up.
+    /// Logical height of one cell in points — `ascent + descent + leading`.
     let cellHeight: CGFloat
-    /// Baseline offset from the top of the cell in pixels. Used when
-    /// rasterizing glyphs into the atlas.
+    /// Logical baseline offset from the top of the cell in points.
     let baseline: CGFloat
+    /// Backing-scale factor (1 on standard displays, 2 on Retina, 3 on
+    /// some newer panels). When > 1, the atlas rasterizes at this
+    /// multiplier so sampler output matches drawable pixel density.
+    let scale: CGFloat
 
-    init(font: CTFont) {
+    /// Pixel width of a cell in the atlas bitmap (`cellWidth × scale`,
+    /// rounded up to preserve integer pixel alignment).
+    var rasterCellWidth: Int { Int(ceil(cellWidth * scale)) }
+    /// Pixel height of a cell in the atlas bitmap.
+    var rasterCellHeight: Int { Int(ceil(cellHeight * scale)) }
+    /// Pixel baseline inside the atlas bitmap, measured from the top.
+    var rasterBaseline: CGFloat { baseline * scale }
+
+    init(font: CTFont, scale: CGFloat = 1) {
         self.font = font
+        self.scale = max(1, scale)
 
         let ascent = CTFontGetAscent(font)
         let descent = CTFontGetDescent(font)
@@ -42,12 +68,26 @@ struct FontMetrics {
         self.cellWidth = ceil(advance)
         self.cellHeight = ceil(ascent + descent + leading)
         self.baseline = ceil(ascent)
+
+        if self.scale == 1 {
+            self.rasterFont = font
+        } else {
+            let scaledSize = CTFontGetSize(font) * self.scale
+            self.rasterFont = CTFontCreateCopyWithAttributes(
+                font, scaledSize, nil, nil
+            )
+        }
     }
 
-    /// Default SF Mono 13pt with Menlo fallback. Matches
-    /// `TerminalNSViewRepresentable` today so tiles render at the same size.
-    static func defaultMono(size: CGFloat = 13) -> FontMetrics {
+    /// Default SF Mono at the given point size. When `scale` is left
+    /// nil the initializer reads the main screen's backing factor
+    /// (Retina = 2, non-Retina = 1) so tiles pick up pixel-dense
+    /// rasterization automatically. Callers with a specific target
+    /// — tests, off-screen renders, a different screen — can pass an
+    /// explicit scale.
+    static func defaultMono(size: CGFloat = 13, scale: CGFloat? = nil) -> FontMetrics {
         let font = CTFontCreateWithName("SF Mono" as CFString, size, nil)
-        return FontMetrics(font: font)
+        let resolved = scale ?? NSScreen.main?.backingScaleFactor ?? 2
+        return FontMetrics(font: font, scale: resolved)
     }
 }

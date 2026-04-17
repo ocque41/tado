@@ -319,9 +319,11 @@ final class GlyphAtlas {
         let chars = Array(String(scalar).utf16)
         guard !chars.isEmpty else { return nil }
 
-        // Try the configured mono font first. If it has no glyph (common
-        // for emoji / CJK), ask CoreText for a fallback that does.
-        var activeFont = metrics.font
+        // Try the configured (scaled) raster font first. If it has no
+        // glyph (common for emoji / CJK), ask CoreText for a fallback
+        // that does — CTFontCreateForString preserves the raster font's
+        // size so the fallback also rasterizes at the right pixel scale.
+        var activeFont = metrics.rasterFont
         var glyphs = [CGGlyph](repeating: 0, count: chars.count)
         _ = chars.withUnsafeBufferPointer { charBuf in
             glyphs.withUnsafeMutableBufferPointer { glyphBuf in
@@ -333,7 +335,7 @@ final class GlyphAtlas {
         if glyphs[0] == 0 {
             let cfStr = String(scalar) as CFString
             let range = CFRange(location: 0, length: CFStringGetLength(cfStr))
-            activeFont = CTFontCreateForString(metrics.font, cfStr, range)
+            activeFont = CTFontCreateForString(metrics.rasterFont, cfStr, range)
             _ = chars.withUnsafeBufferPointer { charBuf in
                 glyphs.withUnsafeMutableBufferPointer { glyphBuf in
                     CTFontGetGlyphsForCharacters(
@@ -345,8 +347,10 @@ final class GlyphAtlas {
         guard glyphs[0] != 0 else { return nil }
         let glyph = glyphs[0]
 
-        let w = Int(metrics.cellWidth) * max(1, cellSpan)
-        let h = Int(metrics.cellHeight)
+        // Bitmap dims in PIXELS — cellWidth/cellHeight scaled by the
+        // backing factor so Retina glyphs fill a 2× dense cell.
+        let w = metrics.rasterCellWidth * max(1, cellSpan)
+        let h = metrics.rasterCellHeight
         guard w > 0, h > 0 else { return nil }
 
         if isColorFont(activeFont) {
@@ -399,7 +403,7 @@ final class GlyphAtlas {
                 ?? .init(gray: 1.0, alpha: 1.0)
         )
 
-        var position = CGPoint(x: 0, y: CGFloat(h) - metrics.baseline)
+        var position = CGPoint(x: 0, y: CGFloat(h) - metrics.rasterBaseline)
         var g = glyph
         CTFontDrawGlyphs(font, &g, &position, 1, ctx)
 
@@ -444,7 +448,7 @@ final class GlyphAtlas {
         // No fill color set — CTFontDrawGlyphs on a color font copies
         // the author-authored bitmap/sbix pixels verbatim.
 
-        var position = CGPoint(x: 0, y: CGFloat(h) - metrics.baseline)
+        var position = CGPoint(x: 0, y: CGFloat(h) - metrics.rasterBaseline)
         var g = glyph
         CTFontDrawGlyphs(font, &g, &position, 1, ctx)
 

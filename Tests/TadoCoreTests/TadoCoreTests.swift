@@ -390,6 +390,54 @@ final class TadoCoreSessionTests: XCTestCase {
         XCTAssertTrue(saw, "expected 'hello-from-spawner' to land in the grid")
     }
 
+    /// Diagnostic for the "letters appear spaced out" symptom in Metal
+    /// tiles. Spawns /bin/echo hello and inspects cell attrs. Expects
+    /// each letter to occupy exactly one cell with attrs 0 (no
+    /// ATTR_WIDE or ATTR_WIDE_FILLER). A failure here means something
+    /// in the grid/performer path is marking ASCII as wide.
+    func testAsciiCharsAreSingleCellWidth() throws {
+        guard let session = TadoCore.Session(
+            command: "/bin/echo",
+            args: ["hello"],
+            cwd: nil,
+            environment: [:],
+            cols: 20,
+            rows: 2
+        ) else {
+            XCTFail("spawn returned nil")
+            return
+        }
+        defer { session.kill() }
+
+        // Wait for output to land.
+        let deadline = Date().addingTimeInterval(2.0)
+        var saw = false
+        while Date() < deadline {
+            if let snap = session.snapshotFull() {
+                let chars = snap.cells.prefix(5).compactMap {
+                    Unicode.Scalar($0.ch).map { Character($0) }
+                }
+                if String(chars) == "hello" {
+                    saw = true
+
+                    // Check: each cell's attrs should have no WIDE or
+                    // WIDE_FILLER bits. ATTR_WIDE = 1 << 6 = 0x40.
+                    // ATTR_WIDE_FILLER = 1 << 7 = 0x80. So mask is 0xC0.
+                    for (i, cell) in snap.cells.prefix(5).enumerated() {
+                        let wideOrFiller = cell.attrs & 0xC0
+                        XCTAssertEqual(
+                            wideOrFiller, 0,
+                            "cell \(i) ('\(Unicode.Scalar(cell.ch).map(Character.init) ?? " ")') has wide/filler bit set (attrs=0x\(String(cell.attrs, radix: 16)))"
+                        )
+                    }
+                    break
+                }
+            }
+            usleep(50_000)
+        }
+        XCTAssertTrue(saw, "expected 'hello' to land in the grid")
+    }
+
     /// A successful spawn must clear any prior error so a stale message
     /// doesn't leak into the UI on the next tile.
     func testSuccessfulSpawnClearsLastError() throws {
