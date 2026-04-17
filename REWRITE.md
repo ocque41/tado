@@ -16,7 +16,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 3 | Canvas virtualization — off-screen tiles shed GPU resources; Rust PTY keeps running | ✅ shipped |
 | 2.5 | Scrollback + drag-drop + activity detection on Metal path | ✅ shipped |
 | 2.7 | VT sequence completeness: alt-screen (1049/1047/47), DECTCEM (25), DECSTBM, DECSC/DECRC, expanded keymap (F1-F12, Home/End, PgUp/PgDn, Option+arrow, fn+Delete) | ✅ shipped |
-| 2.8 | Bracketed paste (DECSET 2004 + Cmd+V) · OSC 0/2 window title → `TerminalSession.title` · mouse button reporting (DECSET 1000/1006) | ✅ shipped (31/31 tests green) |
+| 2.8 | Bracketed paste (DECSET 2004 + Cmd+V) · OSC 0/2 window title → `TerminalSession.title` · mouse button reporting (DECSET 1000/1006) | ✅ shipped |
+| 2.9 | Glyph lookup correctness: renderer rebuilds the GPU lookup when the atlas mutates, not only when `lookupMax` grows. Fixed latent first-frame-blank bug, extended coverage to Latin-1 + full BMP for ASCII-dense workloads. | ✅ shipped (32/32 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
@@ -81,9 +82,17 @@ landed vs. what remains. Delete once the rewrite is merged.
   grid; `TerminalMTKView` emits SGR-encoded button events on left/right
   click/release. Legacy encoding silent-dropped (can't represent cols
   > 95).
-- Test coverage: **31 total, all green.** 18 Rust (15 grid/parser +
-  3 new: bracketed paste toggle, mouse DECSET toggle, OSC 0/2 title) +
-  13 Swift (+ 1 new: bracketed-paste + OSC-title round-trip).
+- **Glyph lookup correctness (Phase 2.9)**: `GlyphAtlas.modCount` bumps
+  on every new rect insertion; `MetalTerminalRenderer` rebuilds the GPU
+  lookup when the atlas mutates (not only when the codepoint bound
+  grows). Fixes a first-frame-blank bug where freshly rasterized ASCII
+  would render as pure background. Lookup bound rounded up to 256-code-
+  point boundaries to avoid per-char thrashing; capped at 0x10000 (BMP).
+- Test coverage: **32 total, all green.** 18 Rust (15 grid/parser +
+  3 new: bracketed paste, mouse DECSET, OSC 0/2 title) +
+  14 Swift (3 FFI + 1 scrollback + 1 bracketed-paste/title round-trip +
+  4 Metal pipeline incl. `testFreshGlyphRendersInFirstFrame` regression +
+  5 visibility math).
 
 ## Phase 2.6 — flip the default and delete SwiftTerm
 
