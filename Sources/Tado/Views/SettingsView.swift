@@ -260,8 +260,15 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
+            // Hide Form's built-in Material backdrop so the VStack's
+            // `Palette.background` shows through. Without this the Form
+            // paints macOS' default grouped-sidebar tint and the
+            // settings sheet reads as light grey on top of our neutral
+            // chrome.
+            .scrollContentBackground(.hidden)
             .padding(.horizontal, 10)
         }
         .frame(width: 480, height: 720)
+        .background(Palette.background)
     }
 }

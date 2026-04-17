@@ -60,6 +60,7 @@ struct DoneListView: View {
             }
         }
         .frame(width: 500, height: 400)
+        .background(Palette.background)
     }
 
     private func doneRow(_ todo: TodoItem) -> some View {

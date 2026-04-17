@@ -49,6 +49,13 @@ struct ContentView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Paint the window base as neutral dark. Individual views
+        // (TodoList, Projects, Teams) may add their own `surface` /
+        // `surfaceElevated` strips on top of this, but anything that
+        // doesn't is guaranteed to read `Palette.background` instead
+        // of the system default window colour.
+        .background(Palette.background)
         .animation(.easeInOut(duration: 0.2), value: appState.currentView)
         .animation(.easeInOut(duration: 0.2), value: appState.showSidebar)
         .sheet(isPresented: Binding(

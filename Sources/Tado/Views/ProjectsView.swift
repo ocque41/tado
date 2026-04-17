@@ -30,6 +30,8 @@ struct ProjectsView: View {
                 projectList
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Palette.background)
         .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
             Button("OK", role: .cancel) {}
         } message: {

@@ -76,6 +76,8 @@ struct TeamsView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Palette.background)
     }
 
     // MARK: - Project Section

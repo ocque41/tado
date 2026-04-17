@@ -133,6 +133,8 @@ struct TodoListView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Palette.background)
         .onAppear {
             isInputFocused = true
         }

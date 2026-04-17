@@ -91,6 +91,7 @@ struct DispatchFileModal: View {
             .background(Palette.surface)
         }
         .frame(minWidth: 640, minHeight: 480)
+        .background(Palette.background)
         .onAppear {
             draft = project.dispatchMarkdown
         }

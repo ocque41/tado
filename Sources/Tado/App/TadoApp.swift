@@ -20,6 +20,15 @@ struct TadoApp: App {
             ContentView()
                 .environment(appState)
                 .environment(terminalManager)
+                // Pin the whole window tree to dark mode. Without this
+                // SwiftUI's adaptive system colors (sidebar, form bg,
+                // sheet chrome) sample the host's appearance — if macOS
+                // is in light mode the sidebar would paint near-white
+                // on top of our neutral #1A1A1A. Pinning dark scheme
+                // ensures every child (including `.sheet()` presentations,
+                // which spawn their own windows) reads from the same
+                // darker system table.
+                .preferredColorScheme(.dark)
                 .onAppear {
                     if !ipcBrokerInitialized {
                         terminalManager.ipcBroker = IPCBroker(terminalManager: terminalManager)

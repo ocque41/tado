@@ -60,6 +60,7 @@ struct TrashListView: View {
             }
         }
         .frame(width: 500, height: 400)
+        .background(Palette.background)
     }
 
     private func trashRow(_ todo: TodoItem) -> some View {
