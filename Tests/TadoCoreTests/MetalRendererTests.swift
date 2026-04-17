@@ -269,6 +269,128 @@ final class MetalRendererTests: XCTestCase {
         )
     }
 
+    /// Regression for Phase 2.6.1's hidden bug: `CTFontCreateWithName("SF
+    /// Mono", …, nil)` silently falls back to **Helvetica** — a proportional
+    /// font — because the "SF Mono" string name isn't a public Core Text
+    /// lookup key on current macOS. At 26 pt Helvetica 'W' advances 24.5 pt
+    /// while 'I' advances 7.2 pt. Dropped into a 16-pixel atlas slot, the
+    /// right half of 'W' is clipped — what remains reads as 'V' on screen
+    /// (W→V, O→C, M→N from dogfood).
+    ///
+    /// Fix: `FontMetrics.defaultMono` now calls
+    /// `NSFont.monospacedSystemFont(ofSize:weight:)` which returns
+    /// `.AppleSystemUIFontMonospaced-Regular` — a true monospace. The test
+    /// locks this in by asserting every ASCII letter + digit has an equal
+    /// advance on the returned font AND on its raster-sized copy.
+    func testDefaultMonoFontIsActuallyMonospace() throws {
+        let metrics = FontMetrics.defaultMono(size: 13, scale: 2)
+
+        func advances(for font: CTFont) -> [CGFloat] {
+            let probe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+            var chars: [UniChar] = probe.utf16.map { $0 }
+            var glyphs: [CGGlyph] = Array(repeating: 0, count: chars.count)
+            _ = CTFontGetGlyphsForCharacters(font, &chars, &glyphs, chars.count)
+            var result: [CGSize] = Array(repeating: .zero, count: chars.count)
+            CTFontGetAdvancesForGlyphs(font, .horizontal, &glyphs, &result, chars.count)
+            return result.map { $0.width }
+        }
+
+        // Logical font: all ASCII glyphs must share one advance. If they
+        // don't, we landed on a proportional fallback again.
+        let logicalAdvances = advances(for: metrics.font)
+        let firstLogical = logicalAdvances[0]
+        for (i, a) in logicalAdvances.enumerated() where abs(a - firstLogical) > 0.01 {
+            XCTFail("logical font is not monospace — glyph \(i) advance=\(a) vs first=\(firstLogical)")
+            return
+        }
+
+        // Raster font (2× scale): must also be monospace, with advances
+        // equal to 2× the logical advance. If the raster copy ever picked
+        // up a different family by accident, the mismatch would surface
+        // here.
+        let rasterAdvances = advances(for: metrics.rasterFont)
+        let firstRaster = rasterAdvances[0]
+        for (i, a) in rasterAdvances.enumerated() where abs(a - firstRaster) > 0.01 {
+            XCTFail("raster font is not monospace — glyph \(i) advance=\(a) vs first=\(firstRaster)")
+            return
+        }
+        XCTAssertEqual(
+            firstRaster, firstLogical * 2, accuracy: 0.01,
+            "raster font advance should be 2× logical (scale=2)"
+        )
+    }
+
+    /// End-to-end check: at scale=2, each rendered ASCII cell contains a
+    /// DISTINCT glyph signature — we should be able to tell 'O' from 'C',
+    /// 'W' from 'V', 'M' from 'N' by comparing the rendered pixels of a
+    /// cell directly against the rendered pixels of the other letter.
+    ///
+    /// Before the font fix, the raster font was Helvetica: 'W' at 26 pt
+    /// wanted ~24 pixels but the 16-pixel bitmap slot clipped off the
+    /// right half, leaving a shape visually identical to 'V'. This test
+    /// would have shown near-zero pixel difference between the two.
+    func testAsciiGlyphsAreDistinguishableAtRetinaScale() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("no Metal device")
+        }
+
+        // scale=2 mirrors a Retina MTKView; this is the regime where the
+        // Helvetica-fallback clipping bug was visible.
+        let metrics = FontMetrics.defaultMono(size: 13, scale: 2)
+        let pairs: [(Character, Character)] = [("W", "V"), ("O", "C"), ("M", "N")]
+
+        func renderCell(_ ch: Character) throws -> [UInt8] {
+            let renderer = try MetalTerminalRenderer(
+                device: device, metrics: metrics, cols: 1, rows: 1
+            )
+            let snapshot = syntheticSnapshot(cols: 1, rows: 1) { _, _ in
+                TadoCore.Cell(
+                    ch: UInt32(ch.unicodeScalars.first!.value),
+                    fg: 0xFFFFFFFF, bg: 0x000000FF, attrs: 0
+                )
+            }
+            renderer.upload(snapshot: snapshot)
+            // Drawable pixels = logical cell × scale. Using integer
+            // multiples keeps fragment/texel alignment exact.
+            let w = Int(metrics.cellWidth * metrics.scale)
+            let h = Int(metrics.cellHeight * metrics.scale)
+            guard let tex = renderer.renderOffscreen(width: w, height: h) else {
+                XCTFail("renderOffscreen returned nil for '\(ch)'")
+                return []
+            }
+            var pixels = [UInt8](repeating: 0, count: w * h * 4)
+            pixels.withUnsafeMutableBufferPointer { buf in
+                tex.getBytes(
+                    buf.baseAddress!,
+                    bytesPerRow: w * 4,
+                    from: MTLRegionMake2D(0, 0, w, h),
+                    mipmapLevel: 0
+                )
+            }
+            return pixels
+        }
+
+        for (a, b) in pairs {
+            let pa = try renderCell(a)
+            let pb = try renderCell(b)
+            XCTAssertEqual(pa.count, pb.count, "cell sizes must match")
+            // Count pixels where the luminance differs meaningfully. With
+            // the bug, 'W' got clipped to look like 'V' → few different
+            // pixels. With the fix, the distinct shapes produce hundreds
+            // of pixels of difference.
+            var diffs = 0
+            for i in stride(from: 0, to: pa.count, by: 4) {
+                let la = Int(pa[i]) + Int(pa[i + 1]) + Int(pa[i + 2])
+                let lb = Int(pb[i]) + Int(pb[i + 1]) + Int(pb[i + 2])
+                if abs(la - lb) > 48 { diffs += 1 }
+            }
+            XCTAssertGreaterThan(
+                diffs, 30,
+                "'\(a)' and '\(b)' should be visually distinct at scale=2 — got only \(diffs) differing pixels (font fallback regression?)"
+            )
+        }
+    }
+
     func testRendersLiveSessionSnapshot() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")

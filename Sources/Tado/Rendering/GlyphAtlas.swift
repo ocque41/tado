@@ -359,14 +359,15 @@ final class GlyphAtlas {
         return rasterizeMono(glyph: glyph, font: activeFont, w: w, h: h)
     }
 
-    /// Apple Color Emoji is the only color font macOS ships by default, so
-    /// family-name parity catches every case that CoreText's fallback
-    /// resolver routes to a color font. A more pedantic check would inspect
-    /// the font's sbix / COLR / CBDT tables, but this costs nothing and
-    /// is equivalent in practice.
+    /// True when the font carries author-authored color glyphs (sbix /
+    /// COLR / CBDT). Core Text exposes this as the `colorGlyphs` symbolic
+    /// trait, so we read the trait bit directly rather than string-matching
+    /// on family names. A string match works for "Apple Color Emoji" but
+    /// misses the UI variant `.Apple Color Emoji UI` that Core Text routes
+    /// to when the base font is `monospacedSystemFont` — the switch to
+    /// that API in Phase 2.6.2 surfaced this.
     private func isColorFont(_ font: CTFont) -> Bool {
-        let name = CTFontCopyFamilyName(font) as String
-        return name == "Apple Color Emoji"
+        CTFontGetSymbolicTraits(font).contains(.colorGlyphsTrait)
     }
 
     /// R8 path — white ink, grayscale coverage. Unchanged from the

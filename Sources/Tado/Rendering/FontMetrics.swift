@@ -79,14 +79,23 @@ struct FontMetrics {
         }
     }
 
-    /// Default SF Mono at the given point size. When `scale` is left
-    /// nil the initializer reads the main screen's backing factor
-    /// (Retina = 2, non-Retina = 1) so tiles pick up pixel-dense
-    /// rasterization automatically. Callers with a specific target
-    /// — tests, off-screen renders, a different screen — can pass an
-    /// explicit scale.
+    /// Default system monospaced font at the given point size.
+    ///
+    /// Uses `NSFont.monospacedSystemFont(ofSize:weight:)` — the only
+    /// reliable way to get SF Mono on current macOS. The string-name
+    /// lookup (`CTFontCreateWithName("SF Mono", …)`) silently falls
+    /// back to Helvetica, which is proportional: 'W' advances 24.5 pt
+    /// at 26 pt while 'I' advances 7.2 pt. That mismatch caused
+    /// wide-glyph clipping (W→V, O→C, M→N) and uneven inter-character
+    /// spacing in Metal tiles until this path switched APIs.
+    ///
+    /// When `scale` is left nil the initializer reads the main
+    /// screen's backing factor (Retina = 2, non-Retina = 1) so tiles
+    /// pick up pixel-dense rasterization automatically. Callers with
+    /// a specific target — tests, off-screen renders, a different
+    /// screen — can pass an explicit scale.
     static func defaultMono(size: CGFloat = 13, scale: CGFloat? = nil) -> FontMetrics {
-        let font = CTFontCreateWithName("SF Mono" as CFString, size, nil)
+        let font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular) as CTFont
         let resolved = scale ?? NSScreen.main?.backingScaleFactor ?? 2
         return FontMetrics(font: font, scale: resolved)
     }
