@@ -99,4 +99,49 @@ struct FontMetrics {
         let resolved = scale ?? NSScreen.main?.backingScaleFactor ?? 2
         return FontMetrics(font: font, scale: resolved)
     }
+
+    /// Resolve a user-picked font by family name. When `family` is empty
+    /// or doesn't resolve to a monospace face, falls back to the system
+    /// monospaced font so a stale/missing name can't regress the grid to
+    /// a proportional font. The caller can detect the fallback by
+    /// checking `CTFontCopyFamilyName(metrics.font)` against `family`.
+    ///
+    /// The monospace check uses the symbolic trait `.monoSpaceTrait`
+    /// rather than a family-name heuristic — modern macOS ships plenty
+    /// of fixed-pitch fonts whose names don't include "Mono" (IBM Plex
+    /// Mono is named "IBM Plex Mono", but Fira Code is "Fira Code").
+    static func font(named family: String, size: CGFloat = 13, scale: CGFloat? = nil) -> FontMetrics {
+        let resolved = scale ?? NSScreen.main?.backingScaleFactor ?? 2
+        let trimmed = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty,
+           let font = NSFont(name: trimmed, size: size),
+           CTFontGetSymbolicTraits(font as CTFont).contains(.monoSpaceTrait) {
+            return FontMetrics(font: font as CTFont, scale: resolved)
+        }
+        return defaultMono(size: size, scale: resolved)
+    }
+
+    /// Sorted list of unique family names that contain at least one
+    /// fixed-pitch face, for populating the Settings font picker. Uses
+    /// Core Text's trait-based descriptor matching so e.g. Fira Code
+    /// (whose name doesn't include "Mono") shows up alongside Menlo.
+    static func monospaceFamilyNames() -> [String] {
+        let descriptor = CTFontDescriptorCreateWithAttributes([
+            kCTFontTraitsAttribute: [
+                kCTFontSymbolicTrait: CTFontSymbolicTraits.monoSpaceTrait.rawValue
+            ]
+        ] as CFDictionary)
+        guard let matched = CTFontDescriptorCreateMatchingFontDescriptors(descriptor, nil)
+            as? [CTFontDescriptor] else { return [] }
+        var seen = Set<String>()
+        var families: [String] = []
+        for d in matched {
+            guard let name = CTFontDescriptorCopyAttribute(d, kCTFontFamilyNameAttribute)
+                as? String else { continue }
+            if seen.insert(name).inserted {
+                families.append(name)
+            }
+        }
+        return families.sorted()
+    }
 }

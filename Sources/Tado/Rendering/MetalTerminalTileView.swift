@@ -15,6 +15,7 @@ struct MetalTerminalTileView: View {
     let agentName: String?
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let fontSize: CGFloat
+    let fontFamily: String
     let cursorBlink: Bool
     let bellMode: BellMode
     let width: CGFloat
@@ -33,7 +34,7 @@ struct MetalTerminalTileView: View {
     /// what we're showing.
     @State private var spawnError: String?
 
-    private var metrics: FontMetrics { FontMetrics.defaultMono(size: fontSize) }
+    private var metrics: FontMetrics { FontMetrics.font(named: fontFamily, size: fontSize) }
 
     var body: some View {
         Group {

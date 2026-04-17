@@ -10,6 +10,8 @@ struct TerminalTileView: View {
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     /// Monospace point size for the Metal renderer.
     let fontSize: CGFloat
+    /// Family name for the Metal renderer font. Empty = system mono.
+    let fontFamily: String
     /// Blink the cursor. Honored live.
     let cursorBlink: Bool
     /// How BEL (0x07) is surfaced. Honored live.
@@ -63,6 +65,7 @@ struct TerminalTileView: View {
                 modelFlags: modelFlags,
                 claudeDisplay: claudeDisplay,
                 fontSize: fontSize,
+                fontFamily: fontFamily,
                 cursorBlink: cursorBlink,
                 bellMode: bellMode,
                 isVisible: isVisible,
@@ -326,6 +329,7 @@ private struct StableTerminalContent: View {
     let modelFlags: [String]
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let fontSize: CGFloat
+    let fontFamily: String
     let cursorBlink: Bool
     let bellMode: BellMode
     let isVisible: Bool
@@ -344,6 +348,7 @@ private struct StableTerminalContent: View {
                 agentName: session.agentName,
                 claudeDisplay: claudeDisplay,
                 fontSize: fontSize,
+                fontFamily: fontFamily,
                 cursorBlink: cursorBlink,
                 bellMode: bellMode,
                 width: width,

@@ -391,6 +391,125 @@ final class MetalRendererTests: XCTestCase {
         }
     }
 
+    /// Regression for Phase 2.6.3's "zoom out in canvas zooms in the
+    /// terminal + clips the right side of wide banners" bug.
+    ///
+    /// Root cause: `MTKView.autoResizeDrawable = true` derives drawable
+    /// pixels from `bounds × layer.contentsScale`. SwiftUI's `scaleEffect`
+    /// can nudge `contentsScale` on an NSViewRepresentable-wrapped
+    /// NSView, so at canvas zoom=0.5 the drawable ended up 1× backing
+    /// instead of 2×. The shader kept rendering cells at 16-raster-pixel
+    /// cells but only half of them fit → visible clipping, and each cell
+    /// occupied twice the fraction of the visible area → visual "zoom
+    /// in". The fix reads the window's real `backingScaleFactor` (not
+    /// contentsScale) and sets `drawableSize` explicitly.
+    ///
+    /// This test locks the pure math: across a range of bounds and
+    /// backing factors typical of the field (1.0 non-Retina, 2.0
+    /// Retina), the drawable must always be `bounds × backing`. If a
+    /// future refactor re-introduces a contentsScale lookup, the math
+    /// would drift and this test would fail.
+    func testDrawablePixelSizeMatchesBoundsTimesBacking() {
+        let cases: [(CGSize, CGFloat)] = [
+            (CGSize(width: 660, height: 440), 2.0),
+            (CGSize(width: 660, height: 440), 1.0),
+            (CGSize(width: 330, height: 220), 2.0),   // canvas zoom=0.5 logical
+            (CGSize(width: 1320, height: 880), 2.0),  // wide tile, Retina
+            (CGSize(width: 1, height: 1), 2.0),
+            (CGSize(width: 0, height: 0), 2.0),       // zero-bounds guard
+        ]
+        for (bounds, scale) in cases {
+            let out = TerminalMTKView.drawablePixelSize(bounds: bounds, backingScale: scale)
+            let expectW = max(1, Int(round(bounds.width * scale)))
+            let expectH = max(1, Int(round(bounds.height * scale)))
+            XCTAssertEqual(
+                Int(out.width), expectW,
+                "drawable width for bounds=\(bounds) scale=\(scale): expected \(expectW), got \(Int(out.width))"
+            )
+            XCTAssertEqual(
+                Int(out.height), expectH,
+                "drawable height for bounds=\(bounds) scale=\(scale): expected \(expectH), got \(Int(out.height))"
+            )
+        }
+    }
+
+    /// The grid must fill the drawable horizontally without overflowing:
+    /// `cols × cellSizePixels ≤ drawable.width`. If this invariant
+    /// breaks, shader-space cells spill past the right edge and produce
+    /// exactly the visible clipping symptom the user reported.
+    func testGridFitsInsideDrawableAtRetinaScale() {
+        let metrics = FontMetrics.defaultMono(size: 13, scale: 2)
+        let bounds = CGSize(width: 660, height: 440)
+        let (cols, rows) = TerminalMTKView.gridSizeForBounds(bounds, metrics: metrics)
+        let drawable = TerminalMTKView.drawablePixelSize(bounds: bounds, backingScale: 2)
+
+        // cellSize in raster pixels — matches `MetalTerminalRenderer.encode`.
+        let cellW = metrics.cellWidth * metrics.scale
+        let cellH = metrics.cellHeight * metrics.scale
+
+        XCTAssertLessThanOrEqual(
+            CGFloat(cols) * cellW, drawable.width,
+            "grid width \(Int(cols))×\(Int(cellW)) exceeds drawable \(Int(drawable.width)) — right-side clipping regression"
+        )
+        XCTAssertLessThanOrEqual(
+            CGFloat(rows) * cellH, drawable.height,
+            "grid height \(Int(rows))×\(Int(cellH)) exceeds drawable \(Int(drawable.height)) — bottom-edge clipping regression"
+        )
+        // Waste less than two full cells on each axis — a big gap
+        // between "grid width" and "drawable width" would mean we're
+        // losing usable cols and the Claude banner would wrap shorter
+        // than it should.
+        XCTAssertLessThan(
+            drawable.width - CGFloat(cols) * cellW, 2 * cellW,
+            "too much horizontal letterbox — cols math drifted"
+        )
+    }
+
+    /// `FontMetrics.font(named:)` must: (a) accept an empty string as
+    /// "system mono", (b) reject a bogus name and fall back silently
+    /// (c) return a real monospace face when given a legit family.
+    ///
+    /// (b) is load-bearing: a font family the user picked in Settings
+    /// may not be installed on a different machine / after a macOS
+    /// reinstall. Silent fallback to SF Mono keeps the Settings value
+    /// portable instead of leaving tiles in a half-rendered state.
+    func testFontFamilyLookupFallsBackToMonospace() {
+        let empty = FontMetrics.font(named: "", size: 13, scale: 2)
+        XCTAssertTrue(
+            CTFontGetSymbolicTraits(empty.font).contains(.monoSpaceTrait),
+            "empty font name must fall back to a monospace font"
+        )
+
+        let bogus = FontMetrics.font(named: "No-Such-Font-XYZ", size: 13, scale: 2)
+        XCTAssertTrue(
+            CTFontGetSymbolicTraits(bogus.font).contains(.monoSpaceTrait),
+            "unknown family name must fall back to a monospace font"
+        )
+
+        // Menlo ships with every macOS install since 10.6 — safe to
+        // hard-code as the positive-path probe.
+        let menlo = FontMetrics.font(named: "Menlo", size: 13, scale: 2)
+        XCTAssertTrue(
+            CTFontGetSymbolicTraits(menlo.font).contains(.monoSpaceTrait),
+            "Menlo must resolve as monospace"
+        )
+        let familyName = CTFontCopyFamilyName(menlo.font) as String
+        XCTAssertEqual(familyName, "Menlo", "Menlo family should round-trip")
+    }
+
+    /// The settings picker builds its list from `monospaceFamilyNames()`.
+    /// It must return at least a couple of families, include Menlo
+    /// (macOS stock), and be sorted (users expect alphabetical order).
+    func testMonospaceFamilyNamesIncludesStockFonts() {
+        let families = FontMetrics.monospaceFamilyNames()
+        XCTAssertFalse(families.isEmpty, "expected at least one monospace family")
+        XCTAssertTrue(
+            families.contains("Menlo"),
+            "expected Menlo in monospace family list (got: \(families.prefix(10)))"
+        )
+        XCTAssertEqual(families, families.sorted(), "family list must be sorted")
+    }
+
     func testRendersLiveSessionSnapshot() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")

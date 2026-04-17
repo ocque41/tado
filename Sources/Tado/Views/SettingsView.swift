@@ -170,6 +170,21 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Terminal font:", selection: Binding(
+                        get: { settings.terminalFontFamily },
+                        set: { settings.terminalFontFamily = $0; try? modelContext.save() }
+                    )) {
+                        Text("System Monospaced (SF Mono)").tag("")
+                        Divider()
+                        ForEach(FontMetrics.monospaceFamilyNames(), id: \.self) { family in
+                            Text(family).tag(family)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("Only fonts with the fixed-pitch trait are listed — proportional faces would break cell alignment. Picking a missing font silently falls back to SF Mono.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+
                     Stepper(
                         "Terminal font size: \(settings.terminalFontSize) pt",
                         value: Binding(

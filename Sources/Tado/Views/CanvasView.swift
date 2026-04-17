@@ -95,6 +95,7 @@ struct CanvasView: View {
                         modelFlags: modelFlags(for: sessionEngine),
                         claudeDisplay: claudeDisplayEnv(),
                         fontSize: CGFloat(fetchSettings().terminalFontSize),
+                        fontFamily: fetchSettings().terminalFontFamily,
                         cursorBlink: fetchSettings().cursorBlink,
                         bellMode: fetchSettings().bellMode,
                         isVisible: visible,

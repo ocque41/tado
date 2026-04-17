@@ -156,6 +156,16 @@ final class TerminalMTKView: MTKView {
         self.enableSetNeedsDisplay = false
         self.preferredFramesPerSecond = 30
         self.wantsLayer = true
+        // We own drawable sizing — see `updateDrawableSize()`. The default
+        // `autoResizeDrawable = true` multiplies bounds by `layer.contentsScale`,
+        // and SwiftUI's `scaleEffect` can transform the layer in ways that
+        // desync contentsScale from the window's real backing factor. The
+        // symptom was: zooming the canvas out made the terminal appear to
+        // zoom IN and clipped the right side of wide content (Claude's
+        // welcome banner, oversized boxes). Explicit control from
+        // `bounds.size × window.backingScaleFactor` makes drawable pixels
+        // track logical bounds regardless of any parent transform.
+        self.autoResizeDrawable = false
 
         if let device = device {
             do {
@@ -208,6 +218,84 @@ final class TerminalMTKView: MTKView {
         rows = newRows
         renderer?.resize(cols: UInt32(newCols), rows: UInt32(newRows))
         session.resize(cols: newCols, rows: newRows)
+    }
+
+    // MARK: - Drawable sizing
+
+    /// AppKit calls this on every layout pass (SwiftUI frame changes, user
+    /// drag-resize, window resize, or a canvas `scaleEffect` change that
+    /// invalidates layout). Re-derive drawable pixels from the real bounds
+    /// and the window's backing factor — never trust `layer.contentsScale`,
+    /// which can pick up transform scaling from the parent.
+    override func layout() {
+        super.layout()
+        updateDrawableSize()
+        reflowGridToBounds()
+    }
+
+    /// Called when the view moves between screens (Retina ↔ non-Retina) or
+    /// when the user flips to an external display with a different scale.
+    /// `window` is fully wired by the time this fires, so the backing
+    /// factor read here is the authoritative one.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDrawableSize()
+        reflowGridToBounds()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateDrawableSize()
+        reflowGridToBounds()
+    }
+
+    /// Set `drawableSize` to `bounds × backingScaleFactor`. On Retina
+    /// this doubles pixel density; on standard displays it's a no-op.
+    /// Rounds to integer pixels to keep the sampler from sub-pixel
+    /// blurring cell edges.
+    private func updateDrawableSize() {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let target = TerminalMTKView.drawablePixelSize(bounds: bounds.size, backingScale: scale)
+        if drawableSize != target {
+            drawableSize = target
+        }
+    }
+
+    /// Derive cols/rows from actual bounds so the PTY + renderer grid
+    /// always match what's on screen. SwiftUI also passes cols/rows via
+    /// `updateNSView`, but that can lag behind rapid drag-resize or arrive
+    /// in the wrong order relative to layout; doing it here on every
+    /// layout pass guarantees the grid tracks the view.
+    private func reflowGridToBounds() {
+        guard let metrics = renderer?.metrics else { return }
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let (newCols, newRows) = TerminalMTKView.gridSizeForBounds(bounds.size, metrics: metrics)
+        resizeIfNeeded(cols: newCols, rows: newRows)
+    }
+
+    // MARK: - Pure helpers (unit-testable)
+
+    /// Pure version of `updateDrawableSize`. Given logical bounds and the
+    /// owning window's backing scale, compute the integer drawable pixel
+    /// size. Extracted so the drawable-sizing invariant can be tested
+    /// without instantiating an `MTKView` + window + screen.
+    static func drawablePixelSize(bounds: CGSize, backingScale: CGFloat) -> CGSize {
+        let scale = max(1, backingScale)
+        let w = max(1, Int(round(bounds.width * scale)))
+        let h = max(1, Int(round(bounds.height * scale)))
+        return CGSize(width: CGFloat(w), height: CGFloat(h))
+    }
+
+    /// Pure version of `reflowGridToBounds`. Returns the (cols, rows)
+    /// a given logical bounds resolves to under a given `FontMetrics`.
+    /// Clamped to a minimum (10 × 4) so the grid always has room for a
+    /// realistic prompt even while a tile animates through a tiny size.
+    static func gridSizeForBounds(_ bounds: CGSize, metrics: FontMetrics) -> (cols: UInt16, rows: UInt16) {
+        let cellW = max(1, metrics.cellWidth)
+        let cellH = max(1, metrics.cellHeight)
+        let cols = UInt16(max(10, Int(bounds.width / cellW)))
+        let rows = UInt16(max(4, Int(bounds.height / cellH)))
+        return (cols, rows)
     }
 
     // MARK: - Focus / input

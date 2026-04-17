@@ -39,6 +39,13 @@ final class AppSettings {
     // current metrics so scrollback geometry stays stable.
     var terminalFontSize: Int = 13
 
+    // Family name of the monospace font used by the Metal renderer.
+    // Empty string = system monospaced (SF Mono). Invalid / proportional
+    // names fall back to the system font silently — see
+    // `FontMetrics.font(named:size:scale:)`. Stored as a string so the
+    // setting survives macOS font uninstalls without a schema migration.
+    var terminalFontFamily: String = ""
+
     // Whether the Metal renderer blinks the cursor. Matches Terminal.app's
     // default. Honored live — toggling in Settings affects all tiles next
     // frame, since the blink timer lives in the view, not the renderer.
