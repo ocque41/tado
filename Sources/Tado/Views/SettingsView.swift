@@ -189,6 +189,14 @@ struct SettingsView: View {
                     Text("Monospace point size used by the Metal renderer. Changes apply to tiles spawned after the setting moves; existing tiles keep their current size so scrollback geometry stays stable.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+
+                    Toggle("Blink cursor", isOn: Binding(
+                        get: { settings.cursorBlink },
+                        set: { settings.cursorBlink = $0; try? modelContext.save() }
+                    ))
+                    Text("When on, the Metal renderer hides the cursor every ~530 ms (Terminal.app cadence). Off keeps the cursor solid, useful for screen recordings.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Rendering")
                 }

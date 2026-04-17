@@ -12,6 +12,8 @@ struct TerminalTileView: View {
     /// Monospace point size for the Metal renderer. Ignored on SwiftTerm
     /// path (which fixes to 13pt internally).
     let fontSize: CGFloat
+    /// Blink the cursor on the Metal path. Honored live.
+    let cursorBlink: Bool
     /// Phase 3 virtualization signal from CanvasView. When false and Metal
     /// is active, this tile unmounts its renderer and shows a lightweight
     /// placeholder — the underlying `TadoCore.Session` keeps running.
@@ -63,6 +65,7 @@ struct TerminalTileView: View {
                 claudeDisplay: claudeDisplay,
                 useMetalRenderer: useMetalRenderer,
                 fontSize: fontSize,
+                cursorBlink: cursorBlink,
                 isVisible: isVisible,
                 width: isResizing ? visualWidth : session.tileWidth,
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
@@ -325,6 +328,7 @@ private struct StableTerminalContent: View {
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let useMetalRenderer: Bool
     let fontSize: CGFloat
+    let cursorBlink: Bool
     let isVisible: Bool
     let width: CGFloat
     let height: CGFloat
@@ -347,6 +351,7 @@ private struct StableTerminalContent: View {
                     agentName: session.agentName,
                     claudeDisplay: claudeDisplay,
                     fontSize: fontSize,
+                    cursorBlink: cursorBlink,
                     width: width,
                     height: height
                 )

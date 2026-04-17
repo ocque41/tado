@@ -20,6 +20,7 @@ struct MetalTerminalTileView: View {
     let agentName: String?
     let claudeDisplay: ProcessSpawner.ClaudeDisplayEnv
     let fontSize: CGFloat
+    let cursorBlink: Bool
     let width: CGFloat
     let height: CGFloat
 
@@ -34,6 +35,7 @@ struct MetalTerminalTileView: View {
                     rows: gridRows(for: height),
                     metrics: metrics,
                     clearRGBA: session.theme.backgroundRGBA,
+                    cursorBlink: cursorBlink,
                     onDirty: { [weak session] in
                         // Runs on the main thread (MTKViewDelegate.draw
                         // callback); TerminalSession is @MainActor so this

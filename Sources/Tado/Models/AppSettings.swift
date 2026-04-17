@@ -41,6 +41,11 @@ final class AppSettings {
     // the two is the user's responsibility if they switch back and forth.
     var terminalFontSize: Int = 13
 
+    // Whether the Metal renderer blinks the cursor. Matches Terminal.app's
+    // default. Honored live — toggling in Settings affects all tiles next
+    // frame, since the blink timer lives in the view, not the renderer.
+    var cursorBlink: Bool = true
+
     init() {
         self.id = UUID()
         self.engineRaw = TerminalEngine.claude.rawValue

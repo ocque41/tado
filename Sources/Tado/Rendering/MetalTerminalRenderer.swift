@@ -162,6 +162,20 @@ final class MetalTerminalRenderer {
 
     // MARK: - Upload
 
+    /// Override the cursor visibility for the next frame. Used by
+    /// `TerminalMTKView` to implement the ~530ms blink: during the off
+    /// phase the view calls `setCursorBlinkOff(true)` and the shader
+    /// hides the cursor regardless of the snapshot's DECTCEM state.
+    /// Off-phase never wins over an already-hidden DECTCEM cursor.
+    func setCursorBlinkOff(_ off: Bool) {
+        if off {
+            uniforms.cursorVisible = 0
+        }
+        // When off==false we leave cursorVisible at whatever the last
+        // upload set it to (snapshot's DECTCEM), so a blink-on phase
+        // doesn't force a hidden cursor back on.
+    }
+
     /// Set the selection overlay. Coords are cell-space, inclusive on
     /// both ends. The caller passes normalized coords (reading order);
     /// the shader trusts the rectangle semantics as-is. Nil clears.

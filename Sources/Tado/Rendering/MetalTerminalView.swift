@@ -23,6 +23,11 @@ struct MetalTerminalView: NSViewRepresentable {
     /// between cells and the view edge). Packed 0xRRGGBBAA. Default is
     /// pure black; MetalTerminalTileView passes the tile theme's bg.
     var clearRGBA: UInt32 = 0x000000FF
+    /// Whether to blink the cursor. The view toggles an off-phase every
+    /// ~530ms (Terminal.app cadence); during the off-phase the draw
+    /// loop forces `uniforms.cursorVisible = 0` regardless of DECTCEM
+    /// state. Flipping this to false returns to a solid cursor.
+    var cursorBlink: Bool = true
     /// Called on the main actor when the PTY produces any output this
     /// frame. Wire to `TerminalSession.markActivity()` so the forward-mode
     /// prompt queue drains identically to the SwiftTerm path.
@@ -37,6 +42,7 @@ struct MetalTerminalView: NSViewRepresentable {
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows, metrics: metrics)
         view.applyClearColor(rgba: clearRGBA)
+        view.cursorBlinkEnabled = cursorBlink
         view.onDirty = onDirty
         view.onIdleTick = onIdleTick
         view.onTitleChange = onTitleChange
@@ -46,6 +52,7 @@ struct MetalTerminalView: NSViewRepresentable {
     func updateNSView(_ nsView: TerminalMTKView, context: Context) {
         nsView.resizeIfNeeded(cols: cols, rows: rows)
         nsView.applyClearColor(rgba: clearRGBA)
+        nsView.cursorBlinkEnabled = cursorBlink
         nsView.onDirty = onDirty
         nsView.onIdleTick = onIdleTick
         nsView.onTitleChange = onTitleChange
@@ -86,6 +93,19 @@ final class TerminalMTKView: MTKView {
     /// Kept so scroll-back renders can compose against the current live
     /// grid without waiting for a new dirty tick from Rust.
     private var latestLive: TadoCore.Snapshot?
+
+    // MARK: Cursor blink
+
+    /// Mirror of `AppSettings.cursorBlink`. Off → cursor stays solid
+    /// regardless of the blink phase.
+    var cursorBlinkEnabled: Bool = true
+    /// Terminal.app uses 530 ms. vim's default is ~500 ms. Landing in
+    /// the middle avoids "too frantic" and "too sluggish" perceptions.
+    private static let blinkPeriod: TimeInterval = 0.53
+    /// Typing / output resets the blink so the cursor snaps to visible —
+    /// matches the behavior of virtually every terminal. Stored as the
+    /// wall-clock timestamp of the last "activity" event.
+    private var lastBlinkReset: TimeInterval = 0
 
     // MARK: Selection state
 
@@ -339,6 +359,20 @@ final class TerminalMTKView: MTKView {
         scrollOffset = max(0, scrollOffset + lines)
     }
 
+    /// True when the cursor should currently be hidden by the blink
+    /// (off-phase of the cycle). Returns false when blinking is
+    /// disabled or while the cursor is within ~one period of recent
+    /// activity — prevents the "disappearing cursor while typing"
+    /// effect.
+    private func shouldHideCursorNow() -> Bool {
+        guard cursorBlinkEnabled else { return false }
+        let now = Date().timeIntervalSinceReferenceDate
+        // Fresh activity → force visible for a bit.
+        if now - lastBlinkReset < Self.blinkPeriod { return false }
+        let phase = now.truncatingRemainder(dividingBy: Self.blinkPeriod * 2)
+        return phase >= Self.blinkPeriod
+    }
+
     // MARK: - File drag-drop (matches LoggingTerminalView)
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -445,6 +479,15 @@ extension TerminalMTKView: MTKViewDelegate {
         } else {
             renderer.setSelection(start: nil, end: nil)
         }
+
+        // Cursor blink: when enabled, hide the cursor for half of each
+        // blink period. Activity (output arriving, typing) resets the
+        // phase so the cursor snaps back to visible — matches every
+        // sane terminal.
+        if hadDirtyLastFrame {
+            lastBlinkReset = now
+        }
+        renderer.setCursorBlinkOff(shouldHideCursorNow())
 
         let viewportPx = CGSize(
             width: CGFloat(drawable.texture.width),

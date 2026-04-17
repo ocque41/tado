@@ -99,6 +99,7 @@ struct CanvasView: View {
                         claudeDisplay: claudeDisplayEnv(),
                         useMetalRenderer: useMetal,
                         fontSize: CGFloat(fetchSettings().terminalFontSize),
+                        cursorBlink: fetchSettings().cursorBlink,
                         isVisible: visible,
                         scale: scale
                     ) { newPosition in
