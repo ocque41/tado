@@ -156,6 +156,36 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertGreaterThan(atlas.modCount, beforeMod)
     }
 
+    /// Astral-plane codepoints (> U+FFFF) previously returned nil
+    /// unconditionally. Phase 2.19 makes the atlas try a surrogate-pair
+    /// + font-fallback rasterization path. The test hits two cases:
+    ///   * U+1D400 (MATHEMATICAL BOLD CAPITAL A) — part of the
+    ///     mathematical alphanumeric block; broadly supported by
+    ///     system fonts on macOS.
+    ///   * U+1F600 (GRINNING FACE) — emoji; Apple Color Emoji covers
+    ///     it. Rendered monochrome for now (Phase 2.20 territory for
+    ///     color), but at least it produces a glyph rect.
+    func testAstralCodepointsRasterize() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("no Metal device")
+        }
+        let atlas = try GlyphAtlas(
+            device: device,
+            metrics: FontMetrics.defaultMono(),
+            atlasSize: 512
+        )
+        let math = UInt32(0x1D400) // 𝐀
+        let emoji = UInt32(0x1F600) // 😀
+        XCTAssertNotNil(
+            atlas.uvRect(for: math),
+            "U+1D400 should rasterize via font fallback"
+        )
+        XCTAssertNotNil(
+            atlas.uvRect(for: emoji),
+            "U+1F600 (emoji) should rasterize monochrome via Apple Color Emoji"
+        )
+    }
+
     func testRendersLiveSessionSnapshot() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")

@@ -75,14 +75,29 @@ final class MetalTerminalRenderer {
     private var uniforms = Uniforms()
     private var glyphLookup: MTLBuffer
     /// Largest codepoint the current `glyphLookup` buffer covers (exclusive).
-    /// Starts at ASCII + Latin-1; grows to BMP when any char ≥ lookupMax is
-    /// rasterized. Extending past BMP (emoji etc.) needs a sparse lookup
-    /// — Phase 3 territory, currently handled by falling back to `hasGlyph=0`.
+    /// BMP slots (< 0x10000) are keyed by their Unicode scalar. Astral
+    /// slots (>= 0x10000, up to `astralSlotEnd`) are keyed by a dense
+    /// round-robin-allocated slot; the renderer remaps real astral
+    /// codepoints into those slots on upload so any single cell's
+    /// ch always fits in the lookup buffer.
     private var lookupMax: UInt32 = 0x100
     /// Atlas modCount snapshot at the time `glyphLookup` was last built.
     /// A mismatch means fresh glyphs were rasterized and the GPU table
     /// is stale — see `commit` for the rebuild decision.
     private var lastLookupModCount: Int = -1
+
+    // MARK: - Astral slot remapping (Phase 2.19)
+
+    /// Astral slots live at 0x10000..astralSlotEnd. 0x10000 chosen so we
+    /// never collide with BMP codepoints the atlas might rasterize.
+    private static let astralSlotStart: UInt32 = 0x10000
+    /// 4096 slots (0x10000..0x11000). Enough for typical emoji-heavy
+    /// sessions; wraps round-robin when exhausted. Kept small so the
+    /// lookup buffer stays compact (0x11000 * 16 B ≈ 1 MB).
+    private static let astralSlotEnd: UInt32 = 0x11000
+    private var astralToSlot: [UInt32: UInt32] = [:]
+    private var astralSlotToCodepoint: [UInt32: UInt32] = [:]
+    private var nextAstralSlot: UInt32 = astralSlotStart
 
     /// Cached local grid so `snapshotDirty` can patch into a persistent array
     /// without the renderer seeing stale cells between frames.
@@ -223,9 +238,9 @@ final class MetalTerminalRenderer {
                   dstStart + colsInt <= localCells.count else { continue }
             for c in 0..<colsInt {
                 let src = snapshot.cells[srcStart + c]
-                rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
+                let effectiveCh = rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
                 localCells[dstStart + c] = CellInstance(
-                    ch: src.ch,
+                    ch: effectiveCh,
                     fg: src.fg,
                     bg: src.bg,
                     attrs: src.attrs
@@ -272,8 +287,8 @@ final class MetalTerminalRenderer {
                     let cell: CellInstance
                     if sbIdx < sb.cells.count, c < sbCols {
                         let src = sb.cells[sbIdx]
-                        rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
-                        cell = CellInstance(ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs)
+                        let effectiveCh = rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
+                        cell = CellInstance(ch: effectiveCh, fg: src.fg, bg: src.bg, attrs: src.attrs)
                     } else {
                         cell = CellInstance(ch: 0, fg: 0xE8E8E8FF, bg: 0x000000FF, attrs: 0)
                     }
@@ -297,10 +312,10 @@ final class MetalTerminalRenderer {
             for r in 0..<liveRows {
                 for c in 0..<colsInt {
                     let src = live.cells[r * colsInt + c]
-                    rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
+                    let effectiveCh = rasterizeIfNew(src.ch, isWide: (src.attrs & Attr.wide) != 0)
                     let dstRow = clampedOffset + r
                     localCells[dstRow * colsInt + c] = CellInstance(
-                        ch: src.ch, fg: src.fg, bg: src.bg, attrs: src.attrs
+                        ch: effectiveCh, fg: src.fg, bg: src.bg, attrs: src.attrs
                     )
                 }
             }
@@ -314,27 +329,52 @@ final class MetalTerminalRenderer {
                cursorVisible: cursorVisible)
     }
 
-    /// Eagerly make sure `ch` has a slot in the atlas (rasterizing if first
-    /// time seen) and that `lookupMax` covers it. The renderer decides
-    /// whether to rebuild the GPU lookup buffer by comparing the atlas's
-    /// modCount against the last built one — that signal is accurate even
-    /// when this method doesn't do anything observable (no in/out bool
-    /// needed). `isWide` controls the atlas bitmap width: 2x cellWidth
-    /// for CJK / box-drawing wide variants.
-    private func rasterizeIfNew(_ ch: UInt32, isWide: Bool = false) {
-        // Zero means "blank cell" (handled by shader short-circuit) — never
-        // rasterize. Also cap at BMP: beyond that we'd need sparse lookup,
-        // so fall back to a visible placeholder row instead of blowing
-        // memory on a 4 MB lookup buffer for one emoji.
-        guard ch != 0, ch < 0x10000 else { return }
-        _ = atlas.uvRect(for: ch, cellSpan: isWide ? 2 : 1)
-        if ch >= lookupMax {
-            // Grow lookup bound to cover this codepoint. Round up to the
-            // next 256-codepoint boundary so we don't thrash the GPU
-            // buffer rebuild for codepoints arriving in sequence.
-            let rounded = (ch | 0xFF) + 1
-            lookupMax = min(rounded, 0x10000)
+    /// Ensure `ch` has a slot in the atlas (rasterizing if first time
+    /// seen) and a valid GPU lookup entry. Returns the "effective" ch
+    /// to write into the cell buffer — same as `ch` for BMP scalars,
+    /// a remapped dense slot (in 0x10000..astralSlotEnd) for astral
+    /// codepoints. `isWide` controls atlas bitmap width (2× cell width
+    /// for CJK). Also grows `lookupMax` in 256-codepoint steps so
+    /// sequential writes don't thrash the GPU buffer rebuild.
+    private func rasterizeIfNew(_ ch: UInt32, isWide: Bool = false) -> UInt32 {
+        // Blank cells short-circuit (shader renders bg only).
+        guard ch != 0 else { return 0 }
+
+        if ch < 0x10000 {
+            _ = atlas.uvRect(for: ch, cellSpan: isWide ? 2 : 1)
+            if ch >= lookupMax {
+                let rounded = (ch | 0xFF) + 1
+                lookupMax = min(rounded, Self.astralSlotEnd)
+            }
+            return ch
         }
+
+        // Astral: allocate or reuse a slot in 0x10000..astralSlotEnd.
+        let slot: UInt32
+        if let existing = astralToSlot[ch] {
+            slot = existing
+        } else {
+            slot = nextAstralSlot
+            // Evict previous tenant if we wrap.
+            if let old = astralSlotToCodepoint[slot] {
+                astralToSlot.removeValue(forKey: old)
+            }
+            astralToSlot[ch] = slot
+            astralSlotToCodepoint[slot] = ch
+            nextAstralSlot += 1
+            if nextAstralSlot >= Self.astralSlotEnd {
+                nextAstralSlot = Self.astralSlotStart
+            }
+        }
+        // Atlas is keyed by the real astral codepoint; the lookup buffer
+        // builds from (slot → ch → rect) via slotMap.
+        _ = atlas.uvRect(for: ch, cellSpan: isWide ? 2 : 1)
+        // Grow lookup to cover this slot.
+        if slot >= lookupMax {
+            let rounded = (slot | 0xFF) + 1
+            lookupMax = min(rounded, Self.astralSlotEnd)
+        }
+        return slot
     }
 
     private func commit(
@@ -353,10 +393,17 @@ final class MetalTerminalRenderer {
         // The `>` on modCount is a weak signal because the initial build
         // happens at modCount=2 (blank + space); use `!=` so the first real
         // upload (modCount becomes 3+) triggers a rebuild.
+        // Astral slots are resolved via the renderer's astralSlotToCodepoint
+        // map, passed through to atlas so the lookup buffer points at the
+        // right UV for each PUA-above-BMP slot.
         let neededCodepoint = lookupMax
         let builtCodepoint = UInt32(glyphLookup.length / MemoryLayout<SIMD4<Float>>.stride)
         if atlas.modCount != lastLookupModCount || neededCodepoint > builtCodepoint {
-            if let lookup = atlas.buildLookupBuffer(device: device, maxCodepoint: lookupMax) {
+            if let lookup = atlas.buildLookupBuffer(
+                device: device,
+                maxCodepoint: lookupMax,
+                slotMap: astralSlotToCodepoint.isEmpty ? nil : astralSlotToCodepoint
+            ) {
                 self.glyphLookup = lookup
                 self.lastLookupModCount = atlas.modCount
             }

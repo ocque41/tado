@@ -175,15 +175,38 @@ final class GlyphAtlas {
     /// bounding rect in pixels and pixels.count == width*height.
     /// `cellSpan` controls the bitmap width: 1 for normal chars, 2 for
     /// East-Asian Wide / CJK. Width is `cellSpan * cellWidth` pixels.
+    /// Supports astral codepoints (> U+FFFF) via surrogate-pair encoding
+    /// with font fallback — emoji glyphs still rasterize monochrome
+    /// (R8 atlas can't carry color; color-emoji support is Phase 2.20).
     private func rasterize(scalar: Unicode.Scalar, cellSpan: Int = 1) -> (CGRect, [UInt8])? {
-        var ch: UniChar = UInt16(clamping: scalar.value)
-        var glyph: CGGlyph = 0
-        if scalar.value > 0xFFFF {
-            // Surrogate pair — skip for Phase 2.1. Phase 3 handles emoji.
-            return nil
+        // Encode the scalar as UTF-16 so CoreText handles both BMP and
+        // astral codepoints through one code path. Astral scalars become
+        // a 2-unit surrogate pair; CTFont returns one glyph per scalar
+        // (the second slot comes back as 0).
+        let chars = Array(String(scalar).utf16)
+        guard !chars.isEmpty else { return nil }
+
+        // Try the configured mono font first. If it has no glyph (common
+        // for emoji / CJK), ask CoreText for a fallback that does.
+        var activeFont = metrics.font
+        var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+        _ = chars.withUnsafeBufferPointer { charBuf in
+            glyphs.withUnsafeMutableBufferPointer { glyphBuf in
+                CTFontGetGlyphsForCharacters(activeFont, charBuf.baseAddress!, glyphBuf.baseAddress!, chars.count)
+            }
         }
-        let ok = CTFontGetGlyphsForCharacters(metrics.font, &ch, &glyph, 1)
-        guard ok, glyph != 0 else { return nil }
+        if glyphs[0] == 0 {
+            let cfStr = String(scalar) as CFString
+            let range = CFRange(location: 0, length: CFStringGetLength(cfStr))
+            activeFont = CTFontCreateForString(metrics.font, cfStr, range)
+            _ = chars.withUnsafeBufferPointer { charBuf in
+                glyphs.withUnsafeMutableBufferPointer { glyphBuf in
+                    CTFontGetGlyphsForCharacters(activeFont, charBuf.baseAddress!, glyphBuf.baseAddress!, chars.count)
+                }
+            }
+        }
+        guard glyphs[0] != 0 else { return nil }
+        let glyph = glyphs[0]
 
         // Cell-sized bitmap so baseline positioning is consistent per row.
         // Wide glyphs double the width so the CJK shape renders unsquished.
@@ -224,16 +247,27 @@ final class GlyphAtlas {
             y: CGFloat(h) - metrics.baseline
         )
         var g = glyph
-        CTFontDrawGlyphs(metrics.font, &g, &position, 1, ctx)
+        // Draw with the (possibly fallback-resolved) font so emoji /
+        // CJK glyphs land at the right size. Monochrome — color emoji
+        // requires an RGBA atlas.
+        CTFontDrawGlyphs(activeFont, &g, &position, 1, ctx)
 
         return (CGRect(x: 0, y: 0, width: w, height: h), pixels)
     }
 
-    /// Copy the current `ch -> GlyphRect(u0,v0,u1,v1)` table into a Metal
-    /// buffer sized `maxCodepoint + 1`. Cheap enough to regenerate every
-    /// few frames; for Phase 2 we rebuild it lazily when new glyphs get
-    /// rasterized.
-    func buildLookupBuffer(device: MTLDevice, maxCodepoint: UInt32 = 0x80) -> MTLBuffer? {
+    /// Copy the current `slot -> GlyphRect(u0,v0,u1,v1)` table into a
+    /// Metal buffer sized `maxCodepoint + 1`. For BMP slots (< 0x10000)
+    /// the "slot" is the Unicode codepoint itself. For astral slots
+    /// (>= 0x10000), `slotMap[slot]` gives the real astral codepoint
+    /// whose UV rect to write — the renderer uses this to remap its
+    /// cell.ch from raw astral values to dense PUA-above-BMP slots that
+    /// fit within the lookup buffer's bound. Nil slotMap → BMP-only
+    /// behavior (pre-Phase 2.19).
+    func buildLookupBuffer(
+        device: MTLDevice,
+        maxCodepoint: UInt32 = 0x80,
+        slotMap: [UInt32: UInt32]? = nil
+    ) -> MTLBuffer? {
         let count = Int(maxCodepoint) + 1
         let stride = MemoryLayout<SIMD4<Float>>.stride
         guard let buffer = device.makeBuffer(length: stride * count, options: .storageModeShared) else {
@@ -241,7 +275,16 @@ final class GlyphAtlas {
         }
         let ptr = buffer.contents().bindMemory(to: SIMD4<Float>.self, capacity: count)
         for i in 0..<count {
-            if let rect = rects[UInt32(i)], !rect.isEmpty {
+            let key: UInt32
+            if UInt32(i) < 0x10000 {
+                key = UInt32(i)
+            } else if let mapped = slotMap?[UInt32(i)] {
+                key = mapped
+            } else {
+                ptr[i] = SIMD4<Float>(0, 0, 0, 0)
+                continue
+            }
+            if let rect = rects[key], !rect.isEmpty {
                 ptr[i] = SIMD4<Float>(
                     Float(rect.minX), Float(rect.minY),
                     Float(rect.maxX), Float(rect.maxY)
