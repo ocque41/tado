@@ -171,6 +171,12 @@ impl Session {
         Ok(bytes.len())
     }
 
+    /// Update the grid's default fg/bg palette. Typically called once
+    /// right after spawn with the tile's theme.
+    pub fn set_default_colors(&self, fg: u32, bg: u32) {
+        self.grid.lock().set_default_colors(fg, bg);
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) {
         if let Some(master) = self.master.lock().as_mut() {
             let _ = master.resize(portable_pty::PtySize {

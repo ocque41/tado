@@ -107,6 +107,14 @@ enum TadoCore {
             tado_session_resize(UnsafeMutablePointer(handle), cols, rows)
         }
 
+        /// Set the palette used for blank cells + SGR reset. RGBA packed
+        /// as 0xRRGGBBAA. Typically called right after spawn with the
+        /// tile's theme so freshly-cleared regions pick up the tile
+        /// color instead of generic black/white.
+        func setDefaultColors(fg: UInt32, bg: UInt32) {
+            tado_session_set_default_colors(UnsafeMutablePointer(handle), fg, bg)
+        }
+
         func kill(signal: Int32 = 15) {
             tado_session_kill(UnsafeMutablePointer(handle), signal)
         }

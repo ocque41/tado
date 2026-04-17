@@ -130,6 +130,23 @@ pub unsafe extern "C" fn tado_session_resize(session: *mut TadoSession, cols: u1
     });
 }
 
+/// Set the default fg/bg colors used for blank cells and after SGR
+/// reset. RGBA is packed `0xRRGGBBAA` — same encoding as `TadoCell.fg/bg`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_set_default_colors(
+    session: *mut TadoSession,
+    fg: u32,
+    bg: u32,
+) {
+    if session.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.set_default_colors(fg, bg);
+    });
+}
+
 /// Kill the child process (SIGTERM-ish; exact semantics depend on OS).
 #[no_mangle]
 pub unsafe extern "C" fn tado_session_kill(session: *mut TadoSession, signal: i32) {

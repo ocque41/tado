@@ -106,6 +106,52 @@ final class TadoCoreSessionTests: XCTestCase {
         XCTAssertEqual(snap.cells.count, Int(snap.cols) * Int(snap.rows))
     }
 
+    func testSetDefaultColorsAppliesToBlankCells() throws {
+        // Spawn a shell that does nothing but sleeps. Immediately push
+        // a themed palette via setDefaultColors, then wait for the grid
+        // to scroll once (which blanks a row with the new default_bg).
+        // Finally snapshot and check that blank cells carry the themed bg.
+        guard let session = TadoCore.Session(
+            command: "/bin/sh",
+            args: ["-c", "sleep 0.6"],
+            cwd: nil,
+            environment: ["PATH": "/usr/bin:/bin"],
+            cols: 10,
+            rows: 2
+        ) else {
+            XCTFail("spawn failed")
+            return
+        }
+
+        // Theme the tile before it prints anything. New default_bg =
+        // 0x11223344. Any blank cell that emerges must carry this value.
+        session.setDefaultColors(fg: 0xAABBCCFF, bg: 0x11223344)
+
+        // Poll for the first snapshot and sniff a cell we expect to be
+        // unwritten (e.g., the last cell of the last row). The shell
+        // doesn't touch it, so it stays at default.
+        let deadline = Date().addingTimeInterval(1.0)
+        var sawThemedBlank = false
+        var lastSeenBg: UInt32 = 0
+        var lastSeenCh: UInt32 = 0
+        while Date() < deadline {
+            if let snap = session.snapshotFull() {
+                let lastIdx = Int(snap.cols) * Int(snap.rows) - 1
+                if lastIdx < snap.cells.count {
+                    lastSeenBg = snap.cells[lastIdx].bg
+                    lastSeenCh = snap.cells[lastIdx].ch
+                    if snap.cells[lastIdx].bg == 0x11223344 {
+                        sawThemedBlank = true
+                        break
+                    }
+                }
+            }
+            usleep(50_000)
+        }
+        XCTAssertTrue(sawThemedBlank,
+                      "blank cells should carry the themed default_bg 0x11223344 — saw bg=\(String(format: "0x%08X", lastSeenBg)) ch=\(lastSeenCh)")
+    }
+
     func testBracketedPasteAndTitleFFI() throws {
         // Spawn a shell that emits OSC 2 (title) and DECSET 2004
         // (bracketed paste on). Confirm the Swift FFI wrappers reflect

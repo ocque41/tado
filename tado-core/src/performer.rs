@@ -491,6 +491,19 @@ mod tests {
     }
 
     #[test]
+    fn set_default_colors_applies_to_sgr_reset() {
+        let mut g = Grid::new(4, 2);
+        g.set_default_colors(0x112233FF, 0x44556677);
+        // Grab a red fg so we can prove SGR 0 reset picks up the new defaults.
+        feed(&mut g, b"\x1b[31mX\x1b[0mY");
+        let x = g.cells[0];
+        let y = g.cells[1];
+        assert_eq!(x.fg, 0xCC241DFF, "X keeps the red SGR");
+        assert_eq!(y.fg, 0x112233FF, "Y picks up the themed default fg");
+        assert_eq!(y.bg, 0x44556677, "Y picks up the themed default bg");
+    }
+
+    #[test]
     fn esc_7_and_esc_8_save_restore() {
         let mut g = Grid::new(10, 5);
         feed(&mut g, b"\x1b[3;5H\x1b7"); // move + ESC 7

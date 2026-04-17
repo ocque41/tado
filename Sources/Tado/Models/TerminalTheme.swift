@@ -139,4 +139,25 @@ struct TerminalTheme: Hashable, Identifiable {
     static func theme(id: String) -> TerminalTheme {
         all.first(where: { $0.id == id }) ?? .tadoDark
     }
+
+    // MARK: - Packed RGBA for the Metal path
+
+    /// Pack `background` / `foreground` into the `0xRRGGBBAA` encoding
+    /// `TadoCore.Session.setDefaultColors(fg:bg:)` + the Metal shader use.
+    /// NSColor components are converted into the sRGB space so theme colors
+    /// look identical to the Cocoa-rendered SwiftTerm variants.
+    var backgroundRGBA: UInt32 { Self.rgba(from: background) }
+    var foregroundRGBA: UInt32 { Self.rgba(from: foreground) }
+
+    private static func rgba(from color: NSColor) -> UInt32 {
+        // Convert through sRGB so theme colors render the same in Metal
+        // and Cocoa. Fall back to display P3 components if conversion
+        // fails — extremely unlikely on macOS 14+.
+        let converted = color.usingColorSpace(.sRGB) ?? color
+        let r = UInt32(clamping: Int((converted.redComponent * 255).rounded()))
+        let g = UInt32(clamping: Int((converted.greenComponent * 255).rounded()))
+        let b = UInt32(clamping: Int((converted.blueComponent * 255).rounded()))
+        let a = UInt32(clamping: Int((converted.alphaComponent * 255).rounded()))
+        return (r << 24) | (g << 16) | (b << 8) | a
+    }
 }

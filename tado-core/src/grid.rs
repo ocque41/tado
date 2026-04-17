@@ -233,6 +233,55 @@ impl Grid {
         }
     }
 
+    /// Change the palette that blank / erased / SGR-reset cells pick up.
+    /// Called from the Swift side when a tile's `TerminalTheme` changes.
+    /// Also retints cells that are currently still in the "factory
+    /// blank" state (space + old default fg/bg + attrs=0), so an
+    /// immediately-themed newly-spawned tile shows themed background
+    /// everywhere the agent hasn't yet written. Cells the agent has
+    /// touched keep their explicit colors.
+    pub fn set_default_colors(&mut self, fg: u32, bg: u32) {
+        let old_fg = self.default_fg;
+        let old_bg = self.default_bg;
+        self.default_fg = fg;
+        self.default_bg = bg;
+
+        // Retrack the current SGR if it was still at the old defaults.
+        if self.current_fg == old_fg {
+            self.current_fg = fg;
+        }
+        if self.current_bg == old_bg {
+            self.current_bg = bg;
+        }
+
+        // Retint "still-factory" cells. A cell is considered untouched
+        // iff its ch+fg+bg+attrs match the old blank state. That covers
+        // fresh grids + rows blanked by `erase` calls under the old
+        // palette. Mark rows dirty so the renderer reuploads.
+        let retint_from = Cell {
+            ch: b' ' as u32,
+            fg: old_fg,
+            bg: old_bg,
+            attrs: 0,
+        };
+        let retint_to = Cell {
+            ch: b' ' as u32,
+            fg,
+            bg,
+            attrs: 0,
+        };
+        let cols = self.cols as usize;
+        for (i, cell) in self.cells.iter_mut().enumerate() {
+            if *cell == retint_from {
+                *cell = retint_to;
+                let row = i / cols;
+                if row < self.dirty_rows.len() {
+                    self.dirty_rows[row] = true;
+                }
+            }
+        }
+    }
+
     /// Copy N historical rows into a flat `Vec<Cell>` (row-major, `cols`
     /// cells per row). `offset` counts from the most-recently-evicted line:
     /// offset 0 is the line that just fell off the top. Returns fewer rows

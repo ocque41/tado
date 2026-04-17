@@ -29,6 +29,7 @@ struct MetalTerminalTileView: View {
                     session: core,
                     cols: gridCols(for: width),
                     rows: gridRows(for: height),
+                    clearRGBA: session.theme.backgroundRGBA,
                     onDirty: { [weak session] in
                         // Runs on the main thread (MTKViewDelegate.draw
                         // callback); TerminalSession is @MainActor so this
@@ -124,6 +125,12 @@ struct MetalTerminalTileView: View {
             NSLog("tado: TadoCore.Session spawn failed for \(session.todoText)")
             return
         }
+        // Apply the tile's theme so blank / erased regions use the tile
+        // background and SGR reset picks up the tile foreground. Must
+        // happen before the first frame — `MetalTerminalView` reads
+        // `session.theme` on its own to set the MTKView clear color.
+        let theme = session.theme
+        spawned.setDefaultColors(fg: theme.foregroundRGBA, bg: theme.backgroundRGBA)
         session.coreSession = spawned
     }
 

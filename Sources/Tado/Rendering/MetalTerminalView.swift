@@ -16,6 +16,10 @@ struct MetalTerminalView: NSViewRepresentable {
     let session: TadoCore.Session
     let cols: UInt16
     let rows: UInt16
+    /// Background color used for the MTKView's clear color (letterboxing
+    /// between cells and the view edge). Packed 0xRRGGBBAA. Default is
+    /// pure black; MetalTerminalTileView passes the tile theme's bg.
+    var clearRGBA: UInt32 = 0x000000FF
     /// Called on the main actor when the PTY produces any output this
     /// frame. Wire to `TerminalSession.markActivity()` so the forward-mode
     /// prompt queue drains identically to the SwiftTerm path.
@@ -29,6 +33,7 @@ struct MetalTerminalView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows)
+        view.applyClearColor(rgba: clearRGBA)
         view.onDirty = onDirty
         view.onIdleTick = onIdleTick
         view.onTitleChange = onTitleChange
@@ -37,6 +42,7 @@ struct MetalTerminalView: NSViewRepresentable {
 
     func updateNSView(_ nsView: TerminalMTKView, context: Context) {
         nsView.resizeIfNeeded(cols: cols, rows: rows)
+        nsView.applyClearColor(rgba: clearRGBA)
         nsView.onDirty = onDirty
         nsView.onIdleTick = onIdleTick
         nsView.onTitleChange = onTitleChange
@@ -130,6 +136,19 @@ final class TerminalMTKView: MTKView {
     func stop() {
         self.isPaused = true
         session.kill()
+    }
+
+    /// Set the Metal clear color from a packed 0xRRGGBBAA. MTKView uses
+    /// this for the uncovered region between cells and the view edge.
+    /// Called from MetalTerminalView.updateNSView whenever the tile's
+    /// theme changes (theme changes never happen today post-spawn but
+    /// will once live-theme-switching lands).
+    func applyClearColor(rgba: UInt32) {
+        let r = Double((rgba >> 24) & 0xFF) / 255.0
+        let g = Double((rgba >> 16) & 0xFF) / 255.0
+        let b = Double((rgba >>  8) & 0xFF) / 255.0
+        let a = Double( rgba        & 0xFF) / 255.0
+        self.clearColor = MTLClearColorMake(r, g, b, a)
     }
 
     func resizeIfNeeded(cols newCols: UInt16, rows newRows: UInt16) {
