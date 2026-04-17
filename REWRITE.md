@@ -25,7 +25,8 @@ landed vs. what remains. Delete once the rewrite is merged.
 | 2.14 | Wide-char support (East-Asian Wide via `unicode-width`): 2-cell cells with `ATTR_WIDE` / `ATTR_WIDE_FILLER`; shader extends wide-start quad and skips filler; atlas rasterizes at 2× cell width; text extractor skips filler. CJK + wide box-drawing align correctly. | ✅ shipped |
 | 2.15 | ANSI palette theming: Grid carries a 16-slot palette consulted by SGR 30..=37/40..=47/90..=97/100..=107 + xterm-256 slots 0..15. Solarized / Dracula / Nord / Monokai / Tokyo Night themes ship canonical palettes; others keep the baked-in default. | ✅ shipped |
 | 2.16 | Blinking cursor on Metal path (~530 ms Terminal.app cadence). Activity resets the phase so the cursor doesn't disappear during typing. Toggle in Settings → Rendering → "Blink cursor". | ✅ shipped |
-| 2.17 | Configurable bell mode (Off / Audible / Visual / Both). Visual bell flashes the tile at 35% white for 150 ms. Accessibility win for muted-audio workflows. | ✅ shipped (46/46 tests green) |
+| 2.17 | Configurable bell mode (Off / Audible / Visual / Both). Visual bell flashes the tile at 35% white for 150 ms. Accessibility win for muted-audio workflows. | ✅ shipped |
+| 2.18 | Glyph atlas overflow recovery: on shelf exhaustion, reset + retry; default size bumped 2048² → 4096² (~4× capacity). modCount bump already triggers GPU lookup rebuild. | ✅ shipped (47/47 tests green) |
 | 2.6 | Flip `useMetalRenderer` default to true; delete SwiftTerm | ⏳ Pending — user dogfood gates the default flip |
 
 ## What works today on this branch
