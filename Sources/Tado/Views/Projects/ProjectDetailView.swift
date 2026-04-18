@@ -27,6 +27,7 @@ struct ProjectDetailView: View {
     @State private var newTeamAgentsInProject: Set<String> = []
     @State private var expandedTeamID: UUID? = nil
     @State private var inboxExpanded: Bool = true
+    @State private var agentsExpanded: Bool = false
     @State private var showPlanNotReadyAlert: Bool = false
 
     var body: some View {
@@ -67,6 +68,14 @@ struct ProjectDetailView: View {
                         onRemoveAgent: { team, name in removeAgentFromTeam(team, agentName: name) },
                         onCommitNewTeam: { commitNewTeam() },
                         onCancelNewTeam: { cancelNewTeam() }
+                    )
+
+                    ProjectAgentsSection(
+                        project: project,
+                        agents: agents,
+                        projectTeams: projectTeams,
+                        projectTodos: projectTodos,
+                        expanded: $agentsExpanded
                     )
                 }
                 .padding(.horizontal, 28)
