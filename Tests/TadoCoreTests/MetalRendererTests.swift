@@ -597,6 +597,118 @@ final class MetalRendererTests: XCTestCase {
         XCTAssertNotNil(renderer.renderOffscreen(width: w, height: h))
     }
 
+    // MARK: - DrawGuardTracker (pure, no Metal needed)
+
+    /// Fresh tracker starts with every counter at zero and no recovery
+    /// flag armed. Establishes the baseline that recordSuccess() relies
+    /// on (calling it repeatedly must stay quiescent).
+    func testDrawGuardTrackerStartsQuiescent() {
+        var tracker = DrawGuardTracker()
+        XCTAssertEqual(tracker.totalNilDrawable, 0)
+        XCTAssertEqual(tracker.totalNilRPD, 0)
+        XCTAssertEqual(tracker.totalNilCommandBuffer, 0)
+        XCTAssertEqual(tracker.consecutiveNilDrawable, 0)
+        XCTAssertFalse(tracker.needsDrawableRecovery)
+        XCTAssertFalse(tracker.consumeRecoveryFlag())
+        tracker.recordSuccess()
+        XCTAssertEqual(tracker.consecutiveNilDrawable, 0)
+    }
+
+    /// First three nil-drawable events must log (diagnosis budget),
+    /// the fourth must NOT log (quiet period), and the 30th consecutive
+    /// must log the one-time "stuck" signal regardless of budget.
+    func testDrawGuardTrackerLogBudgetAndStuckSignal() {
+        var tracker = DrawGuardTracker()
+        // First three: should log, none are the stuck signal.
+        for i in 1...3 {
+            let action = tracker.recordNilDrawable()
+            XCTAssertTrue(action.shouldLog, "event \(i) should log within budget")
+            XCTAssertFalse(action.isStuckSignal, "event \(i) is not the stuck signal")
+        }
+        // Fourth through 29th: budget exhausted, none should log.
+        for i in 4..<DrawGuardTracker.stuckSignalThreshold {
+            let action = tracker.recordNilDrawable()
+            XCTAssertFalse(action.shouldLog, "event \(i) is over budget and not stuck yet")
+            XCTAssertFalse(action.isStuckSignal)
+        }
+        // 30th consecutive: the stuck signal fires.
+        let stuck = tracker.recordNilDrawable()
+        XCTAssertTrue(stuck.shouldLog, "stuck signal must log even past budget")
+        XCTAssertTrue(stuck.isStuckSignal)
+        XCTAssertEqual(tracker.consecutiveNilDrawable, DrawGuardTracker.stuckSignalThreshold)
+    }
+
+    /// Every nil-drawable arms the recovery flag for the next draw tick.
+    /// `consumeRecoveryFlag` returns it and clears it so the view's
+    /// recovery runs exactly once per failure streak.
+    func testDrawGuardTrackerRecoveryFlagHandshake() {
+        var tracker = DrawGuardTracker()
+        _ = tracker.recordNilDrawable()
+        XCTAssertTrue(tracker.needsDrawableRecovery)
+        XCTAssertTrue(tracker.consumeRecoveryFlag())
+        XCTAssertFalse(tracker.needsDrawableRecovery)
+        XCTAssertFalse(tracker.consumeRecoveryFlag(), "second consume is a no-op")
+
+        // Arm again, then a successful draw clears the flag without
+        // waiting for consume.
+        _ = tracker.recordNilDrawable()
+        XCTAssertTrue(tracker.needsDrawableRecovery)
+        tracker.recordSuccess()
+        XCTAssertFalse(tracker.needsDrawableRecovery)
+        XCTAssertEqual(tracker.consecutiveNilDrawable, 0)
+    }
+
+    /// RPD and command-buffer failures track independently — they don't
+    /// share a counter or a budget with the drawable failures. Ensures a
+    /// wedged drawable pool doesn't quietly mask later RPD failures.
+    func testDrawGuardTrackerIndependentCountersPerFailureKind() {
+        var tracker = DrawGuardTracker()
+        _ = tracker.recordNilDrawable()
+        _ = tracker.recordNilDrawable()
+        XCTAssertEqual(tracker.totalNilDrawable, 2)
+        XCTAssertEqual(tracker.totalNilRPD, 0)
+        XCTAssertEqual(tracker.totalNilCommandBuffer, 0)
+
+        // RPD budget is independent: its own first three should log.
+        for i in 1...DrawGuardTracker.initialLogBudget {
+            let action = tracker.recordNilRPD()
+            XCTAssertTrue(action.shouldLog, "RPD event \(i) within budget should log")
+        }
+        XCTAssertFalse(tracker.recordNilRPD().shouldLog, "budget exhausted")
+        XCTAssertEqual(tracker.totalNilRPD, DrawGuardTracker.initialLogBudget + 1)
+
+        // Command-buffer counter also independent, still at zero entries.
+        for i in 1...DrawGuardTracker.initialLogBudget {
+            XCTAssertTrue(tracker.recordNilCommandBuffer().shouldLog,
+                          "CB event \(i) within budget should log")
+        }
+        XCTAssertFalse(tracker.recordNilCommandBuffer().shouldLog)
+        XCTAssertEqual(tracker.totalNilCommandBuffer, DrawGuardTracker.initialLogBudget + 1)
+    }
+
+    /// A success in the middle of a nil-drawable streak resets the
+    /// consecutive counter, so the next streak must start over before
+    /// triggering the stuck signal. This is the "tile recovered on its
+    /// own" case — no stale stuck log.
+    func testDrawGuardTrackerSuccessResetsConsecutiveStreak() {
+        var tracker = DrawGuardTracker()
+        for _ in 0..<10 {
+            _ = tracker.recordNilDrawable()
+        }
+        XCTAssertEqual(tracker.consecutiveNilDrawable, 10)
+        tracker.recordSuccess()
+        XCTAssertEqual(tracker.consecutiveNilDrawable, 0)
+
+        // New streak: doesn't trigger stuck signal until threshold count
+        // of consecutive nils starts fresh.
+        for i in 1..<DrawGuardTracker.stuckSignalThreshold {
+            let action = tracker.recordNilDrawable()
+            XCTAssertFalse(action.isStuckSignal, "streak event \(i) is pre-threshold")
+        }
+        let stuck = tracker.recordNilDrawable()
+        XCTAssertTrue(stuck.isStuckSignal)
+    }
+
     // MARK: helpers
 
     /// Build a TadoCore.Snapshot by hand. Used to test the renderer without

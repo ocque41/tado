@@ -144,6 +144,24 @@ final class TerminalMTKView: MTKView {
     var bellMode: BellMode = .audible
     private var lastIdleTick: TimeInterval = 0
 
+    /// Tracks silent `draw(in:)` early-returns so a blacked-out tile
+    /// surfaces as an NSLog instead of just sitting there. Also drives
+    /// the drawable-size recovery pass — if MTKView starts returning
+    /// nil drawables (common when a tile comes back from off-screen
+    /// virtualization with stale bounds), we call `updateDrawableSize()`
+    /// on the next draw tick before re-trying. See `draw(in:)` below.
+    private var drawGuardTracker: DrawGuardTracker = .init()
+
+    /// Short, stable-per-instance tag for log lines so a tile that keeps
+    /// failing is identifiable across NSLog entries without dumping the
+    /// whole object description each frame. Uses the ObjectIdentifier's
+    /// hashValue rendered as hex — 8 chars is more than enough for
+    /// disambiguation given how few tiles exist in one process.
+    private func tileLogTag() -> String {
+        let id = UInt(bitPattern: ObjectIdentifier(self).hashValue)
+        return String(format: "%08x[%dx%d]", id & 0xFFFFFFFF, Int(cols), Int(rows))
+    }
+
     init(
         session: TadoCore.Session,
         cols: UInt16,
@@ -548,11 +566,55 @@ extension TerminalMTKView: MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
-        guard let renderer = renderer,
-              let drawable = view.currentDrawable,
-              let rpd = view.currentRenderPassDescriptor,
-              let cb = renderer.commandQueue.makeCommandBuffer()
-        else { return }
+        // If the last draw couldn't acquire a drawable, MTKView's internal
+        // state (drawableSize, contentsScale, pool) is probably out of
+        // sync — most often because a view-tree reflow (returning from
+        // off-screen tile virtualization) left drawableSize stale. Re-
+        // derive it from bounds × backingScaleFactor before asking for a
+        // drawable again. See `updateDrawableSize()` comment block.
+        if drawGuardTracker.consumeRecoveryFlag() {
+            updateDrawableSize()
+        }
+
+        guard let renderer = renderer else { return }
+
+        guard let drawable = view.currentDrawable else {
+            let action = drawGuardTracker.recordNilDrawable()
+            if action.shouldLog {
+                if action.isStuckSignal {
+                    NSLog("tado: tile %@ stuck — %d consecutive nil drawables",
+                          tileLogTag(),
+                          drawGuardTracker.consecutiveNilDrawable)
+                } else {
+                    NSLog("tado: tile %@ nil drawable (count=%d)",
+                          tileLogTag(),
+                          drawGuardTracker.totalNilDrawable)
+                }
+            }
+            return
+        }
+
+        guard let rpd = view.currentRenderPassDescriptor else {
+            let action = drawGuardTracker.recordNilRPD()
+            if action.shouldLog {
+                NSLog("tado: tile %@ nil renderPassDescriptor (count=%d)",
+                      tileLogTag(),
+                      drawGuardTracker.totalNilRPD)
+            }
+            return
+        }
+
+        guard let cb = renderer.commandQueue.makeCommandBuffer() else {
+            let action = drawGuardTracker.recordNilCommandBuffer()
+            if action.shouldLog {
+                NSLog("tado: tile %@ commandBuffer alloc failed (count=%d)",
+                      tileLogTag(),
+                      drawGuardTracker.totalNilCommandBuffer)
+            }
+            return
+        }
+
+        drawGuardTracker.recordSuccess()
 
         // Scroll-offset transition: scrolling back overwrote the renderer's
         // local cell buffer with a scrollback composite. When we return to
@@ -872,5 +934,80 @@ struct TerminalKeymap {
             return Array(text.utf8)
         }
         return []
+    }
+}
+
+// MARK: - Draw guard tracking
+
+/// Action the draw loop should take after recording a guard failure.
+/// `shouldLog` honors a per-tile budget so a steady-state failure mode
+/// (e.g. a paused window) doesn't spam NSLog at 30 Hz. `isStuckSignal`
+/// is the one-time "this tile has been blocked for ~1s" wake-up log.
+struct DrawGuardAction: Equatable {
+    let shouldLog: Bool
+    let isStuckSignal: Bool
+}
+
+/// Pure state machine for `TerminalMTKView.draw(in:)` guard failures.
+/// Extracted from the view so the black-tile diagnosis and the
+/// drawable-recovery handshake can be unit-tested without Metal, a
+/// window, or a screen.
+///
+/// Why this exists: the original `draw(in:)` used a single silent
+/// `guard … else { return }` chain. When `currentDrawable` went nil
+/// after sustained load or an off-screen → on-screen reflow, the
+/// function returned early with no log, no recovery, no user-visible
+/// signal — the tile just went black at 30 fps on a cleared surface.
+/// This tracker surfaces the failure (rate-limited NSLog) and asks
+/// the view to re-derive its drawable size on the next frame.
+struct DrawGuardTracker {
+    /// Threshold at which we emit the "tile appears stuck" loud log.
+    /// At 30 fps this is ~1 second of total blackout — enough to
+    /// distinguish a one-off pool starvation from a wedged tile.
+    static let stuckSignalThreshold: Int = 30
+
+    /// Budget of "per-failure-type" logs we emit before going silent
+    /// until the next recovery. Avoids NSLog firehose on a wedged tile
+    /// while still logging enough for diagnosis.
+    static let initialLogBudget: Int = 3
+
+    private(set) var totalNilDrawable: Int = 0
+    private(set) var totalNilRPD: Int = 0
+    private(set) var totalNilCommandBuffer: Int = 0
+    private(set) var consecutiveNilDrawable: Int = 0
+    private(set) var needsDrawableRecovery: Bool = false
+
+    mutating func recordSuccess() {
+        consecutiveNilDrawable = 0
+        needsDrawableRecovery = false
+    }
+
+    mutating func recordNilDrawable() -> DrawGuardAction {
+        totalNilDrawable += 1
+        consecutiveNilDrawable += 1
+        needsDrawableRecovery = true
+        let isStuckSignal = consecutiveNilDrawable == DrawGuardTracker.stuckSignalThreshold
+        let shouldLog = totalNilDrawable <= DrawGuardTracker.initialLogBudget || isStuckSignal
+        return DrawGuardAction(shouldLog: shouldLog, isStuckSignal: isStuckSignal)
+    }
+
+    mutating func recordNilRPD() -> DrawGuardAction {
+        totalNilRPD += 1
+        let shouldLog = totalNilRPD <= DrawGuardTracker.initialLogBudget
+        return DrawGuardAction(shouldLog: shouldLog, isStuckSignal: false)
+    }
+
+    mutating func recordNilCommandBuffer() -> DrawGuardAction {
+        totalNilCommandBuffer += 1
+        let shouldLog = totalNilCommandBuffer <= DrawGuardTracker.initialLogBudget
+        return DrawGuardAction(shouldLog: shouldLog, isStuckSignal: false)
+    }
+
+    /// Read-and-clear the recovery flag. The caller is expected to call
+    /// `updateDrawableSize()` (or equivalent) when this returns true.
+    mutating func consumeRecoveryFlag() -> Bool {
+        let was = needsDrawableRecovery
+        needsDrawableRecovery = false
+        return was
     }
 }
