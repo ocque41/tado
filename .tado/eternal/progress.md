@@ -1,2 +1,3 @@
-2026-04-18T13:53:08Z: Eternal started — mode=sprint
-2026-04-18T18:10:00Z: sprint 1 done, metric=0.925 — shipped per-phase model/effort + confkit trial (simulated dispatch). Next: ladder B — architect STEP 5.5 that re-reads plan.json against dispatch.md acceptance criteria and rewrites missing coverage before STOP (addresses bun→node drift the judge caught at -0.13 and the 0.875 plan_coverage sub-score).
+2026-04-18T20:52:33Z: Eternal worker started — mode=sprint
+2026-04-18 22:55: Sprint 2 start — discovered metrics.jsonl empty but sprint-1 artifacts present; will backfill sprint-1 then proceed as sprint 2.
+2026-04-18 21:08: Sprint 2 complete — fixgen-2 trial (49/49 tests, 6/6 smoke, 0 placeholders) + Rung 2 STEP 5.5 self-check shipped; composite 0.938.

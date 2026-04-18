@@ -376,6 +376,54 @@ enum ProcessSpawner {
         For the LAST phase, set "nextPhaseFile": null.
 
         ═══════════════════════════════════════════════════════════
+        STEP 5.5 — SELF-CHECK PLAN COVERAGE (coverage audit)
+        ═══════════════════════════════════════════════════════════
+        Before moving to STEP 6, audit what you just wrote. This catches the \
+        single most expensive failure mode: phase prompts that silently drift \
+        from what dispatch.md actually requires, which compounds across the \
+        chain and is invisible until smoke-test time.
+
+        1. Re-read \(projectRoot)/.tado/dispatch/dispatch.md and enumerate its \
+           acceptance criteria as a numbered list — every testable claim \
+           (commands that must work, files that must exist, formats that must \
+           be supported, behaviors that must hold). Aim for 6–20 items; \
+           granular enough that each maps to at most one or two phases.
+
+        2. Re-read every phases/<order>-<id>.json you just wrote. For each \
+           acceptance criterion, identify which phase(s) deliver it. Mark \
+           coverage:
+             - COVERED — a phase's deliverables clearly produce it.
+             - PARTIAL — a phase mentions it but the deliverable is vague.
+             - MISSING — no phase claims it.
+
+        3. Stack-drift check: if dispatch.md specifies a runtime (Node 20+, \
+           Python 3.12, Bun, Deno, Swift, Rust…), a test harness (node --test, \
+           pytest, vitest, swift test…), a module format (ESM vs CJS), or a \
+           package manager (npm / pnpm / uv / cargo), every phase prompt MUST \
+           name that choice verbatim. A phase mentioning a different one is \
+           drift — fix it now, before phase agents start spawning.
+
+        4. If any item is PARTIAL or MISSING, or any drift was detected, \
+           REWRITE the offending phase JSON's "prompt" field (and its \
+           deliverables list) so the gap is closed. Write the fix directly \
+           over the existing file; do not append a note. If a genuine gap \
+           spans no existing phase, prefer merging the work into the \
+           nearest-matching phase over adding a new phase — extra phases \
+           decay the chain. If you MUST add a phase, update plan.json's \
+           "totalPhases" and every "nextPhaseFile" pointer.
+
+        5. After all rewrites, print a one-block audit summary:
+             coverage: <covered>/<total> criteria
+             drift fixes: <count>
+             phases touched: <list of phase ids>
+           Then proceed to STEP 6. If coverage is 100% and drift is 0, print \
+           "audit clean" and proceed.
+
+        Do not skip this. The cost is one extra pass over files you already \
+        have open; the cost of a phase agent acting on a drifted prompt \
+        compounds across every subsequent phase.
+
+        ═══════════════════════════════════════════════════════════
         STEP 6 — AUTHOR THE PHASE PROMPTS (most important step)
         ═══════════════════════════════════════════════════════════
         The "prompt" field for each phase must be a COMPLETE, SELF-CONTAINED prompt that starts \
@@ -540,14 +588,29 @@ enum ProcessSpawner {
     // MARK: - Eternal
 
     /// Permission-mode flags for an Eternal session's Claude Code spawn.
-    /// `skipPermissions = true` → `--dangerously-skip-permissions` (Boris's flag).
-    /// `skipPermissions = false` → `--permission-mode bypassPermissions` (enum already
-    /// in AppState; re-emitted here so the Eternal flow doesn't depend on AppSettings).
+    ///
+    /// Belt-and-suspenders, because the user observed a live worker process
+    /// with just `--dangerously-skip-permissions` still hitting a permission
+    /// prompt (screenshot 2026-04-18). Per Claude Code docs the two flag
+    /// forms are "equivalent", but in practice CLI v2.1.101 behaves better
+    /// when BOTH are set. We also pin `--setting-sources=user,project,local`
+    /// so the project's `.claude/settings.json` allowlist we just wrote is
+    /// actually loaded — without this, some CLI builds fall back to user-
+    /// only sources and the project allowlist we rely on is invisible.
+    ///
+    /// `skipPermissions = true`  → full bypass: mode + skip flag + settings.
+    /// `skipPermissions = false` → mode only (Claude Code still refuses
+    ///                              obviously dangerous commands but never
+    ///                              opens a prompt in bypass mode).
     static func eternalPermissionFlags(skipPermissions: Bool) -> [String] {
+        var flags = [
+            "--permission-mode", "bypassPermissions",
+            "--setting-sources", "user,project,local",
+        ]
         if skipPermissions {
-            return ["--dangerously-skip-permissions"]
+            flags.append("--dangerously-skip-permissions")
         }
-        return ["--permission-mode", "bypassPermissions"]
+        return flags
     }
 
     /// Prompt for a Mega-mode Eternal worker. Plain text — callers shell-escape
@@ -557,7 +620,9 @@ enum ProcessSpawner {
         """
         You are running as a Tado Eternal agent (MEGA mode) for project "\(projectName)" at \(projectRoot).
 
-        Your task is in \(projectRoot)/.tado/eternal/eternal.md — read it now before anything else.
+        Your authoritative brief is \(projectRoot)/.tado/eternal/crafted.md — the Eternal Architect \
+        wrote it for you. Read it before anything else. If it's missing, fall back to \
+        \(projectRoot)/.tado/eternal/user-brief.md (raw) or \(projectRoot)/.tado/eternal/eternal.md (legacy).
 
         You are in an ETERNAL session. A Stop hook will intercept your normal end-of-turn \
         and restart you automatically. The session exits only when:
@@ -575,6 +640,22 @@ enum ProcessSpawner {
         Don't summarise at the end of turns — progress.md is the summary.
         If you get stuck on a single-turn problem, write what you tried to progress.md and move \
         on to the next independent unit of work; revisit the stuck one later with fresh context.
+
+        ═══════════════════════════════════════════════════════════
+        NON-STOP HYGIENE — avoid the only prompts bypass can't skip
+        ═══════════════════════════════════════════════════════════
+        Claude Code's `--dangerously-skip-permissions` skips every prompt \
+        EXCEPT writes to protected paths under `.claude/` when the parent \
+        directory has to be created. To keep the loop truly non-stop:
+          • BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)`
+            first. Always. Especially for `.claude/agents/`, `.claude/skills/`,
+            and any new subdirectory tree.
+          • Prefer writing generated files OUTSIDE `.claude/` when possible
+            (scratch files, trial-project outputs, reports, etc.). The
+            `.tado/scratch/` and `.tado/eternal/` directories are safe.
+          • If you genuinely need to create something under `.claude/`, create
+            `.claude/` and its full subpath via mkdir FIRST, then Write.
+          • Never use tools that open interactive dialogs or confirmations.
         """
     }
 
@@ -589,10 +670,13 @@ enum ProcessSpawner {
         """
         You are running as a Tado Eternal agent (SPRINT mode) for project "\(projectName)" at \(projectRoot).
 
-        Your brief is in \(projectRoot)/.tado/eternal/eternal.md. Read it now. It contains three sections:
-          TASK     — what to build/optimize
-          EVALUATE — how to measure success
-          IMPROVE  — what knobs to turn
+        Your authoritative brief is \(projectRoot)/.tado/eternal/crafted.md — the Eternal Architect \
+        wrote it for you. Read it now. It contains these sections:
+          TASK              — what to build/optimize each sprint
+          EVALUATE          — exactly how to score a sprint (one command + formula)
+          IMPROVE           — the ladder of knobs to turn, with plateau rules
+          Hard rules        — never-violate constraints
+          Sprint end ritual — what to output at the end of each sprint
 
         You are in a loop of sprints. Each sprint has three phases:
 
@@ -612,6 +696,179 @@ enum ProcessSpawner {
 
         Don't ask clarifying questions — decide and proceed.
         Don't summarise at the end of turns — metrics.jsonl and progress.md are the summary.
+
+        ═══════════════════════════════════════════════════════════
+        NON-STOP HYGIENE — avoid the only prompts bypass can't skip
+        ═══════════════════════════════════════════════════════════
+        Claude Code's `--dangerously-skip-permissions` skips every prompt \
+        EXCEPT writes to protected paths under `.claude/` when the parent \
+        directory has to be created. To keep the loop truly non-stop:
+          • BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)`
+            first. Always. Especially for `.claude/agents/`, `.claude/skills/`,
+            and any new subdirectory tree in a fresh trial project.
+          • Prefer writing generated files OUTSIDE `.claude/` when possible
+            (scratch files, reports, trial-project sources). `.tado/scratch/`
+            and `.tado/eternal/` are safe.
+          • If you must create something under `.claude/`, create `.claude/`
+            and the full subpath via `mkdir -p` FIRST, then Write.
+          • Never use tools that open interactive dialogs or confirmations.
+        """
+    }
+
+    // MARK: - Eternal Architect
+
+    /// Prompt for the Eternal Architect — a short-lived Opus 4.7 / max-effort
+    /// tile that reads the user's plain-language brief at
+    /// `.tado/eternal/user-brief.md` and writes a fully-structured worker
+    /// brief to `.tado/eternal/crafted.md`, then STOPS. It does not run
+    /// sprints — the worker spawns after the user reviews and clicks Start.
+    static func eternalArchitectPrompt(
+        projectName: String,
+        projectRoot: String,
+        mode: String
+    ) -> String {
+        let isSprint = (mode == "sprint")
+
+        let modeSectionSprint = """
+
+        Design the three-phase sprint structure:
+          TASK     — what to build/optimize each sprint. Specific. Measurable.
+                     Grounded in files that actually exist in the project.
+          EVALUATE — exactly how to score a sprint. Prefer ONE deterministic
+                     bash command whose stdout is easy to parse into a number.
+                     Describe a 0-1 composite score with sub-component weights
+                     so the worker has a clear objective, not a hand-wave.
+          IMPROVE  — the ladder of knobs the worker can turn between sprints,
+                     ordered from safest to structural. Include plateau rules:
+                     "if score within ±0.03 for N sprints, promote to next rung".
+
+        Write the crafted specification to \(projectRoot)/.tado/eternal/crafted.md \
+        in this exact shape:
+
+          # Eternal Sprint — \(projectName)
+
+          ## TASK
+          <prose grounded in the project>
+
+          ## EVALUATE
+          <prose, including the exact bash command and the composite formula>
+
+          ## IMPROVE
+          <prose, plateau rules, ladder from safest to most structural>
+
+          ## Hard rules
+          <never-violate rules the worker should carry across all sprints —
+           build must stay green, specific files off-limits, etc.>
+
+          ## Sprint end ritual
+          Each sprint ends when you output [SPRINT-DONE] on its own line.
+          Only output ETERNAL-DONE if the metric is clearly satisfactory AND
+          the user has indicated satisfaction.
+        """
+
+        let modeSectionMega = """
+
+        Design one comprehensive implementation plan:
+          - TASK: a single big goal, split into an ordered checklist of
+            concrete deliverables the worker can tackle one at a time.
+          - Acceptance criteria: how the worker knows the task is done.
+          - Hard rules: files off-limits, build-must-stay-green, etc.
+
+        Write the crafted specification to \(projectRoot)/.tado/eternal/crafted.md \
+        in this exact shape:
+
+          # Eternal Mega — \(projectName)
+
+          ## TASK
+          <one-paragraph summary of the whole plan>
+
+          ## Checklist
+          - [ ] concrete deliverable 1
+          - [ ] concrete deliverable 2
+          - [ ] ... (as many as the plan needs, usually 6-20)
+
+          ## Acceptance
+          <how to tell the whole plan is done>
+
+          ## Hard rules
+          <never-violate constraints>
+
+          ## End ritual
+          When every checklist item is ticked and Acceptance holds, output
+          ETERNAL-DONE on its own line.
+        """
+
+        return """
+        You are the Eternal Architect for the "\(projectName)" project at \(projectRoot).
+
+        A Tado user has written a plain-language brief at
+          \(projectRoot)/.tado/eternal/user-brief.md
+
+        Your job — and ONLY your job right now — is to translate that brief into a \
+        properly-structured Eternal \(isSprint ? "SPRINT" : "MEGA") specification at \
+        \(projectRoot)/.tado/eternal/crafted.md, then STOP. A separate worker agent will run \
+        the actual infinite \(isSprint ? "sprints" : "plan") after the user reviews what \
+        you produced and clicks Start.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 0 — READ THE USER BRIEF + GROUND YOURSELF
+        ═══════════════════════════════════════════════════════════
+        Read \(projectRoot)/.tado/eternal/user-brief.md. Then read the project's \
+        CLAUDE.md, AGENTS.md, package manifests, and relevant source so your \
+        specification is grounded in reality, not your prior-memory guess at \
+        what the project is. The worker will run many iterations against this \
+        spec — every ambiguity you leave becomes a wasted iteration.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 1 — DESIGN THE SPECIFICATION
+        ═══════════════════════════════════════════════════════════
+        \(isSprint ? modeSectionSprint : modeSectionMega)
+
+        ═══════════════════════════════════════════════════════════
+        STEP 2 — WRITE crafted.md AND PRINT A SUMMARY
+        ═══════════════════════════════════════════════════════════
+        Write the file. Keep it under ~220 lines — the worker re-reads it \
+        every iteration, so verbosity here costs tokens forever.
+
+        Then print a short human-readable summary of what you produced: \
+        \(isSprint ? "which composite score components, how many IMPROVE ladder rungs, what you had to infer vs what was explicit in the user brief" : "how many checklist items, which files the plan targets, what you had to infer").
+
+        Then STOP. Do NOT:
+          - run the plan yourself
+          - tado-deploy anything
+          - tado-send anything
+          - loop or retry
+        The user will review crafted.md on the Eternal section of the project \
+        detail page and click Start (worker spawns) or Redo (re-runs you).
+
+        ═══════════════════════════════════════════════════════════
+        MANDATORY RULES YOU MUST INCLUDE IN crafted.md's "Hard rules"
+        ═══════════════════════════════════════════════════════════
+        Include these exact rules verbatim — they are the difference between \
+        a truly non-stop loop and one that stalls or drifts:
+
+          1. BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)` \
+             first. Always. Claude Code's `--dangerously-skip-permissions` skips \
+             every prompt EXCEPT writes to protected paths under `.claude/` \
+             when the parent directory has to be created. Prefer non-`.claude/` \
+             output locations whenever possible; `.tado/scratch/` and \
+             `.tado/eternal/` are safe. If you must write under `.claude/`, \
+             mkdir the full subpath first.
+
+          2. EVERY turn, BEFORE you end the turn, append at least one concrete \
+             line to `.tado/eternal/progress.md` in the format \
+             `YYYY-MM-DD HH:MM: <one sentence describing what you did>`. This \
+             survives compaction — it's the worker's memory across context \
+             resets. The Stop hook shows you the last progress.md line on every \
+             block; if that line doesn't advance between turns, you forgot to \
+             append.
+
+          3. NEVER use tools that open interactive dialogs or confirmations. \
+             If a tool asks for input, abort that path and take a different one.
+
+        These rules go in the "Hard rules" section of crafted.md. Don't \
+        paraphrase — paste them roughly verbatim so the worker can't \
+        misinterpret them after a compaction.
         """
     }
 }
