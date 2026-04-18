@@ -63,11 +63,6 @@ struct TadoApp: App {
                     appState.currentView = .projects
                 }
                 .keyboardShortcut("p", modifiers: .command)
-
-                Button("Teams") {
-                    appState.currentView = .teams
-                }
-                .keyboardShortcut("e", modifiers: .command)
             }
             CommandMenu("Lists") {
                 Button("Done List") {

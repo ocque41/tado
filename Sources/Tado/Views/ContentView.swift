@@ -24,10 +24,6 @@ struct ContentView: View {
                 .opacity(appState.currentView == .projects ? 1 : 0)
                 .allowsHitTesting(appState.currentView == .projects)
 
-            TeamsView()
-                .opacity(appState.currentView == .teams ? 1 : 0)
-                .allowsHitTesting(appState.currentView == .teams)
-
             // Sidebar overlay
             if appState.showSidebar {
                 HStack(spacing: 0) {
@@ -51,7 +47,7 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Paint the window base as neutral dark. Individual views
-        // (TodoList, Projects, Teams) may add their own `surface` /
+        // (TodoList, Projects) may add their own `surface` /
         // `surfaceElevated` strips on top of this, but anything that
         // doesn't is guaranteed to read `Palette.background` instead
         // of the system default window colour.
