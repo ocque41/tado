@@ -1,1 +1,1 @@
-{"sprint": 1, "timestamp": "2026-04-18T13:14:33Z", "metric": 0.95, "note": "added phase-count sanity (4-10) to STEP 2; wrote /tmp/dispatch-eval.sh"}
+{"sprint": 1, "timestamp": "2026-04-18T18:10:00Z", "metric": 0.925, "note": "confkit converter | shipped per-phase model/effort in architect"}

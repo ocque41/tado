@@ -24,6 +24,10 @@ struct ContentView: View {
                 .opacity(appState.currentView == .projects ? 1 : 0)
                 .allowsHitTesting(appState.currentView == .projects)
 
+            EternalView()
+                .opacity(appState.currentView == .eternal ? 1 : 0)
+                .allowsHitTesting(appState.currentView == .eternal)
+
             // Sidebar overlay
             if appState.showSidebar {
                 HStack(spacing: 0) {
@@ -247,6 +251,22 @@ struct ContentView: View {
             teamID: teamID,
             teamAgents: teamAgents
         )
+
+        // Honor per-phase `model:` / `effort:` frontmatter on dispatched agents.
+        // Phase agents emitted by tado-dispatch-agent-creator pin Haiku for
+        // volume work and Opus for the occasional design-heavy phase; without
+        // this override the tile would inherit whatever the user picked in
+        // Settings (usually Opus), defeating the point of per-phase routing.
+        if let agentName = request.agentName, let root = projectRoot,
+           engine == .claude,
+           let session = terminalManager.session(forTodoID: todo.id) {
+            let override = AgentDiscoveryService.phaseOverride(
+                agentName: agentName,
+                projectRoot: root
+            )
+            session.modelFlagsOverride = override.modelFlags
+            session.effortFlagsOverride = override.effortFlags
+        }
 
         try? modelContext.save()
 

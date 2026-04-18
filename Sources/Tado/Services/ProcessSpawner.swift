@@ -78,6 +78,11 @@ enum ProcessSpawner {
                 let clamped = max(1, min(20, claudeDisplay.scrollSpeed))
                 env["CLAUDE_CODE_SCROLL_SPEED"] = String(clamped)
             }
+            // Never let an auto-update prompt halt a long-running tile. The
+            // update nag pauses the CLI on a major bump and is a guaranteed
+            // stall for ralph-loop style sessions. Users who want to update
+            // can do so manually via `claude doctor`.
+            env["CLAUDE_CODE_AUTO_UPDATE_DISABLED"] = "1"
         }
 
         let binPath = ipcRoot.appendingPathComponent("bin").path
@@ -292,6 +297,24 @@ enum ProcessSpawner {
         another place the context can decay. If your first cut produces 12+, look for phases that \
         can fold together without breaking the "single clear responsibility" rule.
 
+        Per-phase model + effort routing (load-bearing — do not skip):
+        For each phase, pick a `model` and `effort` pairing that will end up in the agent file's
+        frontmatter (see STEP 4). Defaults, in order of likelihood:
+          • `haiku` + `high`  — templated code, mechanical transforms, docs synthesis, glue, \
+            most scaffold phases. Use this aggressively; Haiku is the volume engine.
+          • `haiku` + `max`   — Haiku on a denser phase where quality matters (tight DSL, \
+            schema migration with edge cases, adapter correctness).
+          • `opus`  + `max`   — reserved for the one or two phases that make genuinely non-\
+            trivial design calls: overall architecture, cross-phase contract design, semantic \
+            rule systems. Never pick Opus just because "this feels important"; pick it only \
+            when the phase has branching design decisions a templated runner would botch.
+          • `sonnet` + `high` — fallback for mid-complexity reasoning when Haiku is too light \
+            and Opus is overkill. Prefer Haiku/max before reaching for Sonnet.
+        Rule of thumb: if more than one phase in a plan lands on `opus`, re-examine — you are \
+        probably misallocating. A healthy 6-phase plan is typically 5× Haiku + 1× Opus, or \
+        6× Haiku. Record the `model`/`effort` choice alongside each phase in your notes; you \
+        will pass them verbatim to the agent-creator skill in STEP 4.
+
         ═══════════════════════════════════════════════════════════
         STEP 3 — CREATE A SKILL PER PHASE (/tado-dispatch-skill-creator)
         ═══════════════════════════════════════════════════════════
@@ -311,8 +334,16 @@ enum ProcessSpawner {
           - agent-name (kebab-case), phase-order, phase-title
           - phase-responsibilities (prose)
           - engine (claude or codex from Step 2)
+          - model (haiku | sonnet | opus — from Step 2's per-phase routing)
+          - effort (low | medium | high | max — from Step 2's per-phase routing)
           - project-name: \(projectName)
           - project-root: \(projectRoot)
+
+        The `model` and `effort` inputs land as frontmatter fields in the emitted agent file. \
+        Tado's dispatch pipeline (AgentDiscoveryService.phaseOverride) reads them at phase-spawn \
+        time and passes `--model <id> --effort <level>` to the CLI. Omitting either sends the \
+        phase to whatever the user picked in Settings — usually not what you want for Haiku-heavy \
+        volume work.
 
         The skill writes one .claude/agents/ file and returns its path + agent name. Use the \
         returned agent name in Step 5's phase JSON. DO NOT hand-author agent files.

@@ -1,2 +1,2 @@
-2026-04-18T13:10:38Z: Eternal started — mode=sprint
-sprint 2 plan: skill-creator has most headroom (143/200) — add an "Acceptance" body-section requirement (measurable phase completion criteria) in ≤10 added lines; keep diff tight to grab the +0.05 bonus.
+2026-04-18T13:53:08Z: Eternal started — mode=sprint
+2026-04-18T18:10:00Z: sprint 1 done, metric=0.925 — shipped per-phase model/effort + confkit trial (simulated dispatch). Next: ladder B — architect STEP 5.5 that re-reads plan.json against dispatch.md acceptance criteria and rewrites missing coverage before STOP (addresses bun→node drift the judge caught at -0.13 and the 0.875 plan_coverage sub-score).

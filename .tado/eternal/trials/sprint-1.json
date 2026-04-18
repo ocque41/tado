@@ -1,0 +1,21 @@
+{
+  "sprint": 1,
+  "idea_slug": "confkit",
+  "project_path": "/Users/miguel/Documents/eternal-trials/sprint-1-confkit",
+  "plan_validity": 1.0,
+  "plan_coverage": 0.875,
+  "chain_completion": 1.0,
+  "build_test": 1.0,
+  "readme_truth": 1.0,
+  "no_placeholders": 1.0,
+  "cost_efficiency": 0.5,
+  "phase_breadth": 1.0,
+  "judge": 0.87,
+  "composite": 0.925,
+  "architect_tokens": null,
+  "phase_tokens_total": null,
+  "wall_clock_seconds": null,
+  "stall": false,
+  "judge_rationale": "0.87|all 41 node --test + 12 smoke conversions green, README has 5 worked examples and honest scope limits; clean AST + 5/5 parser-emitter split with stdin/-/help CLI; dispatch pivoted from Bun/TS to Node ESM but dispatch.md still lists bun test / dist/cli.js criteria and yaml.mjs has a dead next binding + unused setPath helpers",
+  "note": "Simulated dispatch — plan + phase files + agents were Eternal-authored as stand-in because running Tado binary predates the model/effort support commit. Code-level changes verified by swift build + inspection. Judge flagged two cleanup items (dead next binding in yaml.mjs, unused setPath in ini/toml.mjs, and Bun/Node drift in dispatch.md); all three were fixed post-judge-reply before recording. cost_efficiency defaulted to 0.5 because no architect/phase transcripts exist to measure."
+}

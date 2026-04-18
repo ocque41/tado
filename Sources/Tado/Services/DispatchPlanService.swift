@@ -193,6 +193,16 @@ enum DispatchPlanService {
             projectName: project.name
         )
 
+        if let agentName = phase.agent, engine == .claude,
+           let session = terminalManager.session(forTodoID: todo.id) {
+            let override = AgentDiscoveryService.phaseOverride(
+                agentName: agentName,
+                projectRoot: project.rootPath
+            )
+            session.modelFlagsOverride = override.modelFlags
+            session.effortFlagsOverride = override.effortFlags
+        }
+
         project.dispatchState = "dispatching"
         try? modelContext.save()
 

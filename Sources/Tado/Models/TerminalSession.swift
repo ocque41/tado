@@ -60,6 +60,21 @@ final class TerminalSession: Identifiable {
     var teamID: UUID?
     var projectRoot: String?
     var teamAgents: [String]?
+    /// When non-nil, overrides the settings-derived `--permission-mode …` flags
+    /// for this session's spawn. Set by EternalService so an Eternal tile can
+    /// launch with `--dangerously-skip-permissions` or `bypassPermissions`
+    /// regardless of the project's default ClaudeMode. Read once by CanvasView
+    /// at spawn time — the Metal tile has already spawned after that, so
+    /// mutating this later has no effect.
+    @ObservationIgnored var modeFlagsOverride: [String]?
+    /// Per-session `--model <id>` override. Set by the dispatch pipeline when an
+    /// agent's frontmatter pins a model (haiku/sonnet/opus). Honored by
+    /// CanvasView at spawn time in place of the global AppSettings model.
+    @ObservationIgnored var modelFlagsOverride: [String]?
+    /// Per-session `--effort <level>` override. Pairs with modelFlagsOverride so
+    /// phase agents can run Haiku at max effort or Opus at high effort without
+    /// the user having to touch Settings.
+    @ObservationIgnored var effortFlagsOverride: [String]?
     var onStatusChange: ((SessionStatus) -> Void)?
     var onCwdChange: ((String) -> Void)?
     var onLogFlush: ((String) -> Void)?
