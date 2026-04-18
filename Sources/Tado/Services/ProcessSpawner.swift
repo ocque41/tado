@@ -287,6 +287,11 @@ enum ProcessSpawner {
         Assign a sequential order (1, 2, 3, …) and pick the engine (claude or codex) per phase. \
         Default to this session's engine unless a phase clearly needs the other.
 
+        Phase-count sanity: target 4–10 phases. Fewer than 4 usually means a phase is hiding \
+        sub-structure (split it). More than 10 makes the chain brittle — every extra hand-off is \
+        another place the context can decay. If your first cut produces 12+, look for phases that \
+        can fold together without breaking the "single clear responsibility" rule.
+
         ═══════════════════════════════════════════════════════════
         STEP 3 — CREATE A SKILL PER PHASE (/tado-dispatch-skill-creator)
         ═══════════════════════════════════════════════════════════
@@ -498,6 +503,84 @@ enum ProcessSpawner {
         This self-improvement loop is the whole point of the retrospective: every \
         dispatched plan becomes one more data point that sharpens the tooling for the \
         next plan.
+        """
+    }
+
+    // MARK: - Eternal
+
+    /// Permission-mode flags for an Eternal session's Claude Code spawn.
+    /// `skipPermissions = true` → `--dangerously-skip-permissions` (Boris's flag).
+    /// `skipPermissions = false` → `--permission-mode bypassPermissions` (enum already
+    /// in AppState; re-emitted here so the Eternal flow doesn't depend on AppSettings).
+    static func eternalPermissionFlags(skipPermissions: Bool) -> [String] {
+        if skipPermissions {
+            return ["--dangerously-skip-permissions"]
+        }
+        return ["--permission-mode", "bypassPermissions"]
+    }
+
+    /// Prompt for a Mega-mode Eternal worker. Plain text — callers shell-escape
+    /// when spawning. The Stop hook picks up context from `state.json` so this
+    /// prompt only has to tell the worker what the session IS, not how it loops.
+    static func eternalMegaPrompt(projectName: String, projectRoot: String, marker: String) -> String {
+        """
+        You are running as a Tado Eternal agent (MEGA mode) for project "\(projectName)" at \(projectRoot).
+
+        Your task is in \(projectRoot)/.tado/eternal/eternal.md — read it now before anything else.
+
+        You are in an ETERNAL session. A Stop hook will intercept your normal end-of-turn \
+        and restart you automatically. The session exits only when:
+          (a) You output this exact completion marker on its own line: \(marker)
+          (b) The user presses Stop in Tado (the tile will close).
+
+        Each iteration:
+          1. Read \(projectRoot)/.tado/eternal/progress.md to recall state (survives compaction).
+          2. Do the next unit of work — one chunk, don't stall on a single giant step.
+          3. Append ONE short progress line to \(projectRoot)/.tado/eternal/progress.md, e.g.
+             "2026-04-18 18:03: Refactored AuthMiddleware; tests green."
+          4. If (and only if) the task is truly, fully done, output "\(marker)" on its own line.
+
+        Don't ask clarifying questions — decide and proceed.
+        Don't summarise at the end of turns — progress.md is the summary.
+        If you get stuck on a single-turn problem, write what you tried to progress.md and move \
+        on to the next independent unit of work; revisit the stuck one later with fresh context.
+        """
+    }
+
+    /// Prompt for a Sprint-mode Eternal worker. Each turn = one APPLY → EVAL → IMPROVE \
+    /// cycle ending in `sprintMarker`. Only `marker` terminates the session.
+    static func eternalSprintPrompt(
+        projectName: String,
+        projectRoot: String,
+        marker: String,
+        sprintMarker: String
+    ) -> String {
+        """
+        You are running as a Tado Eternal agent (SPRINT mode) for project "\(projectName)" at \(projectRoot).
+
+        Your brief is in \(projectRoot)/.tado/eternal/eternal.md. Read it now. It contains three sections:
+          TASK     — what to build/optimize
+          EVALUATE — how to measure success
+          IMPROVE  — what knobs to turn
+
+        You are in a loop of sprints. Each sprint has three phases:
+
+          1. APPLY   — implement the current proposal, or apply the last sprint's chosen improvement.
+          2. EVAL    — run the evaluation from the TASK/EVALUATE sections. Append one line to
+                       \(projectRoot)/.tado/eternal/metrics.jsonl in this exact shape:
+                       {"sprint": N, "timestamp": "<iso>", "metric": <number-or-short-string>, "note": "<one-liner>"}
+          3. IMPROVE — read the last 5 lines of metrics.jsonl. Decide what to change next, guided by
+                       the IMPROVE section. Write your plan as ONE short line in
+                       \(projectRoot)/.tado/eternal/progress.md.
+
+        Then output exactly \(sprintMarker) on its own line. A Stop hook starts the next sprint.
+
+        There is no natural end. The session exits only when:
+          (a) The metric is clearly satisfactory and you output "\(marker)" on its own line.
+          (b) The user presses Stop in Tado.
+
+        Don't ask clarifying questions — decide and proceed.
+        Don't summarise at the end of turns — metrics.jsonl and progress.md are the summary.
         """
     }
 }
