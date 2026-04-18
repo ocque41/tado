@@ -36,6 +36,18 @@ enum DispatchPlanService {
         FileManager.default.fileExists(atPath: planFileURL(project).path)
     }
 
+    /// Number of phase JSON files in `.tado/dispatch/phases/`. Used by the
+    /// detail view's dispatch card to show "READY · 7 phases" without
+    /// having to parse plan.json. Zero when the dir is missing or empty.
+    static func phaseFileCount(_ project: Project) -> Int {
+        let fm = FileManager.default
+        let dir = phasesDirURL(project)
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+            return 0
+        }
+        return files.filter { $0.pathExtension == "json" }.count
+    }
+
     /// Clear plan.json and all phases/*.json, then write the current project.dispatchMarkdown to dispatch.md.
     /// Creates the directory tree if missing.
     static func resetPlan(_ project: Project) {

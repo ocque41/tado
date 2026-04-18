@@ -1,15 +1,24 @@
 import SwiftUI
 import SwiftData
 
-/// Per-project detail view. Shows a header with back + new-team,
-/// optional inline new-team form, project info + ProjectTodoInput,
-/// then a scroll of team sections + unassigned todos + available
-/// agents. Mechanical split from the previous monolithic
-/// `ProjectsView.projectDetail(_:)` — behavior is identical.
+/// Per-project detail view. Zone-based layout:
+///
+/// 1. **Breadcrumb bar** — back link left, ••• menu right (rare
+///    actions: bootstrap tools / bootstrap team / new team / delete).
+/// 2. **Identity zone** — large project name + path. No controls.
+/// 3. **Dispatch section** — the most visually prominent block on
+///    the page. See `ProjectDispatchSection` for per-state visuals.
+/// 4. **Todo input + todos/agents list** — carried forward from the
+///    pre-redesign layout. Step 4 will restructure these into a
+///    team > agent > todo disclosure hierarchy; for now they keep
+///    their existing shape so this step stays focused on the top
+///    half of the page.
 struct ProjectDetailView: View {
     let project: Project
     let onBack: () -> Void
 
+    @Environment(AppState.self) private var appState
+    @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
     @Query(sort: \Team.createdAt) private var teams: [Team]
@@ -19,6 +28,7 @@ struct ProjectDetailView: View {
     /// One-at-a-time accordion for team sections. Nil = no team
     /// expanded. Tapping a different team swaps the open one.
     @State private var expandedTeamID: UUID? = nil
+    @State private var showPlanNotReadyAlert: Bool = false
 
     var body: some View {
         let projectTodos = todos.filter { $0.projectID == project.id && $0.listState == .active }
@@ -26,112 +36,167 @@ struct ProjectDetailView: View {
         let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
 
         return VStack(spacing: 0) {
-            // Header with back button + new team button
-            HStack(spacing: 12) {
-                Button(action: onBack) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                        Text("Projects")
-                    }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.accent)
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                Text(project.name)
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
-
-                Spacer()
-
-                Button(action: { showNewTeamInProject.toggle() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                        Text("New Team")
-                    }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.accent)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .background(Palette.surfaceElevated)
-
+            breadcrumbBar(projectTeams: projectTeams)
             Divider()
 
-            // Inline new team form
-            if showNewTeamInProject {
-                inlineNewTeamForm(agents: agents)
-                Divider()
-            }
-
-            // Project info + todo input
-            VStack(spacing: 8) {
-                HStack {
-                    Text(project.rootPath)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    Text("\(agents.count) agents")
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
-                    Text("\(projectTeams.count) teams")
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
-
-                ProjectTodoInput(project: project)
-            }
-
-            Divider()
-
-            // Content: team/agent tree + todo list
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if !projectTeams.isEmpty {
-                        ForEach(projectTeams) { team in
-                            teamSection(team, agents: agents, projectTodos: projectTodos)
-                        }
+                VStack(alignment: .leading, spacing: 28) {
+                    identityZone
+
+                    ProjectDispatchSection(
+                        project: project,
+                        onNewDispatch: { appState.dispatchModalProjectID = project.id },
+                        onEdit: { appState.dispatchModalProjectID = project.id },
+                        onStart: { startPhaseOne() },
+                        onWatchOnCanvas: { appState.currentView = .canvas }
+                    )
+
+                    // Inline new team form (legacy — will fold into todos zone in Step 4).
+                    if showNewTeamInProject {
+                        inlineNewTeamForm(agents: agents)
                     }
 
-                    let unassigned = projectTodos.filter { $0.teamID == nil }
-                    if !unassigned.isEmpty {
-                        sectionHeader("Unassigned")
-                        ForEach(unassigned) { todo in
-                            TodoRowView(todo: todo)
-                            Divider().padding(.leading, 60)
-                        }
-                    }
+                    legacyTodosAndAgentsSection(
+                        projectTodos: projectTodos,
+                        projectTeams: projectTeams,
+                        agents: agents
+                    )
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                .padding(.bottom, 40)
+            }
+        }
+        .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The Dispatch Architect has not finished writing the plan yet. Watch its terminal on the canvas — once plan.json is on disk, try Start again.")
+        }
+    }
 
-                    let assignedAgents = Set(projectTeams.flatMap(\.agentNames))
-                    let unassignedAgents = agents.filter { !assignedAgents.contains($0.id) }
-                    if !unassignedAgents.isEmpty {
-                        sectionHeader("Available Agents")
-                        ForEach(unassignedAgents) { agent in
-                            agentRow(agent)
-                            Divider().padding(.leading, 60)
-                        }
-                    }
+    // MARK: - Zones
+
+    /// Breadcrumb bar with back on the left and the ••• menu on the right.
+    private func breadcrumbBar(projectTeams: [Team]) -> some View {
+        HStack(spacing: 12) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Projects")
+                }
+                .font(Typography.label)
+                .foregroundStyle(Palette.accent)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            actionsMenu(projectTeams: projectTeams)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Palette.surfaceElevated)
+    }
+
+    /// The "name + path" block. Large identity; no buttons.
+    private var identityZone: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(project.name)
+                .font(Typography.titleLg)
+                .foregroundStyle(Palette.textPrimary)
+            Text(project.rootPath)
+                .font(Typography.monoCaption)
+                .foregroundStyle(Palette.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    /// The ••• menu in the breadcrumb. Mirrors the list-view card menu
+    /// — rare actions live here so the breadcrumb chrome stays minimal.
+    private func actionsMenu(projectTeams: [Team]) -> some View {
+        Menu {
+            Button(action: { showNewTeamInProject.toggle() }) {
+                Label("New team…", systemImage: "person.3.sequence")
+            }
+            Divider()
+            Button(action: { bootstrapTools() }) {
+                Label("Bootstrap A2A tools", systemImage: "wrench.and.screwdriver")
+            }
+            Button(action: { bootstrapTeam(projectTeams: projectTeams) }) {
+                Label("Bootstrap team awareness", systemImage: "person.3")
+            }
+            .disabled(projectTeams.isEmpty)
+            Divider()
+            Button(role: .destructive, action: { deleteProject() }) {
+                Label("Delete project", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: 28, height: 20)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    /// The pre-redesign todo + teams + agents stack. Step 4 replaces
+    /// this with a team > agent > todo disclosure hierarchy. Kept as
+    /// a single block so Step 3's diff stays focused on the top half
+    /// of the page.
+    private func legacyTodosAndAgentsSection(
+        projectTodos: [TodoItem],
+        projectTeams: [Team],
+        agents: [AgentDefinition]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Todo input
+            ProjectTodoInput(project: project)
+                .padding(.bottom, 4)
+
+            Divider()
+
+            // Team sections
+            if !projectTeams.isEmpty {
+                ForEach(projectTeams) { team in
+                    teamSection(team, agents: agents, projectTodos: projectTodos)
+                }
+            }
+
+            // Unassigned todos
+            let unassigned = projectTodos.filter { $0.teamID == nil }
+            if !unassigned.isEmpty {
+                sectionHeader("Unassigned")
+                ForEach(unassigned) { todo in
+                    TodoRowView(todo: todo)
+                    Divider().padding(.leading, 60)
+                }
+            }
+
+            // Available agents not in any team
+            let assignedAgents = Set(projectTeams.flatMap(\.agentNames))
+            let unassignedAgents = agents.filter { !assignedAgents.contains($0.id) }
+            if !unassignedAgents.isEmpty {
+                sectionHeader("Available Agents")
+                ForEach(unassignedAgents) { agent in
+                    agentRow(agent)
+                    Divider().padding(.leading, 60)
                 }
             }
         }
     }
 
-    // MARK: - Team section
+    // MARK: - Team section (unchanged from Step 1)
 
     private func teamSection(_ team: Team, agents: [AgentDefinition], projectTodos: [TodoItem]) -> some View {
         let isExpanded = expandedTeamID == team.id
         let names = Array(team.agentNames)
 
         return VStack(alignment: .leading, spacing: 0) {
-            // Team header row — click to expand/collapse, delete button on the right.
             Button(action: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     expandedTeamID = isExpanded ? nil : team.id
@@ -173,9 +238,6 @@ struct ProjectDetailView: View {
             }
             .buttonStyle(.plain)
 
-            // Assigned agents + their todos. Always visible so you can see
-            // active work grouped by team even when the row is "collapsed"
-            // — the expansion only hides/shows the add-agent chooser.
             ForEach(names, id: \.self) { agentName in
                 let agent = agents.first { $0.id == agentName }
                 let agentTodos = projectTodos.filter { $0.teamID == team.id && $0.agentName == agentName }
@@ -218,7 +280,6 @@ struct ProjectDetailView: View {
                 }
             }
 
-            // When expanded, show available agents as tappable chips to add.
             if isExpanded {
                 let unassigned = agents.filter { !team.agentNames.contains($0.id) }
                 if !unassigned.isEmpty {
@@ -249,7 +310,7 @@ struct ProjectDetailView: View {
         }
     }
 
-    // MARK: - Inline new team form
+    // MARK: - Inline new team form (unchanged — will fold into todos zone in Step 4)
 
     private func inlineNewTeamForm(agents: [AgentDefinition]) -> some View {
         VStack(spacing: 10) {
@@ -313,6 +374,7 @@ struct ProjectDetailView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(Palette.surfaceAccentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Helpers
@@ -364,5 +426,99 @@ struct ProjectDetailView: View {
     private func removeAgentFromTeam(_ team: Team, agentName: String) {
         team.agentNames.removeAll { $0 == agentName }
         try? modelContext.save()
+    }
+
+    // MARK: - Project actions
+
+    private func startPhaseOne() {
+        let launched = DispatchPlanService.startPhaseOne(
+            project: project,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+        if !launched {
+            showPlanNotReadyAlert = true
+        }
+    }
+
+    private func deleteProject() {
+        for todo in todos where todo.projectID == project.id {
+            terminalManager.terminateSessionForTodo(todo.id)
+        }
+        modelContext.delete(project)
+        try? modelContext.save()
+        onBack()
+    }
+
+    private func bootstrapTools() {
+        guard let tadoRoot = ProcessSpawner.tadoRepoRoot() else { return }
+
+        let prompt = ProcessSpawner.bootstrapPrompt(targetPath: project.rootPath)
+        let settings = fetchOrCreateSettings()
+        let index = nextAvailableGridIndex()
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: tadoRoot,
+            projectName: "Tado"
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
+    private func bootstrapTeam(projectTeams: [Team]) {
+        guard !projectTeams.isEmpty else { return }
+
+        let prompt = ProcessSpawner.bootstrapTeamPrompt(
+            targetPath: project.rootPath,
+            projectName: project.name,
+            teams: projectTeams.map { ($0.name, $0.agentNames) }
+        )
+        let settings = fetchOrCreateSettings()
+        let index = nextAvailableGridIndex()
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: project.rootPath,
+            projectName: project.name
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
+    private func nextAvailableGridIndex() -> Int {
+        let activeTodos = todos.filter { $0.listState == .active }
+        let usedIndices = Set(activeTodos.map(\.gridIndex))
+        var index = 0
+        while usedIndices.contains(index) { index += 1 }
+        return index
+    }
+
+    private func fetchOrCreateSettings() -> AppSettings {
+        let descriptor = FetchDescriptor<AppSettings>()
+        if let existing = try? modelContext.fetch(descriptor).first {
+            return existing
+        }
+        let settings = AppSettings()
+        modelContext.insert(settings)
+        try? modelContext.save()
+        return settings
     }
 }
