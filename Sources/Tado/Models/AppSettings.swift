@@ -58,15 +58,6 @@ final class AppSettings {
     // frame, since the blink timer lives in the view, not the renderer.
     var cursorBlink: Bool = true
 
-    // Per-phase timeout for the dispatch chain watchdog. If a phase
-    // doesn't advance (its JSON `status` doesn't flip to "completed",
-    // AND no later phase's JSON appears) within this budget, the
-    // watchdog marks the project `stalled` and surfaces a Resume
-    // button. Default 20 min gives phases doing real work
-    // (build + tests + commit) comfortable headroom without letting
-    // a wedged chain sit for hours.
-    var dispatchPhaseTimeoutMinutes: Int = 20
-
     // How terminal bells (0x07) are surfaced on the Metal path. Stored
     // as a raw string so SwiftData schema stays stable if we add modes
     // later. Default matches Terminal.app: audible-only.

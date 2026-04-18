@@ -556,60 +556,21 @@ struct ProjectsView: View {
             .buttonStyle(.plain)
             .help("Redo the Dispatch File — edit the brief and re-plan")
 
-            if state == "stalled" {
-                // Watchdog decided phase N stopped making progress. Show a
-                // "Stalled at phase N" indicator + Resume that re-spawns
-                // the stuck phase and re-arms the watchdog.
+            Button(action: { startPhaseOne(for: project) }) {
                 HStack(spacing: 3) {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    Image(systemName: "play.fill")
                         .font(.system(size: 11))
-                    if let stuck = project.stalledAtPhase {
-                        Text("Stalled @ phase \(stuck)")
-                            .font(Typography.monoMicro)
-                    } else {
-                        Text("Stalled")
-                            .font(Typography.monoMicro)
-                    }
+                    Text("Start")
+                        .font(Typography.monoMicro)
                 }
-                .foregroundStyle(Palette.warning)
+                .foregroundStyle(Palette.success)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Palette.warning.opacity(0.15))
+                .background(Palette.success.opacity(0.15))
                 .clipShape(Capsule())
-                .help("Dispatch chain stopped — see .tado/dispatch/watchdog.log")
-
-                Button(action: { resumeStalledPhase(for: project) }) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11))
-                        Text("Resume")
-                            .font(Typography.monoMicro)
-                    }
-                    .foregroundStyle(Palette.success)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Palette.success.opacity(0.15))
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("Re-spawn the stalled phase and re-arm the chain watchdog")
-            } else {
-                Button(action: { startPhaseOne(for: project) }) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11))
-                        Text("Start")
-                            .font(Typography.monoMicro)
-                    }
-                    .foregroundStyle(Palette.success)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Palette.success.opacity(0.15))
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("Start dispatching — launch phase 1 of the plan")
             }
+            .buttonStyle(.plain)
+            .help("Start dispatching — launch phase 1 of the plan")
         }
     }
 
@@ -623,15 +584,6 @@ struct ProjectsView: View {
         if !launched {
             showPlanNotReadyAlert = true
         }
-    }
-
-    private func resumeStalledPhase(for project: Project) {
-        _ = DispatchPlanService.resumeStalledPhase(
-            project: project,
-            modelContext: modelContext,
-            terminalManager: terminalManager,
-            appState: appState
-        )
     }
 
     // MARK: - Bootstrap Tools
