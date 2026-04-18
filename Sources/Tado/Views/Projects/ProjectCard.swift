@@ -25,6 +25,8 @@ struct ProjectCard: View {
     let onStart: () -> Void
     let onDelete: () -> Void
 
+    @State private var isHovered: Bool = false
+
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 10) {
@@ -65,9 +67,19 @@ struct ProjectCard: View {
                         .frame(width: 2)
                 }
             }
+            .overlay(
+                Rectangle()
+                    .fill(isHovered ? Palette.hoverBackground : Color.clear)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHovered = hovering
+            }
+        }
     }
 
     // MARK: - Pieces

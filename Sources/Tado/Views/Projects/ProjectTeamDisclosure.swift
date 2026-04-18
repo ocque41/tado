@@ -22,6 +22,8 @@ struct ProjectTeamDisclosure: View {
     let onRemoveAgent: (String) -> Void
     let onAddAgent: (String) -> Void
 
+    @State private var isHeaderHovered: Bool = false
+
     private var isExpanded: Bool {
         expandedTeamID == team.id
     }
@@ -62,11 +64,18 @@ struct ProjectTeamDisclosure: View {
 
                 teamMenu
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 8)
             .padding(.vertical, 10)
+            .background(isHeaderHovered ? Palette.hoverBackground : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHeaderHovered = hovering
+            }
+        }
     }
 
     private var statsLine: String {

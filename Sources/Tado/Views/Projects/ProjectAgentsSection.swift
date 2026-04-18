@@ -23,6 +23,8 @@ struct ProjectAgentsSection: View {
     let projectTodos: [TodoItem]
     @Binding var expanded: Bool
 
+    @State private var isHeaderHovered: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -55,11 +57,18 @@ struct ProjectAgentsSection: View {
                     .font(Typography.monoMicro)
                     .foregroundStyle(Palette.textSecondary)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 8)
             .padding(.vertical, 10)
+            .background(isHeaderHovered ? Palette.hoverBackground : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isHeaderHovered = hovering
+            }
+        }
     }
 
     @ViewBuilder

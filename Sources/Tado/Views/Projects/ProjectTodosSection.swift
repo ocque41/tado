@@ -51,7 +51,10 @@ struct ProjectTodosSection: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if !unassignedTodos.isEmpty {
-                        inboxDisclosure
+                        InboxDisclosureRow(
+                            unassignedTodos: unassignedTodos,
+                            inboxExpanded: $inboxExpanded
+                        )
                     }
                     ForEach(projectTeams) { team in
                         ProjectTeamDisclosure(
@@ -65,53 +68,6 @@ struct ProjectTodosSection: View {
                         )
                     }
                 }
-            }
-        }
-    }
-
-    // MARK: - Inbox
-
-    /// Matches the visual rhythm of the team disclosures but always
-    /// stays neutral (no ••• menu, no accent on the label) so it
-    /// reads as a system-level bucket rather than a user-owned team.
-    private var inboxDisclosure: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    inboxExpanded.toggle()
-                }
-            }) {
-                HStack(spacing: 10) {
-                    Image(systemName: inboxExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Palette.textTertiary)
-                        .frame(width: 14)
-
-                    Text("INBOX")
-                        .font(Typography.callout)
-                        .tracking(0.6)
-                        .foregroundStyle(Palette.textPrimary)
-
-                    Spacer()
-
-                    Text("\(unassignedTodos.count) \(unassignedTodos.count == 1 ? "unassigned" : "unassigned")")
-                        .font(Typography.monoMicro)
-                        .foregroundStyle(Palette.textSecondary)
-                }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if inboxExpanded {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(unassignedTodos) { todo in
-                        TodoRowView(todo: todo)
-                    }
-                }
-                .padding(.leading, 24)
-                .padding(.bottom, 8)
             }
         }
     }
@@ -200,5 +156,64 @@ struct ProjectTodosSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.surfaceAccentSoft)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Inbox header + expandable body for unassigned todos. Lives as a
+/// sibling struct so the hover state can be owned locally without
+/// invalidating the whole `ProjectTodosSection` on every mouse move.
+private struct InboxDisclosureRow: View {
+    let unassignedTodos: [TodoItem]
+    @Binding var inboxExpanded: Bool
+
+    @State private var isHeaderHovered: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    inboxExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 10) {
+                    Image(systemName: inboxExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Palette.textTertiary)
+                        .frame(width: 14)
+
+                    Text("INBOX")
+                        .font(Typography.callout)
+                        .tracking(0.6)
+                        .foregroundStyle(Palette.textPrimary)
+
+                    Spacer()
+
+                    Text("\(unassignedTodos.count) unassigned")
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textSecondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .background(isHeaderHovered ? Palette.hoverBackground : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isHeaderHovered = hovering
+                }
+            }
+
+            if inboxExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(unassignedTodos) { todo in
+                        TodoRowView(todo: todo)
+                    }
+                }
+                .padding(.leading, 24)
+                .padding(.bottom, 8)
+            }
+        }
     }
 }
