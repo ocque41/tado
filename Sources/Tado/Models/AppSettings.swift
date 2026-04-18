@@ -13,10 +13,12 @@ final class AppSettings {
     var claudeModelRaw: String = ClaudeModel.opus47.rawValue
     var codexModelRaw: String = CodexModel.gpt54.rawValue
 
-    // Display / harness UI — defaults match Boris Cherny's "no flicker + all useful UI"
-    // recommendation (CLAUDE_CODE_NO_FLICKER=1, mouse on, scroll speed = vim default).
-    // See https://code.claude.com/docs/en/fullscreen
-    var claudeNoFlicker: Bool = true
+    // Display / harness UI. Off by default because the fullscreen ("no flicker")
+    // UI runs in alt-screen mode — every frame Claude Code paints replaces the
+    // previous one, so nothing lands in the tile's scrollback buffer and
+    // scroll-up stays blank. Users who prefer Boris Cherny's full UI can flip
+    // this on in Settings; see https://code.claude.com/docs/en/fullscreen
+    var claudeNoFlicker: Bool = false
     var claudeMouseEnabled: Bool = true
     var claudeScrollSpeed: Int = 3
     // Codex equivalent of CLAUDE_CODE_NO_FLICKER is `tui.alternate_screen`. Tado passes

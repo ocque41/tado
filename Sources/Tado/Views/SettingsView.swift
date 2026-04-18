@@ -126,7 +126,7 @@ struct SettingsView: View {
 
                 Section {
                     if settings.engine == .claude {
-                        Toggle("No-flicker fullscreen renderer", isOn: Binding(
+                        Toggle("Fullscreen Claude UI (disables scrollback)", isOn: Binding(
                             get: { settings.claudeNoFlicker },
                             set: { settings.claudeNoFlicker = $0; try? modelContext.save() }
                         ))
@@ -144,7 +144,7 @@ struct SettingsView: View {
                             in: 1...20
                         )
                         .disabled(!settings.claudeNoFlicker)
-                        Text("Sets CLAUDE_CODE_NO_FLICKER, CLAUDE_CODE_DISABLE_MOUSE, and CLAUDE_CODE_SCROLL_SPEED on every spawned Claude Code session. Restart the session to apply.")
+                        Text("Off (default) keeps Claude Code in streaming mode so the tile's scrollback captures past output — two-finger scroll up to see earlier messages. On uses Boris Cherny's fullscreen UI: prettier but alt-screen locks the tile to the live frame. Sets CLAUDE_CODE_NO_FLICKER, CLAUDE_CODE_DISABLE_MOUSE, and CLAUDE_CODE_SCROLL_SPEED. Restart the session to apply.")
                             .font(Typography.caption)
                             .foregroundStyle(Palette.textSecondary)
                     } else {

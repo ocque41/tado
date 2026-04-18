@@ -40,7 +40,7 @@ enum ProcessSpawner {
         var mouseEnabled: Bool
         var scrollSpeed: Int
 
-        static let defaults = ClaudeDisplayEnv(noFlicker: true, mouseEnabled: true, scrollSpeed: 3)
+        static let defaults = ClaudeDisplayEnv(noFlicker: false, mouseEnabled: true, scrollSpeed: 3)
     }
 
     static func environment(
