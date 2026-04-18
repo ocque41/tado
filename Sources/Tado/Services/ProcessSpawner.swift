@@ -355,7 +355,23 @@ enum ProcessSpawner {
         3. The concrete work instructions — inputs, steps, deliverables, acceptance criteria. \
         Be exhaustive so the phase agent has zero ambiguity.
         4. "When done, update your phase JSON 'status' field to 'completed'."
-        5. Handoff block — verbatim template depending on nextPhaseFile:
+        5. "Write a retrospective at \(projectRoot)/.tado/dispatch/retros/<order>-<id>.md using \
+        EXACTLY this template (substitute your values):
+
+           # Phase <order>: <title>
+
+           ## Summary
+           <1–2 sentences on what this phase actually produced.>
+
+           ## Friction
+           <1 line on anything awkward — unclear inputs, redundant \
+           steps, ambiguous handoff, missing validation. Write \
+           'none' if nothing stood out.>
+
+           The retrospective feeds the final wrap-up message the \
+           architect uses to optimize the skills/agents creator \
+           skills. Keep it terse — no novels."
+        6. Handoff block — verbatim template depending on nextPhaseFile:
 
            If nextPhaseFile is NOT null:
              "Read nextPhaseFile JSON (path above) and copy its 'prompt' field. Then run:
@@ -363,10 +379,49 @@ enum ProcessSpawner {
               After the tado-deploy command prints the deploy request ID, STOP. Do not wait, \
               do not tado-list, do not tado-read. The next phase will run on its own."
 
-           If nextPhaseFile IS null (you are the last phase):
-             "All dispatch phases are complete. Run:
-              tado-send <architect-grid> 'Dispatch plan for \(projectName) fully executed.'
-              where <architect-grid> is the grid position printed below."
+           If nextPhaseFile IS null (you are the last phase), the handoff is the full \
+           RETROSPECTIVE MESSAGE — do not just send 'fully executed.' Instead:
+             1. Read every file in \(projectRoot)/.tado/dispatch/retros/ in order-sorted \
+                filename order (1-*, 2-*, …, N-*).
+             2. Concatenate them into the message body below, wrapped by the heading and \
+                directive lines shown, substituting <projectName> = \(projectName) and \
+                <N> = totalPhases:
+
+             ─────────────── BEGIN RETROSPECTIVE MESSAGE ───────────────
+             Dispatch retrospective — <projectName>
+
+             Plan: <N> phases executed.
+
+             <paste retros/1-*.md contents here verbatim>
+
+             <paste retros/2-*.md contents here verbatim>
+
+             … (continue through phase <N>) …
+
+             ═══════════════════════════════════════════════════════════
+             ARCHITECT DIRECTIVE — OPTIMIZE/HARDEN/POLISH
+             ═══════════════════════════════════════════════════════════
+
+             Based on the retrospective above, walk the phases in order. For each phase:
+               1. Analyze the summary — what did this phase actually produce?
+               2. State 3–5 key points — what stood out about how it went?
+               3. Analyze those key points — what does this tell us about the tooling \
+                  (the skills/agents creator skills)?
+
+             Then OPTIMIZE/HARDEN/POLISH these two skills:
+               • ~/.claude/skills/tado-dispatch-skill-creator/SKILL.md
+               • ~/.claude/skills/tado-dispatch-agent-creator/SKILL.md
+
+             Targeted edits only — no rewrites from scratch. Each skill stays ≤ 200 lines. \
+             After edits, print a unified diff summary and STOP.
+
+             Dispatch plan for <projectName> fully executed.
+             ──────────────── END RETROSPECTIVE MESSAGE ────────────────
+
+             3. Run:
+                  tado-send <architect-grid> '<entire message body>'
+                where <architect-grid> is the hard-coded grid position below.
+             4. After the tado-send prints its request ID, STOP. Do not wait, do not tado-list.
 
         At the end of every LAST-phase prompt, include a hard-coded line listing the architect's \
         own grid position. You can learn your own grid by running `tado-list` and finding the \
@@ -378,12 +433,19 @@ enum ProcessSpawner {
         Append a '## Dispatch System' section to BOTH \(projectRoot)/CLAUDE.md and \
         \(projectRoot)/AGENTS.md (create the files with a '# CLAUDE.md' / '# AGENTS.md' header \
         first if missing; REPLACE the section if it already exists). Document:
-          - Filesystem layout at \(projectRoot)/.tado/dispatch/ (dispatch.md, plan.json, phases/)
+          - Filesystem layout at \(projectRoot)/.tado/dispatch/ :
+              dispatch.md  — user's brief
+              plan.json    — plan summary
+              phases/<order>-<id>.json — one per phase (schema below)
+              retros/<order>-<id>.md  — per-phase retrospective (Summary + Friction)
           - The phase JSON schema (show all fields)
           - Rule: every agent checks $TADO_AGENT_NAME against phase "agent" fields on wake; on \
             match, read that phase JSON before acting
           - Skill-per-phase: skills at .claude/skills/<skill-name>/, load via /<skill-name>
           - Chain: each phase prompt contains its own tado-deploy handoff; do not deviate
+          - Retrospective: every phase writes retros/<order>-<id>.md; the LAST phase \
+            concatenates them into a single tado-send back to the architect carrying the \
+            OPTIMIZE/HARDEN/POLISH directive
           - Pointer: active plan is at .tado/dispatch/plan.json
 
         ═══════════════════════════════════════════════════════════
@@ -403,6 +465,39 @@ enum ProcessSpawner {
 
         Then STOP. Do NOT launch phase 1. Do NOT tado-deploy. Do NOT tado-send. The user will \
         review your plan on the canvas, then click Start to kick off phase 1.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 10 — WHEN YOU WAKE (retrospective + self-improvement)
+        ═══════════════════════════════════════════════════════════
+        Hours from now, when the last phase finishes, it will tado-send you a "Dispatch \
+        retrospective" message (the template is fully specified in STEP 6). The message \
+        contains per-phase summaries + friction notes, plus an ARCHITECT DIRECTIVE block \
+        that asks you to OPTIMIZE/HARDEN/POLISH the two skills that authored this plan.
+
+        When that message appears in your terminal:
+
+          1. Read the full message. The per-phase blocks tell you what actually happened.
+          2. Walk the phases in order. For EACH phase:
+               a. Analyze its summary — what did it actually produce?
+               b. State 3–5 key points — what stood out about how it went?
+               c. Analyze those points — what does this tell us about the authoring \
+                  tooling (did the skill-creator template steer the phase right? did \
+                  the agent definition catch / miss something? any friction that points \
+                  at a gap in the SKILL.md / agent template itself?).
+          3. Apply targeted edits to:
+               - ~/.claude/skills/tado-dispatch-skill-creator/SKILL.md
+               - ~/.claude/skills/tado-dispatch-agent-creator/SKILL.md
+             No rewrites from scratch. Keep each under 200 lines. Prefer: adding a \
+             missing enforcement rule, tightening an ambiguous instruction, adding an \
+             example to the references/, trimming dead weight. If nothing in the \
+             retrospective suggests a change, say so and skip the edit — do not invent \
+             problems to justify a diff.
+          4. Print a unified-diff-style summary of the edits (or "no changes needed").
+          5. STOP. Do not re-run the plan, do not schedule anything, do not tado-deploy.
+
+        This self-improvement loop is the whole point of the retrospective: every \
+        dispatched plan becomes one more data point that sharpens the tooling for the \
+        next plan.
         """
     }
 }
