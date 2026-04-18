@@ -239,6 +239,12 @@ enum ProcessSpawner {
     /// at .tado/dispatch/dispatch.md, designs a multi-phase plan with per-phase skills, writes the
     /// JSON plan files, and injects "Dispatch System" awareness into the project's CLAUDE.md and
     /// AGENTS.md so every spawned phase agent wakes with full context before typing.
+    ///
+    /// Rewired in Phase dispatch-architect: delegates skill + agent authoring to the dedicated
+    /// `/tado-dispatch-skill-creator` and `/tado-dispatch-agent-creator` skills at
+    /// `~/.claude/skills/`. This keeps the architect's own context lean across 8-12 phase plans —
+    /// previously it inline-invoked the upstream /skill-creator (479 lines) per phase, which
+    /// bloated context and caused later phases to degrade after auto-compact.
     static func dispatchArchitectPrompt(projectName: String, projectRoot: String) -> String {
         """
         You are the Dispatch Architect for the "\(projectName)" project at \(projectRoot).
@@ -248,54 +254,66 @@ enum ProcessSpawner {
         orchestrated by you, will do the execution after the user clicks Start.
 
         ═══════════════════════════════════════════════════════════
-        STEP 1 — READ THE BRIEF (take it seriously)
+        STEP 0 — VERIFY YOUR TOOLING (fail fast)
         ═══════════════════════════════════════════════════════════
-        Read \(projectRoot)/.tado/dispatch/dispatch.md in full. This is the user's super-project \
-        request. Treat every sentence as a requirement.
+        Confirm the two dispatch skills you depend on are installed:
+          - ~/.claude/skills/tado-dispatch-skill-creator/SKILL.md
+          - ~/.claude/skills/tado-dispatch-agent-creator/SKILL.md
+
+        If either is missing, STOP immediately. Print:
+          "tado dispatch: required skill missing at <path>. Reinstall Tado's ~/.claude/skills/."
+        Do not fall back to the upstream /skill-creator — its eval-loop flow bloats context and \
+        corrupts the later phases of long plans.
 
         ═══════════════════════════════════════════════════════════
-        STEP 2 — DEEP RESEARCH THE PROJECT
+        STEP 1 — READ THE BRIEF + RESEARCH THE PROJECT
         ═══════════════════════════════════════════════════════════
-        Before planning, understand the project. Read:
-          - \(projectRoot)/CLAUDE.md (if present)
-          - \(projectRoot)/AGENTS.md (if present)
+        Read \(projectRoot)/.tado/dispatch/dispatch.md in full — every sentence is a requirement.
+        Then understand the project by reading:
+          - \(projectRoot)/CLAUDE.md and \(projectRoot)/AGENTS.md (if present)
           - The source tree (package manifests, main entry points, module boundaries)
-          - Any existing .claude/agents/ and .claude/skills/ definitions
-          - Tests, docs, config — anything that reveals architecture and conventions
+          - Any existing .claude/agents/ and .claude/skills/
+          - Tests, docs, config — anything that reveals architecture + conventions
 
         ═══════════════════════════════════════════════════════════
-        STEP 3 — DESIGN A SKILL PER PHASE (use /skill-creator)
+        STEP 2 — DESIGN THE PHASES
         ═══════════════════════════════════════════════════════════
-        For every phase you are about to design, invoke the /skill-creator slash command (or the \
-        best equivalent skill-authoring flow available in this harness) to produce a dedicated \
-        skill. Each skill must live at \(projectRoot)/.claude/skills/<skill-name>/SKILL.md.
-
-        Each SKILL.md description MUST begin with: \
-        "Dispatch-plan phase skill for the \(projectName) project — ..." so that later when a \
-        phase agent types /<skill-name>, Claude Code loads the right specialized context.
-
-        ═══════════════════════════════════════════════════════════
-        STEP 4 — DESIGN THE MEGA IMPLEMENTATION PLAN
-        ═══════════════════════════════════════════════════════════
-        Break the super-project into ordered, self-contained phases. Each phase should have:
-          - A clear single responsibility
+        Break the super-project into ordered, self-contained phases. Each phase has:
+          - A single clear responsibility
           - Explicit inputs (files / artefacts from prior phases)
           - Explicit outputs (files / artefacts this phase creates)
-          - No blocking dependencies on phases that come later (ordering is strict)
+          - No dependency on phases that come later (ordering is strict)
+
+        Assign a sequential order (1, 2, 3, …) and pick the engine (claude or codex) per phase. \
+        Default to this session's engine unless a phase clearly needs the other.
 
         ═══════════════════════════════════════════════════════════
-        STEP 5 — ASSIGN ORDER, SKILL, AND AGENT PER PHASE
+        STEP 3 — CREATE A SKILL PER PHASE (/tado-dispatch-skill-creator)
         ═══════════════════════════════════════════════════════════
-        For each phase:
-          - Assign a sequential order number (1, 2, 3, …)
-          - Assign the skill you authored in Step 3
-          - Assign (or create) an agent definition at .claude/agents/<agent-name>.md. The agent \
-            definition's description must say it is a phase agent for the dispatch plan.
-          - Pick the engine (claude or codex) that best suits the phase; default to this \
-            session's engine unless a phase clearly needs the other.
+        For each phase, invoke /tado-dispatch-skill-creator with these inputs verbatim:
+          - phase-order, phase-id (kebab-case), phase-title
+          - phase-deliverables (bullet list)
+          - project-name: \(projectName)
+          - project-root: \(projectRoot)
+
+        The skill writes one SKILL.md and returns its path + skill name. Use the returned skill \
+        name in Step 5's phase JSON. DO NOT use the upstream /skill-creator.
 
         ═══════════════════════════════════════════════════════════
-        STEP 6 — WRITE THE JSON PLAN FILES
+        STEP 4 — CREATE AN AGENT PER PHASE (/tado-dispatch-agent-creator)
+        ═══════════════════════════════════════════════════════════
+        For each phase that needs an agent (most will), invoke /tado-dispatch-agent-creator with:
+          - agent-name (kebab-case), phase-order, phase-title
+          - phase-responsibilities (prose)
+          - engine (claude or codex from Step 2)
+          - project-name: \(projectName)
+          - project-root: \(projectRoot)
+
+        The skill writes one .claude/agents/ file and returns its path + agent name. Use the \
+        returned agent name in Step 5's phase JSON. DO NOT hand-author agent files.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 5 — WRITE THE JSON PLAN FILES
         ═══════════════════════════════════════════════════════════
         Create these files under \(projectRoot)/.tado/dispatch/ :
 
@@ -311,10 +329,10 @@ enum ProcessSpawner {
           "id": "<kebab-phase-id>",
           "order": <1..N>,
           "title": "<human-readable phase title>",
-          "skill": "<skill-name from Step 3>",
-          "agent": "<agent-name from Step 5, or null>",
+          "skill": "<name returned by /tado-dispatch-skill-creator>",
+          "agent": "<name returned by /tado-dispatch-agent-creator, or null>",
           "engine": "claude" | "codex",
-          "prompt": "<FULL self-contained prompt — see Step 7>",
+          "prompt": "<FULL self-contained prompt — see Step 6>",
           "nextPhaseFile": ".tado/dispatch/phases/<next-order>-<next-id>.json",
           "status": "pending"
         }
@@ -322,7 +340,7 @@ enum ProcessSpawner {
         For the LAST phase, set "nextPhaseFile": null.
 
         ═══════════════════════════════════════════════════════════
-        STEP 7 — AUTHOR THE PHASE PROMPTS (most important step)
+        STEP 6 — AUTHOR THE PHASE PROMPTS (most important step)
         ═══════════════════════════════════════════════════════════
         The "prompt" field for each phase must be a COMPLETE, SELF-CONTAINED prompt that starts \
         with a visible comment line exactly like this:
@@ -334,8 +352,8 @@ enum ProcessSpawner {
         1. "Read .tado/dispatch/phases/<this-phase-file>.json first. That JSON is your \
         authoritative brief for this phase."
         2. "Load your specialized skill: /<skill-name>"
-        3. The concrete work instructions for this phase — inputs, steps, deliverables, \
-        acceptance criteria. Be exhaustive so the phase agent has zero ambiguity.
+        3. The concrete work instructions — inputs, steps, deliverables, acceptance criteria. \
+        Be exhaustive so the phase agent has zero ambiguity.
         4. "When done, update your phase JSON 'status' field to 'completed'."
         5. Handoff block — verbatim template depending on nextPhaseFile:
 
@@ -355,37 +373,27 @@ enum ProcessSpawner {
         row whose session ID matches $TADO_SESSION_ID; use that grid position literally.
 
         ═══════════════════════════════════════════════════════════
-        STEP 8 — INJECT "DISPATCH SYSTEM" AWARENESS
+        STEP 7 — INJECT "DISPATCH SYSTEM" AWARENESS
         ═══════════════════════════════════════════════════════════
-        Append a new '## Dispatch System' section to BOTH \(projectRoot)/CLAUDE.md and \
+        Append a '## Dispatch System' section to BOTH \(projectRoot)/CLAUDE.md and \
         \(projectRoot)/AGENTS.md (create the files with a '# CLAUDE.md' / '# AGENTS.md' header \
-        first if they do not exist). If the section already exists, REPLACE it.
-
-        The section must document:
-          - The filesystem layout at \(projectRoot)/.tado/dispatch/ (dispatch.md, plan.json, \
-            phases/<order>-<id>.json)
+        first if missing; REPLACE the section if it already exists). Document:
+          - Filesystem layout at \(projectRoot)/.tado/dispatch/ (dispatch.md, plan.json, phases/)
           - The phase JSON schema (show all fields)
-          - The rule: every agent spawned inside this project should check whether its task \
-            matches a phase file on wake. If $TADO_AGENT_NAME matches a phase's "agent" field, \
-            the agent should read that phase JSON before acting.
-          - The skill-per-phase convention — skills live at .claude/skills/<skill-name>/ and \
-            must be loaded via /<skill-name> at the start of each phase.
-          - The chain convention — each phase prompt contains its own tado-deploy handoff; \
-            agents must not deviate from that prescribed next step.
-          - A one-line reminder that the active plan is at .tado/dispatch/plan.json.
-
-        This section is load-before-the-user-types context: every future Claude Code / Codex \
-        session in this project will see it in its auto-loaded CLAUDE.md / AGENTS.md.
+          - Rule: every agent checks $TADO_AGENT_NAME against phase "agent" fields on wake; on \
+            match, read that phase JSON before acting
+          - Skill-per-phase: skills at .claude/skills/<skill-name>/, load via /<skill-name>
+          - Chain: each phase prompt contains its own tado-deploy handoff; do not deviate
+          - Pointer: active plan is at .tado/dispatch/plan.json
 
         ═══════════════════════════════════════════════════════════
-        STEP 9 — OPTIONAL MEMORY POINTER
+        STEP 8 — OPTIONAL MEMORY POINTER
         ═══════════════════════════════════════════════════════════
-        If \(projectRoot)/.claude/MEMORY.md exists, add or update a single one-line entry \
-        pointing at .tado/dispatch/plan.json as the active dispatch plan. Do not create \
-        MEMORY.md if it does not exist.
+        If \(projectRoot)/.claude/MEMORY.md exists, add/update a one-line entry pointing at \
+        .tado/dispatch/plan.json. Do not create MEMORY.md if absent.
 
         ═══════════════════════════════════════════════════════════
-        STEP 10 — FINISH AND STOP
+        STEP 9 — FINISH AND STOP
         ═══════════════════════════════════════════════════════════
         Print a concise human-readable summary:
           - Total phases
@@ -394,8 +402,7 @@ enum ProcessSpawner {
           - The exact command the user's Start button will run (for transparency)
 
         Then STOP. Do NOT launch phase 1. Do NOT tado-deploy. Do NOT tado-send. The user will \
-        review your plan on the canvas, then click Start in the Projects view to kick off \
-        phase 1.
+        review your plan on the canvas, then click Start to kick off phase 1.
         """
     }
 }
