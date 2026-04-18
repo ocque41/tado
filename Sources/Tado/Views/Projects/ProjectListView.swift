@@ -1,10 +1,14 @@
 import SwiftUI
 import SwiftData
 
-/// Project list view — header + optional new-project form + project
-/// rows (or empty state). Each row exposes dispatch controls,
-/// bootstrap tools, bootstrap team, and delete actions, plus taps
-/// the whole row to open the project via `onSelect`.
+/// Project list view — header with a single + New button, a stack
+/// of `ProjectCard`s, or a centered empty-state CTA when no projects
+/// exist. New Project opens as a sheet (see `NewProjectSheet`) so the
+/// list never shifts when creation starts.
+///
+/// Each card calls back via closures for project-tap, dispatch open,
+/// bootstrap tools / team, and delete. The ••• menu on the card
+/// surfaces the rare actions instead of crowding the row.
 struct ProjectListView: View {
     let onSelect: (Project) -> Void
 
@@ -14,302 +18,122 @@ struct ProjectListView: View {
     @Query(sort: \Project.createdAt) private var projects: [Project]
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
     @Query(sort: \Team.createdAt) private var teams: [Team]
-    @State private var showNewProject: Bool = false
-    @State private var newProjectName: String = ""
-    @State private var newProjectPath: String = ""
+    @State private var showNewProjectSheet: Bool = false
     @State private var showPlanNotReadyAlert: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack(spacing: 12) {
-                Text("Projects")
-                    .font(Typography.title)
-
-                Spacer()
-
-                Button(action: { showNewProject.toggle() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                        Text("New Project")
-                    }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.accent)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .background(Palette.surfaceElevated)
-
+            header
             Divider()
-
-            // New project form
-            if showNewProject {
-                newProjectForm
-                Divider()
-            }
-
-            // Project rows
             if projects.isEmpty {
-                Spacer()
-                VStack(spacing: 8) {
-                    Text("No projects yet")
-                        .font(Typography.heading)
-                        .foregroundStyle(Palette.textSecondary)
-                    Text("Create a project to organize todos by directory")
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textTertiary)
-                }
-                Spacer()
+                emptyState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(projects) { project in
-                            projectRow(project)
-                            Divider().padding(.leading, 44)
-                        }
-                    }
-                }
+                projectCards
             }
+        }
+        .sheet(isPresented: $showNewProjectSheet) {
+            NewProjectSheet()
         }
         .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("The Dispatch Architect has not finished writing the plan yet. Watch its terminal on the canvas — once plan.json is on disk, click Start again.")
+            Text("The Dispatch Architect has not finished writing the plan yet. Watch its terminal on the canvas — once plan.json is on disk, try Start again.")
         }
     }
 
-    // MARK: - Project row
+    // MARK: - Pieces
 
-    private func projectRow(_ project: Project) -> some View {
-        let todoCount = todos.filter { $0.projectID == project.id && $0.listState == .active }.count
-        let teamCount = teams.filter { $0.projectID == project.id }.count
-        let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text("Projects")
+                .font(Typography.title)
+                .foregroundStyle(Palette.textPrimary)
 
-        return Button(action: {
-            onSelect(project)
-        }) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 14))
-                    .foregroundColor(Palette.accent)
+            Spacer()
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(project.name)
-                        .font(Typography.monoDefaultEmph)
-                        .foregroundStyle(Palette.textPrimary)
-                    Text(project.rootPath)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer()
-
-                if agents.count > 0 {
-                    Text("\(agents.count) agents")
-                        .font(Typography.monoMicro)
-                        .foregroundStyle(Palette.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Palette.surfaceElevated)
-                        .clipShape(Capsule())
-                }
-
-                if teamCount > 0 {
-                    Text("\(teamCount) teams")
-                        .font(Typography.monoMicro)
-                        .foregroundStyle(Palette.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Palette.surfaceElevated)
-                        .clipShape(Capsule())
-                }
-
-                if todoCount > 0 {
-                    Text("\(todoCount) todos")
-                        .font(Typography.monoMicro)
-                        .foregroundStyle(Palette.accent)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Palette.surfaceAccent)
-                        .clipShape(Capsule())
-                }
-
-                Button(action: { bootstrapTools(for: project) }) {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.accent.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .help("Bootstrap Tado A2A tools for this project")
-
-                dispatchControls(for: project)
-
-                if teamCount > 0 {
-                    Button(action: { bootstrapTeam(for: project) }) {
-                        Image(systemName: "person.3.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Palette.warning.opacity(0.85))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Bootstrap team awareness for this project")
-                }
-
-                Button(action: { deleteProject(project) }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.danger.opacity(0.8))
-                }
-                .buttonStyle(.plain)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Palette.textTertiary)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - New project form
-
-    private var newProjectForm: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                TextField("Project name", text: $newProjectName)
-                    .textFieldStyle(.plain)
-                    .font(Typography.monoBody)
-                    .foregroundStyle(Palette.textPrimary)
-
-                Button("Browse...") { pickDirectory() }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.accent)
-                    .buttonStyle(.plain)
-            }
-
-            if !newProjectPath.isEmpty {
-                HStack {
-                    Text(newProjectPath)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                }
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") {
-                    showNewProject = false
-                    newProjectName = ""
-                    newProjectPath = ""
+            Button(action: { showNewProjectSheet = true }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                    Text("New Project")
                 }
                 .font(Typography.label)
-                .foregroundStyle(Palette.textSecondary)
-                .buttonStyle(.plain)
-
-                Button("Create") { createProject() }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.accent)
-                    .buttonStyle(.plain)
-                    .disabled(newProjectName.isEmpty || newProjectPath.isEmpty)
+                .foregroundStyle(Palette.accent)
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(Palette.surfaceAccentSoft)
+        .padding(.vertical, 14)
+        .background(Palette.surfaceElevated)
     }
 
-    // MARK: - Actions
-
-    private func pickDirectory() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Select project root directory"
-        if panel.runModal() == .OK, let url = panel.url {
-            newProjectPath = url.path
-            if newProjectName.isEmpty {
-                newProjectName = url.lastPathComponent
-            }
-        }
-    }
-
-    private func createProject() {
-        let project = Project(name: newProjectName, rootPath: newProjectPath)
-        modelContext.insert(project)
-        try? modelContext.save()
-        newProjectName = ""
-        newProjectPath = ""
-        showNewProject = false
-    }
-
-    private func deleteProject(_ project: Project) {
-        for todo in todos where todo.projectID == project.id {
-            terminalManager.terminateSessionForTodo(todo.id)
-        }
-        modelContext.delete(project)
-        try? modelContext.save()
-    }
-
-    // MARK: - Dispatch controls
-
-    @ViewBuilder
-    private func dispatchControls(for project: Project) -> some View {
-        let state = project.dispatchState
-        if state == "idle" || state.isEmpty {
-            Button(action: { appState.dispatchModalProjectID = project.id }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "doc.text.badge.plus")
-                        .font(.system(size: 12))
-                    Text("Dispatch")
-                        .font(Typography.monoMicro)
+    /// Centered empty-state block. Uses Typography.heading for the line
+    /// and body for the subline — matches the visual weight of other
+    /// empty states in the app (Settings, Done/Trash). A primary button
+    /// carries the same accent treatment as the header button, so a
+    /// fresh install has one clear CTA.
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Text("No projects yet")
+                .font(Typography.heading)
+                .foregroundStyle(Palette.textPrimary)
+            Text("Create one to start organizing your AI coding\nsessions by workspace")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: { showNewProjectSheet = true }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                    Text("New Project")
                 }
+                .font(Typography.label)
                 .foregroundStyle(Palette.accent)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
                 .background(Palette.surfaceAccent)
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            .help("Write a Dispatch File — a multi-phase super-project plan")
-        } else {
-            Button(action: { appState.dispatchModalProjectID = project.id }) {
-                Image(systemName: "arrow.counterclockwise")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Palette.warning)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(Palette.warning.opacity(0.12))
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .help("Redo the Dispatch File — edit the brief and re-plan")
+            .padding(.top, 4)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
 
-            Button(action: { startPhaseOne(for: project) }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 11))
-                    Text("Start")
-                        .font(Typography.monoMicro)
+    private var projectCards: some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(projects) { project in
+                    card(for: project)
                 }
-                .foregroundStyle(Palette.success)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Palette.success.opacity(0.15))
-                .clipShape(Capsule())
             }
-            .buttonStyle(.plain)
-            .help("Start dispatching — launch phase 1 of the plan")
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
         }
     }
+
+    private func card(for project: Project) -> some View {
+        let todoCount = todos.filter { $0.projectID == project.id && $0.listState == .active }.count
+        let teamCount = teams.filter { $0.projectID == project.id }.count
+        let agents = AgentDiscoveryService.discover(projectRoot: project.rootPath)
+
+        return ProjectCard(
+            project: project,
+            todoCount: todoCount,
+            teamCount: teamCount,
+            agentCount: agents.count,
+            hasTeams: teamCount > 0,
+            onTap: { onSelect(project) },
+            onBootstrapTools: { bootstrapTools(for: project) },
+            onBootstrapTeam: { bootstrapTeam(for: project) },
+            onDispatch: { appState.dispatchModalProjectID = project.id },
+            onStart: { startPhaseOne(for: project) },
+            onDelete: { deleteProject(project) }
+        )
+    }
+
+    // MARK: - Actions
 
     private func startPhaseOne(for project: Project) {
         let launched = DispatchPlanService.startPhaseOne(
@@ -323,7 +147,15 @@ struct ProjectListView: View {
         }
     }
 
-    // MARK: - Bootstrap helpers
+    private func deleteProject(_ project: Project) {
+        for todo in todos where todo.projectID == project.id {
+            terminalManager.terminateSessionForTodo(todo.id)
+        }
+        modelContext.delete(project)
+        try? modelContext.save()
+    }
+
+    // MARK: - Bootstrap helpers (same behavior as the pre-redesign row)
 
     private func bootstrapTools(for project: Project) {
         guard let tadoRoot = ProcessSpawner.tadoRepoRoot() else { return }
