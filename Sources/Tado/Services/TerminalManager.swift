@@ -27,11 +27,13 @@ final class TerminalManager {
         modelFlagsOverride: [String]? = nil,
         effortFlagsOverride: [String]? = nil,
         isEternalWorker: Bool = false,
+        eternalLoopKind: String? = nil,
         eternalMode: String? = nil,
         eternalDoneMarker: String? = nil,
         eternalModelID: String? = nil,
         eternalEffortLevel: String? = nil,
         eternalSkipPermissionsFlag: Bool = true,
+        eternalContinuePrompt: String? = nil,
         eternalRunID: UUID? = nil,
         dispatchRunID: UUID? = nil,
         runRole: String? = nil
@@ -60,7 +62,9 @@ final class TerminalManager {
         session.modelFlagsOverride = modelFlagsOverride
         session.effortFlagsOverride = effortFlagsOverride
         session.isEternalWorker = isEternalWorker
+        session.eternalLoopKind = eternalLoopKind
         session.eternalMode = eternalMode
+        session.eternalContinuePrompt = eternalContinuePrompt
         session.eternalDoneMarker = eternalDoneMarker
         session.eternalModelID = eternalModelID
         session.eternalEffortLevel = eternalEffortLevel
@@ -115,11 +119,13 @@ final class TerminalManager {
         modelFlagsOverride: [String]? = nil,
         effortFlagsOverride: [String]? = nil,
         isEternalWorker: Bool = false,
+        eternalLoopKind: String? = nil,
         eternalMode: String? = nil,
         eternalDoneMarker: String? = nil,
         eternalModelID: String? = nil,
         eternalEffortLevel: String? = nil,
         eternalSkipPermissionsFlag: Bool = true,
+        eternalContinuePrompt: String? = nil,
         eternalRunID: UUID? = nil,
         dispatchRunID: UUID? = nil,
         runRole: String? = nil
@@ -134,11 +140,13 @@ final class TerminalManager {
             modelFlagsOverride: modelFlagsOverride,
             effortFlagsOverride: effortFlagsOverride,
             isEternalWorker: isEternalWorker,
+            eternalLoopKind: eternalLoopKind,
             eternalMode: eternalMode,
             eternalDoneMarker: eternalDoneMarker,
             eternalModelID: eternalModelID,
             eternalEffortLevel: eternalEffortLevel,
             eternalSkipPermissionsFlag: eternalSkipPermissionsFlag,
+            eternalContinuePrompt: eternalContinuePrompt,
             eternalRunID: eternalRunID,
             dispatchRunID: dispatchRunID,
             runRole: runRole

@@ -833,6 +833,14 @@ enum EternalService {
     /// (e.g. if the user turns Full Auto off) the session rarely halts.
     ///
     /// MCP patterns use `mcp__*` which matches any MCP server's tools.
+    /// Patterns merged into the project-scoped `.claude/settings.json`'s
+    /// `permissions.allow` list. These are the tools Tado-spawned Claude
+    /// Code sessions should never be prompted about.
+    ///
+    /// Expanded for auto-mode: each entry in `protectedPathAllowList`
+    /// auto-approves writes that bypassPermissions used to prompt on.
+    /// Under auto mode there is no hard-coded protected-path exception —
+    /// anything not explicitly allow-listed goes through the classifier.
     private static let baselineAllowList = [
         "Bash(*)",
         "Edit",
@@ -846,6 +854,41 @@ enum EternalService {
         "TodoWrite",
         "Task",
         "mcp__*",
+    ] + protectedPathAllowList
+
+    /// Writes that bypass mode's exception list forced prompts on —
+    /// `.git`, `.claude`, `.vscode`, `.idea`, `.husky`. Under auto mode
+    /// we pre-allow them deterministically so an Eternal worker that
+    /// routinely touches them (e.g. updating `.claude/agents/<name>.md`,
+    /// writing git hooks, or pre-creating VS Code / JetBrains project
+    /// metadata) never stalls on a dialog.
+    private static let protectedPathAllowList = [
+        "Edit(./.git/**)",
+        "Write(./.git/**)",
+        "Edit(./.claude/**)",
+        "Write(./.claude/**)",
+        "Edit(./.vscode/**)",
+        "Write(./.vscode/**)",
+        "Edit(./.idea/**)",
+        "Write(./.idea/**)",
+        "Edit(./.husky/**)",
+        "Write(./.husky/**)",
+    ]
+
+    /// Natural-language trust descriptors for Claude Code's auto-mode
+    /// classifier. The classifier reads these as prose when deciding
+    /// whether an action is "external" (potential exfiltration) or
+    /// "routine local work". See
+    /// https://code.claude.com/docs/en/permissions#configure-the-auto-mode-classifier
+    /// for the full spec. These descriptors get merged into both the
+    /// user-scope and project-local settings at install time.
+    private static let autoModeEnvironment = [
+        "Organization: local developer machine. Primary use: software development driven by the Tado macOS app, which spawns long-lived `claude` sessions as terminal tiles.",
+        "Trusted source control: this project's git remote (typically GitHub / GitLab over HTTPS or SSH). Pushing to the project's own origin is routine, not exfiltration.",
+        "Trusted local filesystem: the project root and everything under it — including `.git`, `.claude`, `.vscode`, `.idea`, `.husky`, `node_modules`, `.venv`, and `.build`. Tado agents routinely edit these as part of normal workflow.",
+        "Trusted MCP servers: any tool matching `mcp__*`. The user wires MCP servers explicitly in `~/.claude/settings.json`; anything exposed there is trusted.",
+        "Trusted package managers and build tools: npm, pnpm, yarn, bun, pip, uv, cargo, swift, brew, gem, go. Package install, update, audit, and build operations are routine.",
+        "Additional context: Tado's Eternal feature runs unattended for hours or days. Err on the side of autonomy for reversible, in-scope operations. Bash commands like `rm -rf <path-under-project>` are legitimate cleanup within the project; Bash commands that reach outside the project root (into `/usr`, `/System`, user home outside the project) are NOT routine and should still be gated.",
     ]
 
     private static func mergeClaudeSettings(_ project: Project) throws {
@@ -922,7 +965,12 @@ enum EternalService {
     /// under the user's control — they live in the user's home / local
     /// project and are not committed. We can afford to wildcard more
     /// aggressively here since the purpose is "Tado sessions never prompt".
-    private static let bypassAllowList = [
+    ///
+    /// Still includes the protected-path entries from
+    /// `protectedPathAllowList` so even a user who deleted the project-
+    /// scope `.claude/settings.json` keeps auto-approval on `.git` /
+    /// `.claude` writes.
+    private static let autoModeAllowList = [
         "Bash(*)",
         "Edit(**)",
         "Write(**)",
@@ -935,34 +983,45 @@ enum EternalService {
         "TodoWrite",
         "Task",
         "mcp__*",
-    ]
+    ] + protectedPathAllowList
 
-    /// Merge the bypass keys into an existing JSON object. Non-destructive:
-    /// existing user keys we don't own are left alone, existing entries in
-    /// `permissions.allow` are preserved and extended, `defaultMode` is
-    /// upgraded to `"bypassPermissions"` only if it wasn't already set to a
-    /// stronger value.
-    private static func mergeBypassKeys(into root: inout [String: Any]) {
+    /// Merge Tado's auto-mode keys into an existing settings JSON object.
+    /// Non-destructive: existing user keys we don't own are left alone,
+    /// existing entries in `permissions.allow` and `autoMode.environment`
+    /// are preserved and extended, `defaultMode` is upgraded to `"auto"`.
+    ///
+    /// Auto mode replaces the old `bypassPermissions` + skip-danger flag
+    /// combo. It's the official Claude Code autonomy mode as of late
+    /// Apr 2026 — each tool call runs through a safety classifier, with
+    /// the `autoMode.environment` prose + `permissions.allow` rules
+    /// teaching the classifier what's routine vs. out-of-scope.
+    private static func mergeAutoModeKeys(into root: inout [String: Any]) {
         var permissions = root["permissions"] as? [String: Any] ?? [:]
 
-        // `defaultMode`: set to bypassPermissions unless the user has already
-        // chosen something more restrictive *and* they likely want to keep
-        // it. We can't tell intent, so err on the side of setting it —
-        // users who deliberately restrict permissions per-scope will
-        // notice our write and can override in local settings.
-        permissions["defaultMode"] = "bypassPermissions"
+        // `defaultMode`: set to "auto" unconditionally. Users who
+        // deliberately picked a stricter scope can override in their
+        // own settings, which take precedence for their own sessions;
+        // Tado spawns always pass `--permission-mode auto` on the CLI
+        // anyway, so this key is mostly for bare `claude` invocations.
+        permissions["defaultMode"] = "auto"
 
         var allow = permissions["allow"] as? [String] ?? []
-        for pattern in bypassAllowList where !allow.contains(pattern) {
+        for pattern in autoModeAllowList where !allow.contains(pattern) {
             allow.append(pattern)
         }
         permissions["allow"] = allow
         root["permissions"] = permissions
 
-        // Kill the "Are you sure you want to enter bypass mode?" one-time
-        // prompt. Claude Code docs: this key is IGNORED in project
-        // `.claude/settings.json` but honored in user + local scopes.
-        root["skipDangerousModePermissionPrompt"] = true
+        // Seed the auto-mode classifier with Tado's trust context. The
+        // classifier reads these as natural language; entries get
+        // de-duplicated case-sensitively before merge.
+        var autoMode = root["autoMode"] as? [String: Any] ?? [:]
+        var environment = autoMode["environment"] as? [String] ?? []
+        for line in autoModeEnvironment where !environment.contains(line) {
+            environment.append(line)
+        }
+        autoMode["environment"] = environment
+        root["autoMode"] = autoMode
     }
 
     /// Write/merge `~/.claude/settings.json` so every Claude Code session on
@@ -983,7 +1042,7 @@ enum EternalService {
             root = parsed
         }
 
-        mergeBypassKeys(into: &root)
+        mergeAutoModeKeys(into: &root)
 
         if let data = try? JSONSerialization.data(
             withJSONObject: root,
@@ -1011,7 +1070,7 @@ enum EternalService {
             root = parsed
         }
 
-        mergeBypassKeys(into: &root)
+        mergeAutoModeKeys(into: &root)
 
         if let data = try? JSONSerialization.data(
             withJSONObject: root,
@@ -1359,24 +1418,36 @@ enum EternalService {
         run.workerTodoID = todo.id
         try? modelContext.save()
 
-        // Worker runs through the external-loop wrapper
-        // (`.tado/eternal/hooks/eternal-loop.sh`), which respawns
-        // `claude -p "..."` each turn. A fresh session per iteration is
-        // what makes the loop genuinely non-stop — Claude Code's
-        // in-session Stop-hook recursion counter gets reset every cycle.
-        // Model/effort come from the user's AppSettings default (passed
-        // via env to the wrapper).
+        // Worker spawns depending on the run's loopKind:
+        //   - "external" (default): goes through the eternal-loop.sh
+        //     wrapper, which respawns `claude -p "..."` every turn.
+        //     Fresh context per iteration, cheap tokens, recursion
+        //     counter resets each cycle.
+        //   - "internal": spawns `claude --permission-mode auto`
+        //     directly (no wrapper), with a continuation prompt Tado
+        //     re-injects every time the session goes `.needsInput`.
+        //     The initial `todo.text` holds the eternal prompt that
+        //     kicks off the first turn; `eternalContinuePrompt` is
+        //     what Tado types for every subsequent iteration.
+        //
+        // Model/effort come from the user's AppSettings default.
+        let loopKind = (run.loopKind == "internal") ? "internal" : "external"
+        let continuePrompt: String? = loopKind == "internal"
+            ? internalContinuePrompt(run: run, runDir: eternalRoot(run).path)
+            : nil
         terminalManager.spawnAndWire(
             todo: todo,
             engine: .claude,
             cwd: project.rootPath,
             projectName: project.name,
             isEternalWorker: true,
+            eternalLoopKind: loopKind,
             eternalMode: run.mode,
             eternalDoneMarker: run.completionMarker,
             eternalModelID: settings.claudeModel.rawValue,
             eternalEffortLevel: settings.claudeEffort.rawValue,
             eternalSkipPermissionsFlag: run.skipPermissions,
+            eternalContinuePrompt: continuePrompt,
             eternalRunID: run.id,
             runRole: "worker"
         )
@@ -1385,6 +1456,45 @@ enum EternalService {
         // No currentView flip — user is on the project detail page when they
         // click Start. The section re-renders as the running card. They can
         // click "Watch on Canvas" for the tile stream.
+    }
+
+    // MARK: - Internal-mode continuation helpers
+
+    /// The prompt Tado re-injects into an internal-mode session every
+    /// time it goes `.needsInput`. Grounded in the run's files so the
+    /// agent knows exactly what to read and what to append — no
+    /// guessing.
+    ///
+    /// The same text is passed to Claude Code's built-in `/loop` as the
+    /// secondary driver (see `internalLoopCommand`), so both layers
+    /// deliver identical instructions.
+    static func internalContinuePrompt(run: EternalRun, runDir: String) -> String {
+        let marker = run.completionMarker
+        let sprintFragment = run.mode == "sprint"
+            ? " End a sprint by outputting `[SPRINT-DONE]` on its own line; the loop then starts the next sprint."
+            : ""
+        return """
+        [TADO ETERNAL · continue] Read \(runDir)/crafted.md, tail \(runDir)/progress.md \
+        for your last state, then do the NEXT unit of work. Before ending this turn, \
+        append ONE line to \(runDir)/progress.md in the format `YYYY-MM-DD HH:MM: <one sentence>`. \
+        The last progress.md line in the next iteration's prompt should advance from this one. \
+        Output `\(marker)` on its own line ONLY when the entire task is fully complete.\(sprintFragment)
+        """
+    }
+
+    /// Slash-command Tado types into an internal-mode session once the
+    /// first user turn completes, as the secondary continuation driver
+    /// (primary is Tado's own idle-injection).
+    ///
+    /// Uses Claude Code's built-in `/loop <interval> <prompt>` feature,
+    /// which fires `<prompt>` on the given interval for up to 1 week.
+    /// If the user's Claude Code build doesn't support `/loop`, typing
+    /// it is a harmless no-op (Claude Code treats unknown slash commands
+    /// as plain text, which the agent can ignore) — Tado's idle-
+    /// injection primary driver handles continuation either way.
+    static func internalLoopCommand(run: EternalRun, runDir: String) -> String {
+        let payload = internalContinuePrompt(run: run, runDir: runDir)
+        return "/loop 30s \(payload)"
     }
 
     // MARK: - Startup migrations / reconciliation
@@ -1461,6 +1571,7 @@ enum EternalService {
             createdAt: project.createdAt,
             state: project.eternalState.isEmpty ? "idle" : project.eternalState,
             mode: project.eternalMode.isEmpty ? "mega" : project.eternalMode,
+            loopKind: project.eternalLoopKind.isEmpty ? "external" : project.eternalLoopKind,
             completionMarker: project.eternalCompletionMarker.isEmpty
                 ? "ETERNAL-DONE" : project.eternalCompletionMarker,
             sprintEval: project.eternalSprintEval,

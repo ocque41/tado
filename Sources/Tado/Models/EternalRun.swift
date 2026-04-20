@@ -37,6 +37,27 @@ final class EternalRun {
     var state: String = "drafted"
     /// `mega | sprint`.
     var mode: String = "mega"
+
+    /// How the worker is kept alive turn-to-turn.
+    ///
+    /// - `external` (default, "normal session"): spawns
+    ///   `.tado/eternal/hooks/eternal-loop.sh`, which re-invokes
+    ///   `claude -p "<prompt>"` each iteration. Fresh context per turn
+    ///   (cheap tokens, no mid-turn memory). Claude Code's in-session
+    ///   Stop-hook recursion counter resets every cycle, so the loop
+    ///   never dies from recursion limits.
+    /// - `internal` ("continuous session"): spawns ONE interactive
+    ///   `claude --permission-mode auto` session. The session stays
+    ///   alive for its whole lifetime; context grows across turns and
+    ///   auto-compacts. Continuation is driven by (1) Tado's idle-
+    ///   detection injecting a "continue" prompt each time the session
+    ///   goes `.needsInput`, AND (2) a `/loop 30s continue …` command
+    ///   typed after the first turn so Claude Code's own scheduler
+    ///   backs up Tado's injection. Requires Claude Code auto mode
+    ///   (shipped late Apr 2026) — the old stop-hook-blocking trick
+    ///   tripped Claude Code's recursion counter and is gone.
+    var loopKind: String = "external"
+
     /// String Claude outputs to let the Stop hook exit cleanly.
     var completionMarker: String = "ETERNAL-DONE"
     /// Sprint-only: natural-language "how to evaluate each sprint".
@@ -67,6 +88,7 @@ final class EternalRun {
         createdAt: Date = Date(),
         state: String = "drafted",
         mode: String = "mega",
+        loopKind: String = "external",
         completionMarker: String = "ETERNAL-DONE",
         sprintEval: String = "",
         sprintImprove: String = "",
@@ -81,6 +103,7 @@ final class EternalRun {
         self.createdAt = createdAt
         self.state = state
         self.mode = mode
+        self.loopKind = loopKind
         self.completionMarker = completionMarker
         self.sprintEval = sprintEval
         self.sprintImprove = sprintImprove

@@ -28,6 +28,7 @@ struct EternalFileModal: View {
 
     @State private var draft: String = ""
     @State private var mode: String = "mega"
+    @State private var loopKind: String = "external"
     @State private var marker: String = "ETERNAL-DONE"
     @State private var skipPermissions: Bool = true
     @State private var showRedoAlert: Bool = false
@@ -43,6 +44,7 @@ struct EternalFileModal: View {
                     modeBlurb
                     briefEditor
                     markerField
+                    loopKindPicker
                     fullAutoToggle
                 }
                 .padding(.horizontal, 16)
@@ -60,6 +62,8 @@ struct EternalFileModal: View {
             let storedMarker = run.completionMarker.trimmingCharacters(in: .whitespacesAndNewlines)
             marker = storedMarker.isEmpty ? "ETERNAL-DONE" : storedMarker
             skipPermissions = run.skipPermissions
+            let storedKind = run.loopKind.trimmingCharacters(in: .whitespacesAndNewlines)
+            loopKind = (storedKind == "internal") ? "internal" : "external"
         }
         .alert("Delete architect's draft and re-plan?", isPresented: $showRedoAlert) {
             Button("Delete & Re-plan", role: .destructive) { commitAndSpawnArchitect() }
@@ -218,6 +222,41 @@ struct EternalFileModal: View {
         }
     }
 
+    // MARK: - Loop kind
+
+    private var loopKindPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("SESSION STYLE")
+                .font(Typography.microBold)
+                .tracking(0.8)
+                .foregroundStyle(Palette.textTertiary)
+            HStack(spacing: 8) {
+                loopKindButton(label: "Normal (per-turn)", value: "external")
+                loopKindButton(label: "Continuous", value: "internal")
+                Spacer()
+            }
+            Text(loopKind == "internal"
+                 ? "Continuous: ONE interactive `claude` session stays alive for the whole run. Context grows turn-over-turn and auto-compacts. Tado keeps it iterating by injecting a \"continue\" prompt every time the session goes idle, backed up by Claude Code's built-in `/loop`. Requires auto mode — use the Bootstrap button in the project menu first."
+                 : "Normal (per-turn): fresh `claude -p` invocation every turn via the eternal-loop wrapper. Cheap tokens, no mid-turn memory (each iteration reads crafted.md + progress.md from scratch). This is the default and the reliable workhorse.")
+                .font(Typography.bodySm)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func loopKindButton(label: String, value: String) -> some View {
+        Button(action: { loopKind = value }) {
+            Text(label)
+                .font(Typography.label)
+                .foregroundStyle(loopKind == value ? .white : Palette.textSecondary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 7)
+                .background(loopKind == value ? Palette.accent : Palette.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Full Auto
 
     private var fullAutoToggle: some View {
@@ -268,6 +307,7 @@ struct EternalFileModal: View {
         run.mode = mode
         run.completionMarker = trimmedMarker.isEmpty ? "ETERNAL-DONE" : trimmedMarker
         run.skipPermissions = skipPermissions
+        run.loopKind = (loopKind == "internal") ? "internal" : "external"
         // Refresh the default label when the mode flips (user may have
         // opened the modal via "New Mega" then switched to Sprint).
         run.label = EternalRun.defaultLabel(mode: mode, createdAt: run.createdAt)

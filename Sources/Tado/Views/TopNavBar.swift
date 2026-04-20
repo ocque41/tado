@@ -223,6 +223,16 @@ struct TopNavBar: View {
                 Label("Bootstrap team awareness", systemImage: "person.3")
             }
             .disabled(projectTeams.isEmpty)
+            Button(action: {
+                ProjectActionsService.bootstrapAutoMode(
+                    project: project,
+                    modelContext: modelContext,
+                    terminalManager: terminalManager,
+                    appState: appState
+                )
+            }) {
+                Label("Bootstrap Claude auto mode", systemImage: "lock.open.rotation")
+            }
             Divider()
             Button(role: .destructive, action: {
                 ProjectActionsService.deleteProject(

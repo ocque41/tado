@@ -125,15 +125,26 @@ struct MetalTerminalTileView: View {
     private func spawnIfNeeded() {
         guard session.coreSession == nil else { return }
 
-        // Eternal workers run through the external-loop wrapper
-        // (`.tado/eternal/hooks/eternal-loop.sh`) instead of invoking
-        // `claude` directly. The wrapper respawns `claude -p` every turn
-        // so Claude Code's in-session Stop-hook recursion counter is
-        // reset each iteration — genuinely infinite.
+        // Eternal workers spawn one of two ways depending on
+        // `session.eternalLoopKind`:
+        //   - "external" (default): eternal-loop.sh wrapper respawns
+        //     `claude -p` each turn; Stop-hook recursion counter resets
+        //     every cycle.
+        //   - "internal": `claude --permission-mode auto` interactive,
+        //     no wrapper. One session for the whole run. Context grows
+        //     and auto-compacts. Continuation driven by Tado's idle-
+        //     injection (below) + a `/loop` command typed after the
+        //     first turn.
         let executable: String
         let args: [String]
         if session.isEternalWorker, let projectRoot = session.projectRoot {
-            let cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
+            let kind = session.eternalLoopKind ?? "external"
+            let cmd: (executable: String, args: [String])
+            if kind == "internal" {
+                cmd = ProcessSpawner.internalEternalCommand(projectRoot: projectRoot)
+            } else {
+                cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
+            }
             executable = cmd.executable
             args = cmd.args
         } else {
@@ -182,7 +193,12 @@ struct MetalTerminalTileView: View {
         }
 
         // Merge eternal-worker env knobs (TADO_ETERNAL_MODE, TADO_MODEL,
-        // etc.) after the base env so the wrapper sees them.
+        // TADO_ETERNAL_RUN_ID, etc.) after the base env so the wrapper
+        // and any project hooks see them. External mode's eternal-loop.sh
+        // reads these to build each `claude -p` invocation; internal
+        // mode doesn't use a wrapper, but the run-id env var still makes
+        // it through to any `.claude/` hooks the user has installed,
+        // keeping them run-scoped in the same way.
         if session.isEternalWorker {
             // eternalRunID must be set for any isEternalWorker session — the
             // spawn-path in EternalService.spawnWorker stamps it before

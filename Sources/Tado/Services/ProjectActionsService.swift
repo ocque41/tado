@@ -77,6 +77,52 @@ enum ProjectActionsService {
         appState.currentView = .canvas
     }
 
+    /// Spawn a one-shot tile that merges Tado's recommended auto-mode
+    /// configuration into the user's Claude Code settings. Handles the
+    /// merge through an agent (rather than writing JSON directly from
+    /// Swift) so the user has a real transcript showing exactly what
+    /// changed and can intervene if needed.
+    ///
+    /// The spawned agent updates both `~/.claude/settings.json` (user
+    /// scope — affects every Claude Code session on this machine) and
+    /// `<project>/.claude/settings.local.json` (project-local scope —
+    /// gitignored, specific to this project's Tado work).
+    static func bootstrapAutoMode(
+        project: Project,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager,
+        appState: AppState
+    ) {
+        let prompt = ProcessSpawner.bootstrapAutoModePrompt(
+            projectName: project.name,
+            projectRoot: project.rootPath
+        )
+        let settings = fetchOrCreateSettings(modelContext: modelContext)
+        let index = nextAvailableGridIndex(modelContext: modelContext)
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        todo.projectID = project.id
+        modelContext.insert(todo)
+
+        // Pin Opus + high effort: this is config-writing work where
+        // subtle JSON merging mistakes silently break everything.
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: project.rootPath,
+            projectName: project.name,
+            modeFlagsOverride: ProcessSpawner.eternalPermissionFlags(skipPermissions: true),
+            modelFlagsOverride: ["--model", ClaudeModel.opus47.rawValue],
+            effortFlagsOverride: ["--effort", ClaudeEffort.high.rawValue]
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
     /// Tear down every session belonging to the project, then delete
     /// the project itself. Caller is responsible for clearing any
     /// `appState.activeProjectID` it owns — kept out of here so the

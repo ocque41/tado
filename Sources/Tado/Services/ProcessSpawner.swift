@@ -123,6 +123,169 @@ enum ProcessSpawner {
         return nil
     }
 
+    /// Prompt for the "Bootstrap Auto Mode" tile. The spawned agent
+    /// merges Tado's recommended auto-mode configuration into the user's
+    /// Claude Code settings — user-scope (`~/.claude/settings.json`)
+    /// AND project-local (`<project>/.claude/settings.local.json`).
+    ///
+    /// The prompt is written for an audience that doesn't assume prior
+    /// familiarity with Claude Code's permission system. Every term is
+    /// defined before it's used — bypass mode, auto mode, the classifier,
+    /// the protected-path exception, `autoMode.environment`,
+    /// `permissions.allow`. That way the user reading the transcript
+    /// understands what changed and why.
+    static func bootstrapAutoModePrompt(projectName: String, projectRoot: String) -> String {
+        """
+        You are bootstrapping Tado's "auto mode" configuration for Claude Code.
+        Project: "\(projectName)" at \(projectRoot).
+
+        ═══════════════════════════════════════════════════════════
+        CONTEXT — WHAT YOU ARE DOING AND WHY
+        ═══════════════════════════════════════════════════════════
+
+        Tado is a macOS app that runs long-lived Claude Code agents as
+        terminal tiles. Its "Eternal" feature runs a single agent for
+        hours or days without user input. That only works if every
+        Claude Code tool call auto-approves — a single permission
+        dialog halts the loop forever.
+
+        Historically Tado used `--dangerously-skip-permissions` (a.k.a.
+        "bypass mode") to silence prompts. Bypass has a hard-coded
+        exception: writes to `.git`, `.claude`, `.vscode`, `.idea`, and
+        `.husky` STILL prompt. That exception regularly stalled Eternal
+        runs mid-iteration.
+
+        Claude Code shipped **auto mode** in late April 2026 as the
+        official replacement for bypass. Auto mode sends each tool call
+        to an AI classifier that judges safety on four axes:
+          1. Reversibility — can this be undone?
+          2. Scope alignment — is it inside the user's request?
+          3. Risk surface — does it touch credentials or external data?
+          4. Cascading effects — could this chain into damage?
+
+        Safe calls auto-approve. Risky calls still prompt. Crucially,
+        auto mode has NO protected-path exception. Writes to `.git/`
+        auto-approve if the classifier considers them in-scope.
+
+        Your job: set up both layers of Tado's recommended auto-mode
+        config. Layer A is the user scope (affects every Claude Code
+        session on this machine); Layer B is project-local (gitignored,
+        specific to this project).
+
+        ═══════════════════════════════════════════════════════════
+        STEP 0 — READ THE CURRENT STATE
+        ═══════════════════════════════════════════════════════════
+
+        Read these two files. If either is missing, treat it as an empty
+        JSON object `{}` — you will create it during the merge:
+
+          * ~/.claude/settings.json         (user scope)
+          * \(projectRoot)/.claude/settings.local.json   (project-local scope)
+
+        Note the existing keys. You must NOT delete or overwrite any
+        keys the user set intentionally. This merge is strictly additive.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 1 — UPDATE user scope (~/.claude/settings.json)
+        ═══════════════════════════════════════════════════════════
+
+        Read the existing JSON (or start from {} if the file is absent).
+        Make the following changes, preserving everything else:
+
+        1a. Set `permissions.defaultMode = "auto"`.
+            If `permissions` doesn't exist, create it. If `defaultMode`
+            was previously "bypassPermissions", log that you changed it.
+
+        1b. Ensure `permissions.allow` is an array and contains AT LEAST
+            these entries (append any that are missing, don't touch
+            existing):
+
+              "Bash(*)"
+              "Edit(**)"
+              "Write(**)"
+              "Read(**)"
+              "Glob"
+              "Grep"
+              "WebFetch"
+              "WebSearch"
+              "NotebookEdit"
+              "TodoWrite"
+              "Task"
+              "mcp__*"
+              "Edit(./.git/**)"
+              "Write(./.git/**)"
+              "Edit(./.claude/**)"
+              "Write(./.claude/**)"
+              "Edit(./.vscode/**)"
+              "Write(./.vscode/**)"
+              "Edit(./.idea/**)"
+              "Write(./.idea/**)"
+              "Edit(./.husky/**)"
+              "Write(./.husky/**)"
+
+            The `.git/**`, `.claude/**`, `.vscode/**`, `.idea/**`,
+            `.husky/**` patterns are the critical ones — they replace
+            bypass mode's hard-coded exception list with explicit
+            allow rules.
+
+        1c. Ensure `autoMode.environment` is an array and contains
+            these natural-language trust descriptors (append any that
+            are missing). These are prose that Claude Code's classifier
+            reads to understand what counts as "routine" vs. "external
+            data exfiltration":
+
+              "Organization: local developer machine. Primary use: software development driven by the Tado macOS app, which spawns long-lived `claude` sessions as terminal tiles."
+              "Trusted source control: this project's git remote (typically GitHub / GitLab over HTTPS or SSH). Pushing to the project's own origin is routine, not exfiltration."
+              "Trusted local filesystem: the project root and everything under it — including `.git`, `.claude`, `.vscode`, `.idea`, `.husky`, `node_modules`, `.venv`, and `.build`. Tado agents routinely edit these as part of normal workflow."
+              "Trusted MCP servers: any tool matching `mcp__*`. The user wires MCP servers explicitly in `~/.claude/settings.json`; anything exposed there is trusted."
+              "Trusted package managers and build tools: npm, pnpm, yarn, bun, pip, uv, cargo, swift, brew, gem, go. Package install, update, audit, and build operations are routine."
+              "Additional context: Tado's Eternal feature runs unattended for hours or days. Err on the side of autonomy for reversible, in-scope operations. Bash commands like `rm -rf <path-under-project>` are legitimate cleanup within the project; Bash commands that reach outside the project root (into `/usr`, `/System`, user home outside the project) are NOT routine and should still be gated."
+
+        Write the merged JSON back atomically (mktemp + mv) with
+        pretty-printed two-space indent.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 2 — UPDATE project-local scope
+        ═══════════════════════════════════════════════════════════
+
+        Same as Step 1, but target
+        \(projectRoot)/.claude/settings.local.json instead. This file is
+        gitignored by convention, so the config is local to this
+        machine's clone and doesn't leak into the repo.
+
+        Create the `.claude/` directory first if it doesn't exist:
+          Bash(mkdir -p \(projectRoot)/.claude)
+
+        Then repeat Steps 1a / 1b / 1c against
+        `settings.local.json`. Identical content; the two scopes
+        reinforce each other so a user who blows away their user
+        settings still has the project-local coverage.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 3 — VERIFY AND REPORT
+        ═══════════════════════════════════════════════════════════
+
+        Print a summary showing, for each of the two files:
+
+          * Did the file exist before you touched it? (yes/no)
+          * What value `permissions.defaultMode` had before vs. after
+          * How many entries were already in `permissions.allow`,
+            how many you appended
+          * How many entries were already in `autoMode.environment`,
+            how many you appended
+          * Whether `skipDangerousModePermissionPrompt` (a legacy
+            bypass-mode key) is present — if so, note that it's now
+            harmless under auto mode but can be removed
+
+        Then STOP. Do NOT:
+          * Start any Eternal runs
+          * tado-deploy anything
+          * tado-send anything
+          * Modify CLAUDE.md, AGENTS.md, or project source code
+          * Fiddle with permissions on unrelated files
+        """
+    }
+
     /// Generate the prompt for a bootstrap agent that injects A2A CLI docs into a target project.
     static func bootstrapPrompt(targetPath: String) -> String {
         """
@@ -645,6 +808,33 @@ enum ProcessSpawner {
         return ("/bin/zsh", ["-l", "-c", "bash \(shellEscape(script))"])
     }
 
+    /// Shell command that launches an INTERACTIVE `claude --permission-mode auto`
+    /// session — used for Eternal's internal loop kind, which keeps ONE
+    /// session alive for the whole run instead of respawning `claude -p`
+    /// every turn.
+    ///
+    /// There is no wrapper script: the PTY runs `claude` directly. The
+    /// initial eternal prompt is fed in through Tado's prompt-queue
+    /// mechanism (it types as if the user typed) once the TUI becomes
+    /// idle. Continuation after the first turn is driven by two layers:
+    ///   1. Tado's idle-detection injecting a "continue" prompt every
+    ///      time `TerminalSession.status == .needsInput`.
+    ///   2. A `/loop 30s <continue>` command typed once after the first
+    ///      turn completes — Claude Code's own scheduler fires it on
+    ///      its interval as a backup driver.
+    ///
+    /// `--permission-mode auto` is load-bearing: without auto mode, the
+    /// session would stall on any tool-permission prompt. Auto mode
+    /// replaces the old `--dangerously-skip-permissions` hack.
+    static func internalEternalCommand(projectRoot: String) -> (executable: String, args: [String]) {
+        _ = projectRoot
+        // `claude` with no `-p` launches the interactive TUI. We rely on
+        // the user's PATH resolving `claude` — same contract as the
+        // regular per-session command.
+        let inner = "claude --permission-mode auto --setting-sources user,project,local"
+        return ("/bin/zsh", ["-l", "-c", inner])
+    }
+
     /// Env-var dictionary consumed by the eternal-loop wrapper. Merged
     /// with `ProcessSpawner.environment(...)` at spawn time so the
     /// wrapper inherits everything else (Tado IPC, PATH, etc.) AND gets
@@ -681,15 +871,37 @@ enum ProcessSpawner {
         return env
     }
 
+    /// Permission-mode flags for any Eternal-pipeline spawn (architect,
+    /// worker, interventor).
+    ///
+    /// Uses Claude Code's `auto` permission mode, shipped late Apr 2026
+    /// (see https://code.claude.com/docs/en/permissions). Auto mode runs
+    /// every tool call through an AI classifier that checks reversibility,
+    /// scope alignment, risk surface, and cascading effects. Safe calls
+    /// auto-approve with no prompt; risky ones still prompt.
+    ///
+    /// Auto mode replaces `--dangerously-skip-permissions` + the
+    /// `bypassPermissions` pair. The critical difference: bypass had a
+    /// hard-coded exception list for protected paths (`.git`, `.claude`,
+    /// `.vscode`, `.idea`, `.husky`) that STILL prompted. Auto has no
+    /// such exception — the classifier decides based on scope, and our
+    /// `permissions.allow` settings pre-approve everything bypass used to
+    /// prompt on. A live Eternal worker genuinely never halts.
+    ///
+    /// `--setting-sources=user,project,local` pins which config files
+    /// Claude Code loads. Without this, some CLI builds fall back to
+    /// user-only sources, skipping the project's `.claude/settings.json`
+    /// that Tado merged the Eternal allowlist into.
+    ///
+    /// `skipPermissions` is vestigial now — auto mode doesn't need the
+    /// danger flag. Kept in the signature so callers don't break; the
+    /// flag is no longer emitted regardless of the value.
     static func eternalPermissionFlags(skipPermissions: Bool) -> [String] {
-        var flags = [
-            "--permission-mode", "bypassPermissions",
+        _ = skipPermissions
+        return [
+            "--permission-mode", "auto",
             "--setting-sources", "user,project,local",
         ]
-        if skipPermissions {
-            flags.append("--dangerously-skip-permissions")
-        }
-        return flags
     }
 
     /// Prompt for a Mega-mode Eternal worker. Plain text — callers shell-escape

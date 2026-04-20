@@ -100,6 +100,7 @@ struct ProjectListView: View {
             onTap: { onSelect(project) },
             onBootstrapTools: { bootstrapTools(for: project) },
             onBootstrapTeam: { bootstrapTeam(for: project) },
+            onBootstrapAutoMode: { bootstrapAutoMode(for: project) },
             onDispatch: { createDispatchRunAndEdit(for: project) },
             onStart: { startMostRecentPhaseOne(for: project) },
             onDelete: { deleteProject(project) }
@@ -167,6 +168,15 @@ struct ProjectListView: View {
         ProjectActionsService.bootstrapTeam(
             project: project,
             teams: projectTeams,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+    }
+
+    private func bootstrapAutoMode(for project: Project) {
+        ProjectActionsService.bootstrapAutoMode(
+            project: project,
             modelContext: modelContext,
             terminalManager: terminalManager,
             appState: appState

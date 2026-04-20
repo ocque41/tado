@@ -21,6 +21,7 @@ struct ProjectCard: View {
     let onTap: () -> Void
     let onBootstrapTools: () -> Void
     let onBootstrapTeam: () -> Void
+    let onBootstrapAutoMode: () -> Void
     let onDispatch: () -> Void
     let onStart: () -> Void
     let onDelete: () -> Void
@@ -174,6 +175,9 @@ struct ProjectCard: View {
                 Label("Bootstrap team awareness", systemImage: "person.3")
             }
             .disabled(!hasTeams)
+            Button(action: onBootstrapAutoMode) {
+                Label("Bootstrap Claude auto mode", systemImage: "lock.open.rotation")
+            }
             Divider()
             Button(role: .destructive, action: onDelete) {
                 Label("Delete project", systemImage: "trash")

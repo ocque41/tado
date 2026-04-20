@@ -76,19 +76,38 @@ final class TerminalSession: Identifiable {
     /// the user having to touch Settings.
     @ObservationIgnored var effortFlagsOverride: [String]?
 
-    /// When true, this session spawns the Tado eternal-loop wrapper
-    /// (`.tado/eternal/hooks/eternal-loop.sh`) instead of invoking
-    /// `claude` directly. The wrapper respawns `claude -p "..."` per turn
-    /// with a fresh context, which is what makes the session genuinely
-    /// non-stop — Claude Code's in-session Stop-hook recursion counter
-    /// gets reset on every iteration.
-    ///
-    /// All the `eternal*` fields below are read by MetalTerminalTileView
-    /// at spawn time and passed to the wrapper as env vars.
+    /// When true, this session is an Eternal worker. The exact spawn
+    /// path depends on `eternalLoopKind`:
+    ///   - `external` → the `.tado/eternal/hooks/eternal-loop.sh`
+    ///     wrapper is launched; it respawns `claude -p` per turn.
+    ///   - `internal` → `claude --permission-mode auto` is launched
+    ///     directly (interactive, no wrapper). The initial eternal
+    ///     prompt is fed through the PTY by Tado, and Tado's idle-
+    ///     detection re-injects "continue" prompts each time the
+    ///     session goes `.needsInput`.
     @ObservationIgnored var isEternalWorker: Bool = false
+
+    /// `external` or `internal`. See `EternalRun.loopKind` doc for the
+    /// behavioral split. Nil on non-eternal sessions.
+    @ObservationIgnored var eternalLoopKind: String?
+
     /// "mega" or "sprint" — the wrapper surfaces SPRINT-DONE detection only
     /// for sprint mode. Ignored when isEternalWorker is false.
     @ObservationIgnored var eternalMode: String?
+
+    /// Prompt the internal-mode driver re-injects every time the session
+    /// goes `.needsInput`. Set at spawn time by `EternalService.spawnWorker`
+    /// to something like "continue the eternal task — read crafted.md,
+    /// do one more iteration, append to progress.md". Nil for external
+    /// mode (the external wrapper owns its own continuation).
+    @ObservationIgnored var eternalContinuePrompt: String?
+
+    /// Tracks whether Tado has already typed `/loop <interval> …` into
+    /// this session. Flipped after the first `.needsInput` transition
+    /// for internal mode so the `/loop` secondary driver gets installed
+    /// exactly once. The primary driver (Tado's per-idle injection)
+    /// keeps firing regardless.
+    @ObservationIgnored var eternalLoopCommandInstalled: Bool = false
     /// Completion marker, e.g. "ETERNAL-DONE". The wrapper exits when a
     /// claude -p stdout emits this on its own line.
     @ObservationIgnored var eternalDoneMarker: String?
@@ -189,12 +208,52 @@ final class TerminalSession: Identifiable {
         }
     }
 
-    /// Called by the activity timer — if idle and queue has items, send next
+    /// Called by the activity timer — if idle and queue has items, send next.
+    ///
+    /// For internal-mode Eternal workers, this function also doubles as the
+    /// PRIMARY continuation driver. Every time the session goes idle after
+    /// the initial prompt, `drainQueueIfReady` re-fills the queue with
+    /// `eternalContinuePrompt` so the next `.needsInput` has something to
+    /// send. On the very first idle-after-initial-prompt (detected via
+    /// `eternalLoopCommandInstalled`), it also enqueues the `/loop` command
+    /// as the SECONDARY continuation driver, which Claude Code's own
+    /// scheduler fires on a 30s interval for up to a week.
     func drainQueueIfReady() {
         guard status == .needsInput, !promptQueue.isEmpty else { return }
         let next = promptQueue.removeFirst()
         sendToTerminal(next)
         markActivity()
+        refillQueueForInternalEternalIfNeeded()
+    }
+
+    /// Keep an internal-mode Eternal worker's prompt queue non-empty.
+    /// Called after every successful drain.
+    ///
+    /// On first call post-initial-prompt: enqueue `/loop 30s <continue>`
+    /// first, then the continue prompt. The `/loop` command goes out on
+    /// the NEXT idle (turn 2), installing Claude Code's own scheduler.
+    /// After that, every subsequent drain refills with one continue
+    /// prompt so Tado's own idle injection keeps firing turn-by-turn.
+    ///
+    /// The two layers run in parallel: Tado's injection provides
+    /// low-latency iteration (continues fire ~5s after each turn ends),
+    /// and `/loop` provides resilience (continues still fire on its 30s
+    /// cron even if Tado's main loop hiccups).
+    private func refillQueueForInternalEternalIfNeeded() {
+        guard isEternalWorker,
+              eternalLoopKind == "internal",
+              let continuePrompt = eternalContinuePrompt,
+              !continuePrompt.isEmpty
+        else { return }
+
+        if !eternalLoopCommandInstalled {
+            eternalLoopCommandInstalled = true
+            // Queue the /loop command first — it'll fire on the next
+            // idle transition (turn 2). Continue prompt goes second so
+            // it lands on turn 3.
+            promptQueue.append("/loop 30s \(continuePrompt)")
+        }
+        promptQueue.append(continuePrompt)
     }
 
     func markActivity() {
