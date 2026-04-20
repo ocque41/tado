@@ -41,11 +41,18 @@ struct EternalFileModal: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     modeSegmented
-                    modeBlurb
                     briefEditor
                     markerField
                     loopKindPicker
-                    fullAutoToggle
+                    // FULL AUTO toggle only applies to external-mode workers
+                    // (it flips `eternalSkipPermissionsFlag`, which the
+                    // eternal-loop.sh wrapper reads to add
+                    // `--dangerously-skip-permissions` to each `claude -p`).
+                    // Internal mode uses `--permission-mode auto` regardless,
+                    // so the toggle would be misleading there.
+                    if loopKind == "external" {
+                        fullAutoToggle
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
@@ -140,6 +147,7 @@ struct EternalFileModal: View {
         HStack(spacing: 8) {
             modeButton(label: "Mega", value: "mega")
             modeButton(label: "Sprint", value: "sprint")
+            InfoTip(text: "Mega: one long plan executed end-to-end, single crafted.md, stops when the plan is complete. Sprint: repeating improvement cycles (implement → evaluate → improve) that run forever until you stop them or the done marker fires.")
             Spacer()
         }
     }
@@ -155,15 +163,6 @@ struct EternalFileModal: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-    }
-
-    private var modeBlurb: some View {
-        Text(mode == "sprint"
-             ? "Sprint: infinite improvement sprints. Implement → evaluate → improve, forever. Stops only when you say so."
-             : "Mega: one big plan, executed end-to-end. Stops when the plan is complete.")
-            .font(Typography.bodySm)
-            .foregroundStyle(Palette.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Brief editor
@@ -226,21 +225,35 @@ struct EternalFileModal: View {
 
     private var loopKindPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("SESSION STYLE")
-                .font(Typography.microBold)
-                .tracking(0.8)
-                .foregroundStyle(Palette.textTertiary)
+            HStack(spacing: 6) {
+                Text("SESSION STYLE")
+                    .font(Typography.microBold)
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.textTertiary)
+                InfoTip(text: "Normal: fresh `claude -p` spawns every turn via the eternal-loop wrapper. Cheap tokens, no mid-turn memory (each iteration re-reads crafted.md + progress.md). Default and reliable. Continuous: one interactive `claude` session stays alive for the whole run. Context grows and auto-compacts; Tado injects a \"continue\" prompt on idle and installs `/loop` as backup. Requires auto mode — Bootstrap the project first.")
+            }
             HStack(spacing: 8) {
                 loopKindButton(label: "Normal (per-turn)", value: "external")
                 loopKindButton(label: "Continuous", value: "internal")
                 Spacer()
             }
-            Text(loopKind == "internal"
-                 ? "Continuous: ONE interactive `claude` session stays alive for the whole run. Context grows turn-over-turn and auto-compacts. Tado keeps it iterating by injecting a \"continue\" prompt every time the session goes idle, backed up by Claude Code's built-in `/loop`. Requires auto mode — use the Bootstrap button in the project menu first."
-                 : "Normal (per-turn): fresh `claude -p` invocation every turn via the eternal-loop wrapper. Cheap tokens, no mid-turn memory (each iteration reads crafted.md + progress.md from scratch). This is the default and the reliable workhorse.")
+            // Subtitle that swaps with the selection. Surfaces the
+            // auto-mode + Opus-4.7 + Bootstrap-prerequisite constraints
+            // for Continuous so a user on the wrong plan or pre-Bootstrap
+            // finds out before starting, not three hours into a stalled
+            // session.
+            Text(loopKindSubtitle)
                 .font(Typography.bodySm)
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var loopKindSubtitle: String {
+        if loopKind == "internal" {
+            return "Uses `--permission-mode auto` — Claude Code's classifier-gated autonomy mode, available for Opus 4.7 on Max/Teams/Enterprise plans. A classifier judges each tool call so the worker runs without babysitting. Run \"Bootstrap Claude auto mode\" from the project ⋯ menu first to install the required settings. Tado pins Opus 4.7 for Continuous runs automatically."
+        } else {
+            return "Fresh `claude -p` per turn via the eternal-loop.sh wrapper. Model follows Settings; the bypass toggle below controls per-turn `--dangerously-skip-permissions`."
         }
     }
 
@@ -260,23 +273,20 @@ struct EternalFileModal: View {
     // MARK: - Full Auto
 
     private var fullAutoToggle: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Toggle(isOn: $skipPermissions) { EmptyView() }
                 .labelsHidden()
                 .toggleStyle(.switch)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("FULL AUTO  (--dangerously-skip-permissions)")
+            HStack(spacing: 6) {
+                Text("SKIP PROMPTS (EXTERNAL)")
                     .font(Typography.microBold)
                     .tracking(0.8)
                     .foregroundStyle(skipPermissions ? Palette.success : Palette.warning)
-                Text(skipPermissions
-                     ? "Agent runs non-stop without permission prompts. This is the default — the eternal loop stalls on any prompt, so leave this on unless you specifically want to intercept tool calls."
-                     : "Agent will pause on commands Claude Code considers dangerous. The loop will stall until you approve each prompt. You almost certainly don't want this.")
-                    .font(Typography.bodySm)
-                    .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                InfoTip(text: "Passes --dangerously-skip-permissions to the external-mode `claude -p` wrapper on every turn. On (default): agent runs non-stop without permission prompts. Off: agent pauses on any tool Claude considers dangerous, which will stall an eternal run — you almost certainly don't want this. Has no effect on Continuous mode (that uses --permission-mode auto regardless).")
             }
+
+            Spacer()
         }
         .padding(12)
         .background(skipPermissions ? Palette.surfaceElevated : Palette.warning.opacity(0.08))

@@ -36,7 +36,7 @@ struct SettingsView: View {
             // Settings form
             Form {
                 Section("Engine") {
-                    Picker("When you press Enter, run:", selection: Binding(
+                    Picker(selection: Binding(
                         get: { settings.engine },
                         set: { settings.engine = $0; try? modelContext.save() }
                     )) {
@@ -48,29 +48,44 @@ struct SettingsView: View {
                             }
                             .tag(engine)
                         }
+                    } label: {
+                        labelWithTip(
+                            "When you press Enter, run:",
+                            "Which CLI spawns when you press Enter on a new todo. Claude and Codex share the same tile plumbing but have different flags, models, and agent formats."
+                        )
                     }
                     .pickerStyle(.radioGroup)
                 }
 
                 Section("Mode") {
                     if settings.engine == .claude {
-                        Picker("Permission mode:", selection: Binding(
+                        Picker(selection: Binding(
                             get: { settings.claudeMode },
                             set: { settings.claudeMode = $0; try? modelContext.save() }
                         )) {
                             ForEach(ClaudeMode.allCases, id: \.self) { mode in
                                 Text(mode.displayName).tag(mode)
                             }
+                        } label: {
+                            labelWithTip(
+                                "Permission mode:",
+                                "How Claude handles tool-permission prompts. Ask pauses the tile for each tool; Delegate lets the agent auto-approve within its sandbox; Skip disables prompts entirely (use only with Full Auto enabled upstream)."
+                            )
                         }
                         .pickerStyle(.menu)
                     } else {
-                        Picker("Approval mode:", selection: Binding(
+                        Picker(selection: Binding(
                             get: { settings.codexMode },
                             set: { settings.codexMode = $0; try? modelContext.save() }
                         )) {
                             ForEach(CodexMode.allCases, id: \.self) { mode in
                                 Text(mode.displayName).tag(mode)
                             }
+                        } label: {
+                            labelWithTip(
+                                "Approval mode:",
+                                "How Codex prompts before running a command. Matches Codex's own --approval flag."
+                            )
                         }
                         .pickerStyle(.menu)
                     }
@@ -78,23 +93,33 @@ struct SettingsView: View {
 
                 Section("Model") {
                     if settings.engine == .claude {
-                        Picker("Claude model:", selection: Binding(
+                        Picker(selection: Binding(
                             get: { settings.claudeModel },
                             set: { settings.claudeModel = $0; try? modelContext.save() }
                         )) {
                             ForEach(ClaudeModel.allCases, id: \.self) { model in
                                 Text(model.displayName).tag(model)
                             }
+                        } label: {
+                            labelWithTip(
+                                "Claude model:",
+                                "Default Claude model for new tiles. Per-session overrides from dispatch or eternal frontmatter still win."
+                            )
                         }
                         .pickerStyle(.menu)
                     } else {
-                        Picker("Codex model:", selection: Binding(
+                        Picker(selection: Binding(
                             get: { settings.codexModel },
                             set: { settings.codexModel = $0; try? modelContext.save() }
                         )) {
                             ForEach(CodexModel.allCases, id: \.self) { model in
                                 Text(model.displayName).tag(model)
                             }
+                        } label: {
+                            labelWithTip(
+                                "Codex model:",
+                                "Default Codex model for new tiles."
+                            )
                         }
                         .pickerStyle(.menu)
                     }
@@ -102,23 +127,33 @@ struct SettingsView: View {
 
                 Section("Effort") {
                     if settings.engine == .claude {
-                        Picker("Thinking effort:", selection: Binding(
+                        Picker(selection: Binding(
                             get: { settings.claudeEffort },
                             set: { settings.claudeEffort = $0; try? modelContext.save() }
                         )) {
                             ForEach(ClaudeEffort.allCases, id: \.self) { effort in
                                 Text(effort.displayName).tag(effort)
                             }
+                        } label: {
+                            labelWithTip(
+                                "Thinking effort:",
+                                "Reasoning depth Claude applies before each response. Higher = slower and more thorough."
+                            )
                         }
                         .pickerStyle(.menu)
                     } else {
-                        Picker("Reasoning effort:", selection: Binding(
+                        Picker(selection: Binding(
                             get: { settings.codexEffort },
                             set: { settings.codexEffort = $0; try? modelContext.save() }
                         )) {
                             ForEach(CodexEffort.allCases, id: \.self) { effort in
                                 Text(effort.displayName).tag(effort)
                             }
+                        } label: {
+                            labelWithTip(
+                                "Reasoning effort:",
+                                "Reasoning depth Codex applies. Higher = slower and more thorough."
+                            )
                         }
                         .pickerStyle(.menu)
                     }
@@ -126,68 +161,85 @@ struct SettingsView: View {
 
                 Section {
                     if settings.engine == .claude {
-                        Toggle("Fullscreen Claude UI (disables scrollback)", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { settings.claudeNoFlicker },
                             set: { settings.claudeNoFlicker = $0; try? modelContext.save() }
-                        ))
-                        Toggle("Mouse + clickable UI", isOn: Binding(
+                        )) {
+                            labelWithTip(
+                                "Fullscreen Claude UI",
+                                "Switches Claude Code into its fullscreen (alt-screen) UI. Tile-level scrollback is replaced by Claude's own scrollable message history — use the wheel with Mouse enabled to scroll through it. Restart the session to apply."
+                            )
+                        }
+                        Toggle(isOn: Binding(
                             get: { settings.claudeMouseEnabled },
                             set: { settings.claudeMouseEnabled = $0; try? modelContext.save() }
-                        ))
+                        )) {
+                            labelWithTip(
+                                "Mouse + clickable UI",
+                                "Forwards mouse events to Claude Code so its fullscreen UI receives clicks and wheel scrolls. Required for the CLI's own scrollback to respond to the wheel."
+                            )
+                        }
                         .disabled(!settings.claudeNoFlicker)
                         Stepper(
-                            "Scroll speed: \(settings.claudeScrollSpeed)x",
                             value: Binding(
                                 get: { settings.claudeScrollSpeed },
                                 set: { settings.claudeScrollSpeed = $0; try? modelContext.save() }
                             ),
                             in: 1...20
-                        )
+                        ) {
+                            labelWithTip(
+                                "Scroll speed: \(settings.claudeScrollSpeed)x",
+                                "Lines scrolled per wheel notch inside Claude's fullscreen UI."
+                            )
+                        }
                         .disabled(!settings.claudeNoFlicker)
-                        Text("Off (default) keeps Claude Code in streaming mode so the tile's scrollback captures past output — two-finger scroll up to see earlier messages. On uses Boris Cherny's fullscreen UI: prettier but alt-screen locks the tile to the live frame. Sets CLAUDE_CODE_NO_FLICKER, CLAUDE_CODE_DISABLE_MOUSE, and CLAUDE_CODE_SCROLL_SPEED. Restart the session to apply.")
-                            .font(Typography.caption)
-                            .foregroundStyle(Palette.textSecondary)
                     } else {
-                        Toggle("Allow alternate-screen buffer", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { settings.codexAlternateScreen },
                             set: { settings.codexAlternateScreen = $0; try? modelContext.save() }
-                        ))
-                        Text("Codex's equivalent of NO_FLICKER. Off keeps `--no-alt-screen` on, which is required for Codex to render correctly inside Tado tiles. Turn on only if you're testing a Codex build that handles alt-screen in embedded terminals.")
-                            .font(Typography.caption)
-                            .foregroundStyle(Palette.textSecondary)
+                        )) {
+                            labelWithTip(
+                                "Allow alternate-screen buffer",
+                                "Codex's alt-screen toggle. Off keeps --no-alt-screen on, which is required for Codex to render correctly in embedded tiles today. Turn on only when testing a Codex build that handles alt-screen."
+                            )
+                        }
                     }
                 } header: {
                     Text("Harness Display")
                 }
 
                 Section {
-                    Toggle("Random tile color per session", isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { settings.randomTileColor },
                         set: { settings.randomTileColor = $0; try? modelContext.save() }
-                    ))
-                    Text("Each new terminal tile picks a random theme from a curated palette of Claude colors and macOS Terminal classics. Existing tiles keep their current color.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
+                    )) {
+                        labelWithTip(
+                            "Random tile color per session",
+                            "New tiles pick a random theme from a curated palette. Existing tiles keep their current color."
+                        )
+                    }
 
-                    Picker("Default theme:", selection: Binding(
+                    Picker(selection: Binding(
                         get: { settings.defaultThemeId },
                         set: { settings.defaultThemeId = $0; try? modelContext.save() }
                     )) {
                         ForEach(TerminalTheme.all) { theme in
                             Text(theme.name).tag(theme.id)
                         }
+                    } label: {
+                        labelWithTip(
+                            "Default theme:",
+                            "Theme used for new tiles when random colors is off. Applies background, foreground, and (when the theme supplies one) the ANSI palette."
+                        )
                     }
                     .pickerStyle(.menu)
                     .disabled(settings.randomTileColor)
-                    Text("Used for new tiles when random colors is off. Sets the background + foreground and (for themes that specify one) the ANSI palette. Existing tiles keep their theme.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
                 } header: {
                     Text("Tile Appearance")
                 }
 
                 Section {
-                    Picker("Terminal font:", selection: Binding(
+                    Picker(selection: Binding(
                         get: { settings.terminalFontFamily },
                         set: { settings.terminalFontFamily = $0; try? modelContext.save() }
                     )) {
@@ -196,57 +248,72 @@ struct SettingsView: View {
                         ForEach(FontMetrics.monospaceFamilyNames(), id: \.self) { family in
                             Text(family).tag(family)
                         }
+                    } label: {
+                        labelWithTip(
+                            "Terminal font:",
+                            "Only fixed-pitch fonts are listed — proportional faces break cell alignment. Picking a missing font falls back to SF Mono silently."
+                        )
                     }
                     .pickerStyle(.menu)
-                    Text("Only fonts with the fixed-pitch trait are listed — proportional faces would break cell alignment. Picking a missing font silently falls back to SF Mono.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
 
                     Stepper(
-                        "Terminal font size: \(settings.terminalFontSize) pt",
                         value: Binding(
                             get: { settings.terminalFontSize },
                             set: { settings.terminalFontSize = $0; try? modelContext.save() }
                         ),
                         in: 9...24
-                    )
-                    Text("Monospace point size used by the Metal renderer. Changes apply to tiles spawned after the setting moves; existing tiles keep their current size so scrollback geometry stays stable.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
+                    ) {
+                        labelWithTip(
+                            "Terminal font size: \(settings.terminalFontSize) pt",
+                            "Monospace point size. Applies to tiles spawned after the change; existing tiles keep their current size."
+                        )
+                    }
 
-                    Toggle("Blink cursor", isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { settings.cursorBlink },
                         set: { settings.cursorBlink = $0; try? modelContext.save() }
-                    ))
-                    Text("When on, the Metal renderer hides the cursor every ~530 ms (Terminal.app cadence). Off keeps the cursor solid, useful for screen recordings.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
+                    )) {
+                        labelWithTip(
+                            "Blink cursor",
+                            "Hides the cursor every ~530 ms while idle. Matches Terminal.app. Off keeps it solid for clean screen recordings."
+                        )
+                    }
 
-                    Picker("Bell", selection: Binding(
+                    Picker(selection: Binding(
                         get: { settings.bellMode },
                         set: { settings.bellMode = $0; try? modelContext.save() }
                     )) {
                         ForEach(BellMode.allCases) { mode in
                             Text(mode.label).tag(mode)
                         }
+                    } label: {
+                        labelWithTip(
+                            "Bell",
+                            "How a terminal bell (0x07) is surfaced. Visual flashes the tile; Audio plays the system beep."
+                        )
                     }
-                    Text("How a terminal bell (0x07) is surfaced — agents ring this for notifications. Visual flashes the tile background; useful when audio is muted.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
                 } header: {
                     Text("Rendering")
                 }
 
                 Section("Canvas") {
                     Stepper(
-                        "Grid columns: \(settings.gridColumns)",
                         value: Binding(
                             get: { settings.gridColumns },
                             set: { settings.gridColumns = $0; try? modelContext.save() }
                         ),
                         in: 2...6
-                    )
+                    ) {
+                        labelWithTip(
+                            "Grid columns: \(settings.gridColumns)",
+                            "How many tiles fit per canvas row before wrapping. Tile size is fixed (820×540) — this only moves the wrap point. Existing tiles keep their positions; the new column count applies to tiles spawned from now on."
+                        )
+                    }
                 }
+
+                NotificationsSection()
+
+                StorageSection()
 
                 Section("Shortcuts") {
                     LabeledContent("Cycle pages", value: "Ctrl + Tab")
@@ -270,5 +337,152 @@ struct SettingsView: View {
         }
         .frame(width: 480, height: 720)
         .background(Palette.background)
+    }
+
+    /// Inline label used by Pickers / Toggles / Steppers in this view so the
+    /// control keeps its native layout while carrying an `InfoTip` next to
+    /// the label text.
+    @ViewBuilder
+    private func labelWithTip(_ label: String, _ tip: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+            InfoTip(text: tip)
+        }
+    }
+}
+
+// MARK: - Notifications
+
+/// Settings section for the notification substrate. Reads + writes
+/// `global.json` via `ScopedConfig` (not SwiftData) — the `AppSettings`
+/// row does not carry notification state. Changes round-trip through
+/// the central `ScopedConfig.setGlobal` so the file on disk is the
+/// canonical answer regardless of whether the user edits here, in
+/// a text editor, or via `tado-config`.
+private struct NotificationsSection: View {
+    @State private var settingsSnapshot: GlobalSettings = GlobalSettings()
+
+    var body: some View {
+        Section {
+            Toggle("In-app banners", isOn: bind(\.notifications.channels.inApp))
+            Toggle("macOS system notifications", isOn: bind(\.notifications.channels.system))
+            Toggle("Sounds", isOn: bind(\.notifications.channels.sound))
+            Toggle("Dock badge", isOn: bind(\.notifications.channels.dockBadge))
+
+            Toggle("Quiet hours", isOn: bind(\.notifications.quietHours.enabled))
+            if settingsSnapshot.notifications.quietHours.enabled {
+                HStack {
+                    Text("From")
+                    TextField("22:00", text: bind(\.notifications.quietHours.from))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+                    Text("to")
+                    TextField("08:00", text: bind(\.notifications.quietHours.to))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+                    Spacer()
+                }
+                .font(Typography.monoCaption)
+            }
+
+            LabeledContent("Events routed") {
+                Text("\(settingsSnapshot.notifications.eventRouting.count) types")
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+        } header: {
+            Text("Notifications")
+        }
+        .onAppear { settingsSnapshot = ScopedConfig.shared.get() }
+        .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
+            // Cheap poll so the toggles reflect external edits (CLI,
+            // text editor) without requiring a dedicated @Observable
+            // wrapper around GlobalSettings.
+            let fresh = ScopedConfig.shared.get()
+            if fresh != settingsSnapshot { settingsSnapshot = fresh }
+        }
+    }
+
+    private func bind<T>(_ keyPath: WritableKeyPath<GlobalSettings, T>) -> Binding<T> {
+        Binding(
+            get: { settingsSnapshot[keyPath: keyPath] },
+            set: { newValue in
+                ScopedConfig.shared.setGlobal { $0[keyPath: keyPath] = newValue }
+                settingsSnapshot = ScopedConfig.shared.get()
+            }
+        )
+    }
+}
+
+// MARK: - Storage
+
+/// Surfaces the canonical on-disk layout so users can jump straight to
+/// the files Tado is reading / writing, plus quick export + import.
+private struct StorageSection: View {
+    @State private var lastExport: String?
+    @State private var importError: String?
+
+    var body: some View {
+        Section {
+            LabeledContent("Root") {
+                Text(StorePaths.root.path)
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            HStack {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([StorePaths.root])
+                }
+                Button("Open event log") {
+                    NSWorkspace.shared.open(StorePaths.eventsCurrent)
+                }
+                .disabled(!FileManager.default.fileExists(atPath: StorePaths.eventsCurrent.path))
+            }
+
+            HStack {
+                Button("Export backup…") { exportBackup() }
+                Button("Import backup…") { importBackup() }
+            }
+            if let lastExport {
+                Text("Exported: \(lastExport)")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+            if let importError {
+                Text("Import failed: \(importError)")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.danger)
+            }
+        } header: {
+            Text("Storage")
+        }
+    }
+
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "tado-backup.tar.gz"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let archive = BackupManager.createBackup(reason: "manual-export") {
+            let fm = FileManager.default
+            try? fm.removeItem(at: url)
+            try? fm.moveItem(at: archive, to: url)
+            lastExport = url.lastPathComponent
+        }
+    }
+
+    private func importBackup() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = []
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if BackupManager.restore(from: url) {
+            importError = nil
+        } else {
+            importError = "tar -xzf failed — see Console.app for details"
+        }
     }
 }

@@ -70,6 +70,48 @@ tado-deploy "implement auth module" --agent backend  # Deploy a backend agent on
 
 **IPC internals:** File-based via `/tmp/tado-ipc/`. Each session has `inbox/`, `outbox/`, and `log` in its directory. Terminal output is flushed to the `log` file every 5 seconds. External messages go to `/tmp/tado-ipc/a2a-inbox/`. See `IPCBroker.swift` and `IPCMessage.swift`.
 
+## Persistence (settings / memory / events)
+
+All canonical state lives under `~/Library/Application Support/Tado/`:
+
+```
+settings/global.json        user-global settings (scope 4)
+memory/user.md              user-level long-lived context
+memory/user.json            user-level cached facts
+events/current.ndjson       append-only event log (one JSON per line)
+events/archive/*.ndjson     rotated daily
+backups/tado-backup-*.tar.gz  auto-snapshot pre-migration + manual exports
+cache/                      SwiftData store (rebuildable, not canonical)
+version                     last-applied migration id
+```
+
+Per-project state lives under `<project>/.tado/`:
+
+```
+config.json                 project-shared settings (commit by default)
+local.json                  project-local overrides (gitignored by default)
+memory/project.md           long-lived project context
+memory/notes/<ISO>-*.md     timestamped running notes
+.gitignore                  auto-maintained by Tado (honors commitPolicy)
+eternal/runs/<uuid>/        per-run state (existing)
+dispatch/runs/<uuid>/       per-run state (existing)
+```
+
+**Scope hierarchy** (highest wins on merge): runtime > project-local > project-shared > user-global > built-in default.
+
+**Canonical store is JSON files on disk**, atomically written via `AtomicStore` (flock + tmp + rename). SwiftData is a rebuildable cache fed by `AppSettingsSync` and `ProjectSettingsSync`. If the SwiftData store corrupts, `rm -rf cache/` and relaunch — it rebuilds from JSON.
+
+**Event system** — every meaningful state transition (`terminal.completed`, `eternal.phaseCompleted`, `ipc.messageReceived`, user broadcasts) publishes a typed `TadoEvent` through `EventBus`. Deliverers subscribe: `SoundPlayer` (audio), `DockBadgeUpdater` (unread count), `SystemNotifier` (macOS banner), `InAppBannerOverlay` (transient pill), `EventPersister` (NDJSON log). Routing + mute + quiet hours are configured in `global.json → notifications`.
+
+**CLI** (alongside `tado-list` / `-send` / `-read` / `-deploy`):
+```bash
+tado-config {get,set,list,path,export,import} [scope] [key] [value]
+tado-notify {send "<title>",tail}
+tado-memory {read,note,search,path} [scope]
+```
+
+**MCP** (via tado-mcp server, registered into Claude Code at user scope): `tado_config_{get,set,list}`, `tado_memory_{read,append,search}`, `tado_notify`, `tado_events_query`.
+
 ## Key Files
 
 - `ProcessSpawner.swift` — Builds the CLI command for the selected engine
@@ -78,3 +120,15 @@ tado-deploy "implement auth module" --agent backend  # Deploy a backend agent on
 - `CanvasLayout.swift` — Grid position math and tile dimensions
 - `IPCBroker.swift` — File-based IPC broker, a2a inbox watcher, CLI tool generation
 - `IPCMessage.swift` — IPC message model and registry types
+- `Persistence/AtomicStore.swift` — atomic write + flock helper (shared Swift / CLI / bash)
+- `Persistence/ScopedConfig.swift` — 5-scope config facade
+- `Persistence/FileWatcher.swift` — debounced DispatchSource wrapper
+- `Persistence/AppSettingsSync.swift` / `ProjectSettingsSync.swift` — JSON ↔ SwiftData bridges
+- `Persistence/MigrationRunner.swift` + `Migrations/` — monotonic migration runner (auto-backup pre-apply)
+- `Persistence/BackupManager.swift` — tarball snapshot + restore
+- `Events/EventBus.swift` + `Events/TadoEvent.swift` — pub/sub hub
+- `Events/EventPersister.swift` — NDJSON appender + daily rotation
+- `Events/Deliverers/*.swift` — SoundPlayer, DockBadgeUpdater, SystemNotifier
+- `Events/RunEventWatcher.swift` — diff state.json / phases/ to emit eternal/dispatch events
+- `Views/InAppBannerOverlay.swift` — transient banner stack
+- `Views/NotificationsView.swift` — full history view (sidebar bell opens this)

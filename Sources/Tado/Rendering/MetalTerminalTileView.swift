@@ -75,6 +75,28 @@ struct MetalTerminalTileView: View {
                                 try? await Task.sleep(nanoseconds: 150_000_000)
                                 flashActive = false
                             }
+                        },
+                        onBell: { [weak session] in
+                            // Publish via the central bus so SoundPlayer
+                            // (and future deliverers / the NDJSON log)
+                            // see every bell — muted or not.
+                            guard let session else { return }
+                            EventBus.shared.publish(
+                                .terminalBell(
+                                    sessionID: session.id,
+                                    title: session.title,
+                                    projectName: session.projectName
+                                )
+                            )
+                        },
+                        onUserInput: { [weak session] in
+                            // User typed a key into this PTY — start the
+                            // idle-injection cooldown window so eternal
+                            // workers don't type over a Ctrl+C dialog
+                            // the user is trying to answer.
+                            MainActor.assumeIsolated {
+                                session?.noteUserInput()
+                            }
                         }
                     )
                     if flashActive {
@@ -141,7 +163,16 @@ struct MetalTerminalTileView: View {
             let kind = session.eternalLoopKind ?? "external"
             let cmd: (executable: String, args: [String])
             if kind == "internal" {
-                cmd = ProcessSpawner.internalEternalCommand(projectRoot: projectRoot)
+                // session.eternalModelID / .eternalEffortLevel are stamped
+                // from AppSettings at spawn time in EternalService.spawnWorker.
+                // Without threading them here the TUI would read the user's
+                // global ~/.claude/settings.json defaults and silently ignore
+                // Tado's picker.
+                cmd = ProcessSpawner.internalEternalCommand(
+                    projectRoot: projectRoot,
+                    modelID: session.eternalModelID,
+                    effortLevel: session.eternalEffortLevel
+                )
             } else {
                 cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
             }
@@ -235,9 +266,18 @@ struct MetalTerminalTileView: View {
             // TadoCore.Session.init? already logged + stashed the error.
             // Mirror it into @State so this tile's placeholder shows the
             // real cause instead of the generic pending text.
-            spawnError = TadoCore.lastSpawnError
+            let reason = TadoCore.lastSpawnError
                 ?? "tado_session_spawn returned null with no error detail"
+            spawnError = reason
             NSLog("tado: TadoCore.Session spawn failed for \(session.todoText)")
+            EventBus.shared.publish(
+                .terminalSpawnFailed(
+                    sessionID: session.id,
+                    title: session.title,
+                    reason: reason,
+                    projectName: session.projectName
+                )
+            )
             return
         }
         // Apply the tile's theme so blank / erased regions use the tile
@@ -254,6 +294,13 @@ struct MetalTerminalTileView: View {
             spawned.setAnsiPalette(palette)
         }
         session.coreSession = spawned
+        EventBus.shared.publish(
+            .terminalSpawned(
+                sessionID: session.id,
+                title: session.title,
+                projectName: session.projectName
+            )
+        )
     }
 
     // MARK: - Cell-size math

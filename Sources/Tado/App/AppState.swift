@@ -34,17 +34,24 @@ enum TerminalEngine: String, Codable, CaseIterable {
     }
 }
 
+/// Mirrors Claude Code's own Mode picker (Shift+⌘+M). Order matches the
+/// in-app menu so Tado's picker reads the same top-to-bottom.
+///
+/// `autoAcceptEdits` was removed when Claude Code dropped it from the main
+/// Mode menu in favor of `autoMode`, which is the new preferred long-
+/// running default (AI-classifier-gated permission grants; see
+/// `EternalService.mergeAutoModeKeys` for the settings.json side).
 enum ClaudeMode: String, Codable, CaseIterable {
     case askPermissions
-    case autoAcceptEdits
     case planMode
+    case autoMode
     case bypassPermissions
 
     var displayName: String {
         switch self {
         case .askPermissions: "Ask permissions"
-        case .autoAcceptEdits: "Auto accept edits"
         case .planMode: "Plan mode"
+        case .autoMode: "Auto mode"
         case .bypassPermissions: "Bypass permissions"
         }
     }
@@ -52,8 +59,8 @@ enum ClaudeMode: String, Codable, CaseIterable {
     var cliFlags: [String] {
         switch self {
         case .askPermissions:    return ["--permission-mode", "default"]
-        case .autoAcceptEdits:   return ["--permission-mode", "acceptEdits"]
         case .planMode:          return ["--permission-mode", "plan"]
+        case .autoMode:          return ["--permission-mode", "auto"]
         case .bypassPermissions: return ["--permission-mode", "bypassPermissions"]
         }
     }
@@ -85,10 +92,20 @@ enum CodexMode: String, Codable, CaseIterable {
     }
 }
 
+/// Mirrors Claude Code's Effort picker (Shift+⌘+E). Order matches the
+/// in-app menu: Low → Medium → High → Extra high → Max.
+///
+/// Claude Code v2.1.114+ accepts `--effort xhigh` for the "Extra high"
+/// tier. Older builds (verified rejection on v2.1.101) only accept
+/// `low|medium|high|max`; on those, a spawn using Extra high errors out
+/// with "option '--effort <level>' argument 'xhigh' is invalid" and the
+/// user falls back to High or Max. The raw value is `xhigh` (not
+/// `extra-high`) — that's the token the CLI parser expects.
 enum ClaudeEffort: String, Codable, CaseIterable {
     case low
     case medium
     case high
+    case extraHigh = "xhigh"
     case max
 
     var displayName: String {
@@ -96,6 +113,7 @@ enum ClaudeEffort: String, Codable, CaseIterable {
         case .low: "Low"
         case .medium: "Medium"
         case .high: "High"
+        case .extraHigh: "Extra high"
         case .max: "Max"
         }
     }
@@ -125,27 +143,32 @@ enum CodexEffort: String, Codable, CaseIterable {
     }
 }
 
+/// Mirrors Claude Code's Model picker (Shift+⌘+I). Order matches the
+/// in-app menu: Opus 4.7 → Opus 4.7 1M → Sonnet 4.6 → Haiku 4.5.
+///
+/// Opus 4.7 1M is the 1M-context variant. The CLI accepts the bracket
+/// form `--model "opus[1m]"` — verified on v2.1.101 against the live API
+/// (a budget-capped `claude -p "..."` spawn routes to the model and
+/// returns a response). The hyphenated `claude-opus-4-7-1m` form is
+/// NOT accepted ("model not found"), so the enum raw value uses the
+/// bracket form. Shell-quoting is handled by the spawn path:
+/// `ProcessSpawner` passes `cliFlags` as an argv array, so `[` and `]`
+/// never touch a shell that would glob them.
 enum ClaudeModel: String, Codable, CaseIterable {
     case opus47 = "claude-opus-4-7"
+    case opus47_1M = "opus[1m]"
     case sonnet46 = "claude-sonnet-4-6"
     case haiku45 = "claude-haiku-4-5"
 
     var displayName: String {
         switch self {
         case .opus47: "Opus 4.7"
+        case .opus47_1M: "Opus 4.7 1M"
         case .sonnet46: "Sonnet 4.6"
         case .haiku45: "Haiku 4.5"
         }
     }
 
-    /// Claude Code's `--model` flag takes a plain model id. Variants like
-    /// `opus[1m]` (1M context) are *not* resolvable through the CLI flag —
-    /// the parser rejects the bracketed suffix with "model not found". The
-    /// working entry points for 1M are the `/model opus[1m]` slash command,
-    /// `settings.json` with `"model": "opus[1m]"`, or the
-    /// `ANTHROPIC_MODEL=opus[1m]` env var. None of those belong in the
-    /// picker without a dedicated UI, so Tado's picker exposes plain ids
-    /// only and the 1M mode is reachable via the shell inside the tile.
     var cliFlags: [String] {
         return ["--model", rawValue]
     }
@@ -185,6 +208,9 @@ final class AppState {
     var showSidebar: Bool = false
     var showDoneList: Bool = false
     var showTrashList: Bool = false
+    /// Drives the Notifications history sheet (bell icon in sidebar
+    /// header). Opens on click, dismisses on Escape / Done button.
+    var showNotifications: Bool = false
     var pendingNavigationID: UUID? = nil
     var forwardTargetTodoID: UUID? = nil
     var activeProjectID: UUID? = nil

@@ -39,3 +39,10 @@ npm-debug.log*
 # Rust core build artifacts
 tado-core/target/
 tado-core/include/tado_core.h
+
+# Tado per-repo runtime state (Eternal/Dispatch runs on this repo).
+# These are generated on each run and are per-developer; they're not
+# part of the app's source.
+.tado/eternal/
+.tado/dispatch/
+.tado/memory/notes/

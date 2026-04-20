@@ -44,6 +44,20 @@ struct MetalTerminalView: NSViewRepresentable {
     /// includes a visual component. Coalesced by the Rust-side counter,
     /// so rapid-fire bells fire this at most once per idle-tick (~1 Hz).
     var onVisualBell: (() -> Void)? = nil
+    /// Invoked on the main actor on every bell, regardless of
+    /// `bellMode`. The tile view publishes a `terminal.bell` event
+    /// from this callback; `SoundPlayer` then decides whether to
+    /// beep (honoring quiet hours, channel mute, and per-event
+    /// routing). Visual flash stays local via `onVisualBell`.
+    var onBell: (() -> Void)? = nil
+    /// Called on the main actor each time the user actually types a
+    /// keystroke into the PTY via `keyDown`. Wire to
+    /// `TerminalSession.noteUserInput()` so eternal-worker auto-injection
+    /// yields while the user is mid-interaction. Distinct from `onDirty`,
+    /// which fires on terminal OUTPUT (claude's echo + redraws) — these
+    /// two signals diverge during modal TUI dialogs where the cursor
+    /// doesn't visibly move on each keystroke.
+    var onUserInput: (() -> Void)? = nil
 
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows, metrics: metrics)
@@ -54,6 +68,8 @@ struct MetalTerminalView: NSViewRepresentable {
         view.onIdleTick = onIdleTick
         view.onTitleChange = onTitleChange
         view.onVisualBell = onVisualBell
+        view.onBell = onBell
+        view.onUserInput = onUserInput
         return view
     }
 
@@ -66,6 +82,8 @@ struct MetalTerminalView: NSViewRepresentable {
         nsView.onIdleTick = onIdleTick
         nsView.onTitleChange = onTitleChange
         nsView.onVisualBell = onVisualBell
+        nsView.onBell = onBell
+        nsView.onUserInput = onUserInput
     }
 
     static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: ()) {
@@ -137,6 +155,8 @@ final class TerminalMTKView: MTKView {
     var onIdleTick: (() -> Void)?
     var onTitleChange: ((String) -> Void)?
     var onVisualBell: (() -> Void)?
+    var onBell: (() -> Void)?
+    var onUserInput: (() -> Void)?
     /// Mirror of the AppSettings value; controls how the bell drain
     /// dispatches audio + visual feedback.
     var bellMode: BellMode = .audible
@@ -375,6 +395,12 @@ final class TerminalMTKView: MTKView {
         let bytes = keymap.bytes(for: event, applicationCursor: session.applicationCursor)
         if !bytes.isEmpty {
             session.write(bytes)
+            // Signal the TerminalSession that the user typed so eternal-
+            // worker idle-injection can back off. Fires BEFORE the PTY
+            // write roundtrips into `onDirty` (claude's echo), so the
+            // cooldown starts from the keystroke itself, not from when
+            // the echo eventually paints.
+            onUserInput?()
         }
     }
 
@@ -718,15 +744,14 @@ extension TerminalMTKView: MTKViewDelegate {
             // one dispatch per drain — the Rust counter already bundled
             // rapid-fire bells. Dispatch honors `bellMode`.
             if session.takeBellCount() > 0 {
-                switch bellMode {
-                case .off:
-                    break
-                case .audible:
-                    NSSound.beep()
-                case .visual:
-                    onVisualBell?()
-                case .both:
-                    NSSound.beep()
+                // Central event publish — SoundPlayer decides whether
+                // to beep (channel mute, quiet hours, bellMode). Direct
+                // NSSound.beep was removed in Packet 4 so all audio
+                // paths funnel through one deliverer.
+                onBell?()
+                // Visual flash stays local: per-tile state the deliverer
+                // can't drive (it has no view reference).
+                if bellMode == .visual || bellMode == .both {
                     onVisualBell?()
                 }
             }

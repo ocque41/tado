@@ -206,6 +206,20 @@ final class IPCBroker {
             targetSession.unreadMessageCount += 1
             targetSession.enqueueOrSend(formatted)
         }
+        // Snippet for the notification body — first line, capped so
+        // the system banner doesn't balloon on a multi-page paste.
+        let snippet = message.body
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map { String($0.prefix(140)) } ?? ""
+        EventBus.shared.publish(
+            .ipcMessageReceived(
+                sessionID: targetSession.id,
+                title: targetSession.title,
+                snippet: snippet,
+                projectName: targetSession.projectName
+            )
+        )
     }
 
     // MARK: - Helper Scripts
@@ -609,6 +623,11 @@ final class IPCBroker {
         installScript(name: "tado-unsubscribe", from: binDir, to: localBin)
         installScript(name: "tado-topics", from: binDir, to: localBin)
         installScript(name: "tado-deploy", from: binDir, to: localBin)
+
+        // Packet 7 — settings / memory / notify CLIs. Share the same
+        // `~/.local/bin` install target so users get them on $PATH
+        // alongside the IPC tools.
+        CLIConfigMemoryNotify.writeAll(to: binDir, localBin: localBin)
     }
 
     private func installMCPServer() {

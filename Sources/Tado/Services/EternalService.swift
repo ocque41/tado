@@ -235,25 +235,62 @@ enum EternalService {
         // Kill any sessions linked to this run — worker, architect,
         // interventor, or anything else the spawn paths tagged with the
         // run id. Iterate on a snapshot because terminateSession mutates
-        // `sessions`.
+        // `sessions`. `hard: true` sends SIGKILL (not SIGTERM): we're
+        // about to remove the run dir, so open file descriptors need to
+        // be gone NOW. SIGKILL can't be caught, so the kernel reaps the
+        // process before we attempt `removeItem`.
         let linked = terminalManager.sessions.filter { $0.eternalRunID == run.id }
         for session in linked {
-            terminalManager.terminateSession(session.id)
+            terminalManager.terminateSession(session.id, hard: true)
         }
 
-        // Remove the run's on-disk dir. Best-effort — a worker mid-write
-        // might have a file open; the directory removal still succeeds on
-        // macOS since it's just unlinking the inodes. If it fails (e.g.
-        // permission on a mounted volume), we log and continue so the
-        // SwiftData row at least goes away.
-        do {
-            try FileManager.default.removeItem(at: runDir)
-        } catch {
-            NSLog("EternalService: deleteRun failed to remove \(runDir.path): \(error.localizedDescription)")
-        }
-
+        // The SwiftData row goes away synchronously — the UI should
+        // update immediately, regardless of how the on-disk cleanup ends
+        // up. Orphan run dirs are harmless (they're gitignored and not
+        // referenced by anything after the row is gone).
         modelContext.delete(run)
         try? modelContext.save()
+
+        // Remove the on-disk dir asynchronously with retries. Even after
+        // SIGKILL the kernel needs a moment to close the process's
+        // open fds; calling `removeItem` within the same run-loop tick
+        // can hit a race where the PTY's log file is still open in the
+        // dying process and the recursive delete fails on the parent
+        // rmdir. A 200 ms delay + one retry after 1 s covers practically
+        // every machine.
+        Task { @MainActor in
+            await Self.removeRunDirWithRetry(runDir, label: "EternalService")
+        }
+    }
+
+    /// Async directory-removal with backoff retry. Factored out so
+    /// Dispatch's parallel delete flow can reuse the same policy.
+    /// Logs NSError userInfo on the final failure so a future repro
+    /// surfaces the actual underlying code (permission denied, busy,
+    /// etc.) instead of just "couldn't be removed."
+    private static func removeRunDirWithRetry(_ runDir: URL, label: String) async {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: runDir.path) else { return }
+
+        // First attempt after the kernel reaps the SIGKILL'd process.
+        try? await Task.sleep(nanoseconds: 200_000_000)  // 200 ms
+        do {
+            try fm.removeItem(at: runDir)
+            return
+        } catch {
+            NSLog("\(label): first removeItem attempt on \(runDir.path) failed: \(error). Retrying after 1s.")
+        }
+
+        // Retry after a longer delay — covers slow fd-close races or
+        // a hook that briefly reopened a file in the dir.
+        try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1 s
+        do {
+            try fm.removeItem(at: runDir)
+        } catch let error as NSError {
+            NSLog("\(label): deleteRun failed to remove \(runDir.path) after retry. code=\(error.code) domain=\(error.domain) userInfo=\(error.userInfo)")
+        } catch {
+            NSLog("\(label): deleteRun failed to remove \(runDir.path) after retry: \(error)")
+        }
     }
 
     // MARK: - Hook installation
@@ -1430,8 +1467,20 @@ enum EternalService {
         //     kicks off the first turn; `eternalContinuePrompt` is
         //     what Tado types for every subsequent iteration.
         //
-        // Model/effort come from the user's AppSettings default.
+        // Model/effort come from the user's AppSettings default, EXCEPT for
+        // internal-mode workers. Internal mode ran via `claude
+        // --permission-mode auto`, which gates its classifier on Opus 4.7 +
+        // a Max/Teams/Enterprise plan per the official announcement. Sending
+        // `--permission-mode auto --model haiku` silently no-ops the
+        // classifier and stalls on the first permission prompt — the exact
+        // "babysitting" failure auto mode was built to remove. Hard-override
+        // to Opus 4.7 here so a non-Opus default in Settings doesn't footgun
+        // a Continuous run. External mode still honors the user's pick
+        // because its per-turn `claude -p` wrapper doesn't need auto mode.
         let loopKind = (run.loopKind == "internal") ? "internal" : "external"
+        let workerModelID: String = (loopKind == "internal")
+            ? ClaudeModel.opus47.rawValue
+            : settings.claudeModel.rawValue
         let continuePrompt: String? = loopKind == "internal"
             ? internalContinuePrompt(run: run, runDir: eternalRoot(run).path)
             : nil
@@ -1444,7 +1493,7 @@ enum EternalService {
             eternalLoopKind: loopKind,
             eternalMode: run.mode,
             eternalDoneMarker: run.completionMarker,
-            eternalModelID: settings.claudeModel.rawValue,
+            eternalModelID: workerModelID,
             eternalEffortLevel: settings.claudeEffort.rawValue,
             eternalSkipPermissionsFlag: run.skipPermissions,
             eternalContinuePrompt: continuePrompt,

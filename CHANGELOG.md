@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-20
+
+### Added
+
+- **Persistence subsystem** -- canonical state moves to on-disk JSON under `~/Library/Application Support/Tado/` (`settings/global.json`, `memory/user.md`, `events/current.ndjson`, `backups/`, `version`) with SwiftData as a rebuildable cache. Per-project state lives under `<project>/.tado/` (`config.json`, `local.json`, `memory/project.md`, `memory/notes/<ISO>-*.md`)
+- **Five-scope config hierarchy** (runtime > project-local > project-shared > user-global > built-in default) via `ScopedConfig`. External edits to any JSON file flow back into the app automatically -- `FileWatcher` debounces fs events, re-reads the file, and SwiftUI `@Query` observers redraw
+- **Atomic writes + advisory locks** -- every write goes through `AtomicStore` (Swift) or matching bash `flock + tmp + rename` (CLI). Concurrent writes from the app, a terminal, and a hook never tear
+- **Migration runner** -- monotonic numbered migrations (`Migration001_CreateGlobalJSON`, `Migration002_CreateProjectJSON`) seed JSON files from existing SwiftData rows on upgrade. Automatic tarball backup pre-apply into `backups/tado-backup-*.tar.gz` via `BackupManager`
+- **Event system** -- every state transition (`terminal.completed`, `eternal.phaseCompleted`, `dispatch.runDispatched`, `ipc.messageReceived`, user broadcasts) publishes a typed `TadoEvent` through `EventBus`. Deliverers subscribe independently: `SoundPlayer` (audio), `DockBadgeUpdater` (unread count), `SystemNotifier` (macOS banner), `InAppBannerOverlay` (transient in-app pill), `EventPersister` (append NDJSON, rotate daily)
+- **RunEventWatcher** -- diffs `state.json` and `phases/*.json` under each Eternal/Dispatch run dir to emit lifecycle events without polluting the service code
+- **Notifications UI** -- bell icon in the sidebar header with unread badge opens a full-history sheet (`NotificationsView`) with severity filter (info/success/warning/error), free-text search, and per-row context menu (copy title, copy JSON)
+- **`tado-config` CLI** -- `get`, `set`, `list`, `path`, `export`, `import` across `global` / `project` / `project-local` scopes. Uses the same atomic-store discipline as the Swift app
+- **`tado-memory` CLI** -- `read`, `note`, `search`, `path` for user-level and project-level markdown memory
+- **`tado-notify` CLI** -- `send "<title>"` publishes a user-visible event; `tail` streams the live event log
+- **MCP surface** (`tado-mcp` server) extended with `tado_config_{get,set,list}`, `tado_memory_{read,append,search}`, `tado_notify`, `tado_events_query`. Any MCP-compatible agent can now read/write Tado's settings, append long-lived notes, raise in-app notifications, and query the event history
+- **Concurrent runs per project** -- `EternalRun` and `DispatchRun` are SwiftData-modelled so every project can carry multiple megas, sprints, and dispatches in flight simultaneously. UI tracks each run's lifecycle independently; per-run directories (`.tado/eternal/runs/<uuid>/`, `.tado/dispatch/runs/<uuid>/`) isolate state
+- **Eternal auto mode** -- Continuous ("internal") Eternal runs now use Claude Code's `--permission-mode auto` (classifier-gated autonomy, Opus 4.7 + Max/Teams/Enterprise plan). Replaces the old `--dangerously-skip-permissions` bypass flow. Tado hard-pins Opus 4.7 for internal runs so a non-Opus default in Settings can't footgun a Continuous sprint
+- **Dual-layer auto-mode config injector** -- one-shot agent writes the classifier's trust context into `~/.claude/settings.json` (user scope, affects every Claude Code session on the machine) AND `<project>/.claude/settings.local.json` (gitignored project-local). The committed `<project>/.claude/settings.json` is explicitly left untouched so Tado trust context doesn't leak into teammates' checkouts
+- **Per-phase model / effort** -- Eternal architect plans can now specify `model` and `effort` per phase, so cheaper phases run on Haiku 4.5 while heavier phases escalate to Opus 4.7
+- **Architect STEP 5.5 self-check** -- coverage audit + stack-drift detection inside the architect's plan-shaping loop. Composite evaluator score on the sprint-2 dogfood run reached 0.938
+- **Opus 4.7 1M context variant** -- model picker adds "Opus 4.7 1M" using the bracket-form model id `opus[1m]`. Flags are now shell-escaped at spawn time so the brackets survive zsh's `nomatch` without aborting the spawn
+- **Extra high effort** -- `ClaudeEffort.extraHigh` (`--effort xhigh`) exposed in the picker; verified to match Claude Code v2.1.114+ and graceful-fails on older CLI builds
+- **Claude mode: Auto mode** -- `ClaudeMode.autoMode` replaces `autoAcceptEdits` to mirror the current Claude Code Mode picker (Shift+⌘+M); picker order tracks Claude's own UI
+- **Settings tooltips** -- every picker, toggle, and stepper in `SettingsView` gets an `InfoTip` explaining what the setting does and when to flip it
+- **Sidebar redesign** -- sessions grouped by project with collapsible sections, live filter, uptime-per-session via `TimelineView`, Notifications bell with unread badge, consolidated "Terminate all" footer
+- **User input cooldown** -- typing into an internal-mode Eternal worker pauses Tado's 5 s idle-injection for 60 s so modal flows (Ctrl+C confirmations, arrow-key navigation inside Claude Code's UI) aren't clobbered by `/loop` prompts landing on top of the dialog
+- `docs/persistence-and-notifications.md` -- cold-read reference for the persistence and notifications subsystems
+
+### Changed
+
+- `TadoApp` now owns a single `ModelContainer` in `init()` so migrations, `AppSettingsSync`, `ProjectSettingsSync`, and `@Query` observers all share one store. Startup order: migrations → `ScopedConfig.bootstrap` → sync start → deliverer install → `systemAppLaunched` event
+- `ProcessSpawner` shell-escapes every CLI flag before joining (`map(shellEscape).joined`). Load-bearing for `opus[1m]`; harmless for simple tokens
+- Internal-mode Eternal worker command accepts `modelID` + `effortLevel` parameters instead of relying on `~/.claude/settings.json` defaults
+- FULL AUTO toggle in `EternalFileModal` is now only shown for External loops (it flips `--dangerously-skip-permissions` in `eternal-loop.sh`, which Internal mode doesn't use)
+- Run deletion (`EternalService.deleteRun`, `DispatchPlanService.deleteRun`) uses SIGKILL (`hard: true`) on linked sessions, deletes the SwiftData row synchronously, then removes the run directory async with 200 ms + 1 s retry backoff. Fixes "directory couldn't be removed" races where the PTY's log file was still open in the dying process
+
+### Fixed
+
+- Internal-mode Eternal workers no longer silently ignore the user's model/effort picks (the per-turn `claude` invocation now receives explicit `--model` / `--effort` args)
+- `--model opus[1m]` no longer aborts with zsh's `nomatch` error before `claude` can parse the flag
+- Sessions paused at a Claude Code modal dialog (e.g. Ctrl+C confirmation) no longer receive `/loop` prompts landing on top of the dialog and corrupting state
+
+## [0.7.0] - 2026-04-19
+
+### Added
+
+- **Rust + Metal terminal renderer** -- new `tado-core` Rust static library drives every tile's PTY via `portable-pty`; rendering moved from SwiftTerm's AppKit view to a direct Metal pipeline (`MetalTerminalView`, `MetalTerminalTileView`) with its own glyph atlas, ANSI state machine, and scrollback buffer
+- Retina-aware text rendering via `NSFont.monospacedSystemFont` and 2x display-scale atlas
+- Wide-character support (CJK, box-drawing double-wide), astral-plane codepoint rasterization, NFC composition for combining-mark sequences
+- Color emoji via RGBA glyph atlas, atlas-overflow recovery with 4x capacity bump
+- ANSI palette theming (15 curated themes propagated into the Metal renderer)
+- Text selection with Cmd+C copy, application cursor mode, bell (audible + visual modes), blinking cursor
+- Terminal font size setting, live tile resize, zoom correctness
+- Performance benchmarks + `BENCH.md`
+- **Dispatch self-improvement loop** -- per-phase retros review each phase's output and feed learnings back into subsequent phases
+- **Projects redesign** -- card-based project list, sheet-based New Project flow, identity zone, prominent dispatch card, todos zone with team > agent > todo hierarchy, agents disclosure zone. Original 953-line monolith split into a `Projects/` subtree
+- **Teams merged into Projects** -- standalone Teams page removed; team management now lives inside each project
+
+### Changed
+
+- SwiftTerm removed; Metal is the default and only renderer
+- Design system refresh: Plus Jakarta Sans everywhere, Ember theme, central `Palette` token set, Jakarta Sans catalog wired through every surface
+- Settings backdrop uses a blur, page headers raised to `#2A2A2A`, Ember terminal background dropped to `#0A0A0A`
+- `claudeNoFlicker` default flipped to `false` so fresh tiles keep scrollback usable; fullscreen Claude UI is now an opt-in toggle
+
+### Fixed
+
+- Silent MTKView draw early-returns caught and recovered
+- Metal text spaced-out-on-2x-displays bug (atlas was at 1x)
+- Metal tile stuck on "spawn pending" forever (FFI thread-local error was silently dropped)
+- Scrollback freeze on long runs (buffer clamped + scroll-back correctness)
+
 ## [0.6.0] - 2026-04-16
 
 ### Added

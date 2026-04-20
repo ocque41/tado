@@ -19,31 +19,40 @@ struct ContentView: View {
             TopNavBar()
                 .zIndex(1)
 
-            ZStack {
-                // All views stay alive — never destroyed/recreated.
-                // Terminals keep running when switching views.
-                CanvasView()
-                    .opacity(appState.currentView == .canvas ? 1 : 0)
-                    .allowsHitTesting(appState.currentView == .canvas)
-
-                TodoListView()
-                    .opacity(appState.currentView == .todos ? 1 : 0)
-                    .allowsHitTesting(appState.currentView == .todos)
-
-                ProjectsView()
-                    .opacity(appState.currentView == .projects ? 1 : 0)
-                    .allowsHitTesting(appState.currentView == .projects)
-
-                // Sidebar overlay
+            HStack(spacing: 0) {
+                // Sidebar takes real layout space — TodoListView / ProjectsView
+                // reflow into the remaining width instead of being covered.
+                // Canvas still fills the remaining width via `maxWidth:
+                // .infinity` below; its pan/zoom math works in canvas-space,
+                // so a narrower viewport doesn't disturb tile positions.
                 if appState.showSidebar {
-                    HStack(spacing: 0) {
-                        SidebarView()
-                            .frame(width: 260)
-                            .transition(.move(edge: .leading))
-
-                        Spacer()
-                    }
+                    SidebarView()
+                        .frame(width: 260)
+                        .transition(.move(edge: .leading))
                 }
+
+                ZStack {
+                    // All views stay alive — never destroyed/recreated.
+                    // Terminals keep running when switching views.
+                    CanvasView()
+                        .opacity(appState.currentView == .canvas ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .canvas)
+
+                    TodoListView()
+                        .opacity(appState.currentView == .todos ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .todos)
+
+                    ProjectsView()
+                        .opacity(appState.currentView == .projects ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .projects)
+
+                    // Non-blocking banner overlay. Sits on top of whatever
+                    // page is active; hit-testing limited to visible pills
+                    // so it doesn't eat clicks on the canvas/todos below.
+                    InAppBannerOverlay()
+                        .allowsHitTesting(true)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -73,6 +82,12 @@ struct ContentView: View {
             set: { appState.showDoneList = $0 }
         )) {
             DoneListView()
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.showNotifications },
+            set: { appState.showNotifications = $0 }
+        )) {
+            NotificationsView()
         }
         .sheet(isPresented: Binding(
             get: { appState.showTrashList },

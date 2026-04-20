@@ -20,6 +20,10 @@ final class TerminalSession: Identifiable {
     var exitCode: Int32? = nil
     var title: String
     var gridIndex: Int
+    /// Wall-clock time the session was constructed. Used by the sidebar
+    /// to show live uptime. Immutable, so it can stay un-observed — the
+    /// ticking clock is driven by a `TimelineView` in the consuming view.
+    let startedAt: Date
     /// Observation-ignored: the activity timer mutates this every 1.5 s per
     /// session. Observing it would invalidate every tile in the canvas
     /// `ForEach` on every tick. Status transitions (which *are* observed)
@@ -108,6 +112,27 @@ final class TerminalSession: Identifiable {
     /// exactly once. The primary driver (Tado's per-idle injection)
     /// keeps firing regardless.
     @ObservationIgnored var eternalLoopCommandInstalled: Bool = false
+
+    /// Timestamp of the most recent raw keystroke the user typed into this
+    /// tile's PTY — set by `noteUserInput()` called from
+    /// `MetalTerminalView.keyDown`. Used by `drainQueueIfReady` to back
+    /// off idle-injection when the user is interacting with the tile.
+    ///
+    /// Without this cooldown, an internal-mode Eternal worker paused at
+    /// a modal dialog (e.g. Ctrl+C "are you sure you want to quit?") sees
+    /// Tado type `/loop …` or the continue prompt on top of the dialog
+    /// every 5 s, which corrupts the dialog state and makes the terminal
+    /// appear unresponsive to the user's own Enter/arrow-key presses.
+    /// Once the user types, idle-injection pauses for
+    /// `userInputCooldownSeconds` so the user has breathing room to
+    /// finish whatever interactive flow they started.
+    @ObservationIgnored var userLastTypedAt: Date?
+
+    /// How long after the user's last keystroke idle-injection stays
+    /// suspended. 60 s is generous enough to cover "user types Ctrl+C,
+    /// reads a confirmation dialog, and picks an option" without
+    /// permanently parking a worker.
+    static let userInputCooldownSeconds: TimeInterval = 60
     /// Completion marker, e.g. "ETERNAL-DONE". The wrapper exits when a
     /// claude -p stdout emits this on its own line.
     @ObservationIgnored var eternalDoneMarker: String?
@@ -162,13 +187,15 @@ final class TerminalSession: Identifiable {
     }
 
     init(todoID: UUID, todoText: String, canvasPosition: CGPoint, gridIndex: Int, engine: TerminalEngine? = nil) {
+        let now = Date()
         self.id = UUID()
         self.todoID = todoID
         self.todoText = todoText
         self.canvasPosition = canvasPosition
         self.gridIndex = gridIndex
         self.title = todoText
-        self.lastActivityDate = Date()
+        self.lastActivityDate = now
+        self.startedAt = now
         self.engine = engine
     }
 
@@ -218,12 +245,46 @@ final class TerminalSession: Identifiable {
     /// `eternalLoopCommandInstalled`), it also enqueues the `/loop` command
     /// as the SECONDARY continuation driver, which Claude Code's own
     /// scheduler fires on a 30s interval for up to a week.
+    ///
+    /// **User-input cooldown (eternal workers only):** if the user typed
+    /// into this PTY within the last `userInputCooldownSeconds`, drain is
+    /// skipped entirely. Otherwise Tado's injection lands on top of
+    /// whatever the user is in the middle of — a Ctrl+C confirmation
+    /// dialog, a `/cost` pager, a paste in progress — and both the
+    /// injected text AND the user's next keystrokes get interleaved into
+    /// the TUI, which reads as "the terminal stopped responding." Non-
+    /// eternal tiles don't have this problem because nothing auto-drains
+    /// them; their `promptQueue` only fills via explicit
+    /// `enqueueOrSend` from forward mode or IPC.
     func drainQueueIfReady() {
         guard status == .needsInput, !promptQueue.isEmpty else { return }
+        if userInputCooldownActive {
+            return
+        }
         let next = promptQueue.removeFirst()
         sendToTerminal(next)
         markActivity()
         refillQueueForInternalEternalIfNeeded()
+    }
+
+    /// True when the user has typed into this PTY recently enough that
+    /// Tado should back off auto-injection. See `userLastTypedAt` doc.
+    /// Only consulted for eternal-worker sessions — other tiles don't
+    /// auto-drain.
+    private var userInputCooldownActive: Bool {
+        guard isEternalWorker,
+              let typed = userLastTypedAt else { return false }
+        return Date().timeIntervalSince(typed) < Self.userInputCooldownSeconds
+    }
+
+    /// Note that the user just typed a raw keystroke into this PTY.
+    /// Called from `MetalTerminalView.keyDown` so auto-injection knows
+    /// to yield. Does NOT call `markActivity()` — that path is for
+    /// terminal OUTPUT, not user INPUT; keeping them separate lets the
+    /// idle-timer still flip to `.needsInput` after claude finishes
+    /// echoing, without the cooldown fighting that signal.
+    func noteUserInput() {
+        userLastTypedAt = Date()
     }
 
     /// Keep an internal-mode Eternal worker's prompt queue non-empty.
@@ -270,6 +331,9 @@ final class TerminalSession: Identifiable {
             if status != .needsInput {
                 status = .needsInput
                 onStatusChange?(.needsInput)
+                EventBus.shared.publish(
+                    .terminalNeedsInput(sessionID: id, title: title, projectName: projectName)
+                )
             }
             drainQueueIfReady()
         } else {
@@ -285,8 +349,14 @@ final class TerminalSession: Identifiable {
         self.exitCode = exitCode
         if let code = exitCode, code == 0 {
             status = .completed
+            EventBus.shared.publish(
+                .terminalCompleted(sessionID: id, title: title, projectName: projectName)
+            )
         } else {
             status = .failed
+            EventBus.shared.publish(
+                .terminalFailed(sessionID: id, title: title, exitCode: exitCode, projectName: projectName)
+            )
         }
         onStatusChange?(status)
     }

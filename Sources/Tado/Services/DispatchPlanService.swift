@@ -148,19 +148,44 @@ enum DispatchPlanService {
     ) {
         let runDir = dispatchRoot(run)
 
+        // SIGKILL: we're removing the dir; any open fds from linked
+        // architect/phase tiles must release before `removeItem`
+        // runs. See `EternalService.deleteRun` for the full rationale.
         let linked = terminalManager.sessions.filter { $0.dispatchRunID == run.id }
         for session in linked {
-            terminalManager.terminateSession(session.id)
-        }
-
-        do {
-            try FileManager.default.removeItem(at: runDir)
-        } catch {
-            NSLog("DispatchPlanService: deleteRun failed to remove \(runDir.path): \(error.localizedDescription)")
+            terminalManager.terminateSession(session.id, hard: true)
         }
 
         modelContext.delete(run)
         try? modelContext.save()
+
+        // Async removal with retry — kernel needs a moment to reap
+        // SIGKILL'd processes before their file descriptors close.
+        Task { @MainActor in
+            await Self.removeRunDirWithRetry(runDir, label: "DispatchPlanService")
+        }
+    }
+
+    private static func removeRunDirWithRetry(_ runDir: URL, label: String) async {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: runDir.path) else { return }
+
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        do {
+            try fm.removeItem(at: runDir)
+            return
+        } catch {
+            NSLog("\(label): first removeItem attempt on \(runDir.path) failed: \(error). Retrying after 1s.")
+        }
+
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        do {
+            try fm.removeItem(at: runDir)
+        } catch let error as NSError {
+            NSLog("\(label): deleteRun failed to remove \(runDir.path) after retry. code=\(error.code) domain=\(error.domain) userInfo=\(error.userInfo)")
+        } catch {
+            NSLog("\(label): deleteRun failed to remove \(runDir.path) after retry: \(error)")
+        }
     }
 
     // MARK: - Spawn helpers

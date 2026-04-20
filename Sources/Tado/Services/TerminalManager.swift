@@ -79,18 +79,35 @@ final class TerminalManager {
         return session
     }
 
-    func terminateSession(_ id: UUID) {
+    /// Stop a tile's PTY process and drop the session from the manager.
+    ///
+    /// Sends SIGTERM by default (polite — bash wrappers run their trap
+    /// handlers, claude has a chance to flush state). Pass `hard: true`
+    /// to send SIGKILL instead, for cases where the process is being
+    /// torn down alongside on-disk state (e.g. `deleteRun` needs the
+    /// process dead NOW so file handles release before the run dir is
+    /// removed).
+    ///
+    /// **Why not a PTY Ctrl+C write**: an interactive TUI like the
+    /// `claude` CLI in auto mode installs a SIGINT handler that shows
+    /// an "Are you sure you want to quit?" dialog instead of exiting.
+    /// The dialog kept the process alive with open file descriptors
+    /// into the Eternal run dir, which then failed `removeItem` during
+    /// delete. Signalling the kernel directly via `TadoCore.Session.kill`
+    /// bypasses the termios line discipline so the TUI's handler never
+    /// runs.
+    func terminateSession(_ id: UUID, hard: Bool = false) {
         if let session = sessions.first(where: { $0.id == id }) {
-            session.coreSession?.write(text: "\u{3}")
+            session.coreSession?.kill(signal: hard ? SIGKILL : SIGTERM)
             session.isRunning = false
             ipcBroker?.unregisterSession(id)
         }
         sessions.removeAll { $0.id == id }
     }
 
-    func terminateSessionForTodo(_ todoID: UUID) {
+    func terminateSessionForTodo(_ todoID: UUID, hard: Bool = false) {
         if let session = sessions.first(where: { $0.todoID == todoID }) {
-            session.coreSession?.write(text: "\u{3}")
+            session.coreSession?.kill(signal: hard ? SIGKILL : SIGTERM)
             session.isRunning = false
             ipcBroker?.unregisterSession(session.id)
             sessions.removeAll { $0.id == session.id }
@@ -173,6 +190,29 @@ final class TerminalManager {
             if todo.terminalLog.count > TodoItem.maxLogSize {
                 todo.terminalLog.removeFirst(todo.terminalLog.count - TodoItem.maxLogSize)
             }
+        }
+
+        // Internal-mode Eternal workers: the PTY launches interactive
+        // `claude --permission-mode auto` with NO `-p` argument, so the
+        // initial bootstrap brief (`todo.text` — the full sprint/mega
+        // prompt produced by `ProcessSpawner.eternalSprintPrompt` /
+        // `eternalMegaPrompt`) is NOT delivered by the command line.
+        // Instead we seed the session's prompt queue here so the first
+        // `.needsInput` transition (fired by `TerminalSession.checkIdle`
+        // after claude's TUI has been cursor-still for ~5 s at its `›`
+        // prompt) drains the brief into the PTY as if the user typed it.
+        //
+        // After that first drain, `refillQueueForInternalEternalIfNeeded`
+        // takes over — it installs `/loop 30s <continue>` as the
+        // secondary driver on turn 2 and keeps appending a `<continue>`
+        // nudge after every drain so Tado's idle-injection primary
+        // driver always has something to send.
+        //
+        // External mode does NOT need this seed because its wrapper
+        // (`eternal-loop.sh`) re-invokes `claude -p "<brief>"` per turn,
+        // with the brief baked into the shell command.
+        if isEternalWorker && eternalLoopKind == "internal" {
+            session.promptQueue.append(todo.text)
         }
     }
 }

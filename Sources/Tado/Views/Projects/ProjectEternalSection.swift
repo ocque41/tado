@@ -249,10 +249,30 @@ struct ProjectEternalSection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Palette.textSecondary)
             }
+            // Resume affordance for stopped runs (not completed — completed
+            // runs hit the done marker and shouldn't be trivially re-run).
+            // Spawns a fresh worker on the existing crafted.md / progress.md
+            // so the agent continues from where it was stopped.
+            if run.state == "stopped" && EternalService.craftedExistsOnDisk(run) {
+                resumeButton(run: run)
+            }
             deleteButton(run: run)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 10)
+    }
+
+    @ViewBuilder
+    private func resumeButton(run: EternalRun) -> some View {
+        Button(action: { resume(run: run) }) {
+            Image(systemName: "play.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.success.opacity(0.85))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .help("Resume this run — re-spawn the worker using the existing crafted.md and progress.md.")
     }
 
     @ViewBuilder
@@ -497,9 +517,50 @@ struct ProjectEternalSection: View {
 
     private func stop(run: EternalRun) {
         NSLog("ProjectEternalSection: user clicked Stop for run \(run.label)")
+        // Write the stop-flag first. In external mode the bash wrapper
+        // (eternal-loop.sh) polls this file every iteration and exits
+        // cleanly when it appears, flipping state.json phase to "stopped".
+        // In internal mode no wrapper watches the flag, so this is purely
+        // a record-keeping write for anything inspecting the run dir
+        // later.
         EternalService.requestStop(run)
+
+        // Clear the live PTY for both modes. External: SIGINT kills the
+        // wrapper before it sees the stop-flag, which is fine — we
+        // already have `run.state = "stopped"` in SwiftData as the
+        // authoritative UI signal. Internal: this is the ONLY thing that
+        // actually stops the run, since there is no wrapper watching the
+        // flag and Tado's idle-injection would otherwise keep typing
+        // `continue` prompts into the still-alive TUI forever.
+        //
+        // Terminate BEFORE clearing workerTodoID so the session lookup
+        // works — terminateSessionForTodo resolves by todoID.
+        if let workerID = run.workerTodoID {
+            terminalManager.terminateSessionForTodo(workerID)
+        }
+
         run.state = "stopped"
         run.workerTodoID = nil
         try? modelContext.save()
+    }
+
+    /// Resume a previously-stopped run by removing the stop-flag and
+    /// re-spawning the worker. The run's `crafted.md`, `progress.md`,
+    /// and `state.json` (if any) are preserved on disk and the new worker
+    /// picks up where the old one left off — progress.md tail becomes
+    /// the "last state" the continue prompt asks the agent to read.
+    ///
+    /// Reusable for both external and internal loop kinds — the dispatch
+    /// inside `spawnWorker` picks the correct command based on
+    /// `run.loopKind`.
+    private func resume(run: EternalRun) {
+        NSLog("ProjectEternalSection: user clicked Resume for run \(run.label)")
+        try? FileManager.default.removeItem(at: EternalService.stopFlagURL(run))
+        EternalService.spawnWorker(
+            run: run,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
     }
 }

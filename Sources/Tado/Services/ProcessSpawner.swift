@@ -8,7 +8,13 @@ enum ProcessSpawner {
         if let agentName, engine == .claude {
             flags.insert(contentsOf: ["--agent", agentName], at: 0)
         }
-        let allFlags = flags.joined(separator: " ")
+        // Every flag token is shell-escaped so zsh doesn't mis-interpret
+        // glob metacharacters. Load-bearing for `--model opus[1m]` (the
+        // 1M-context Opus variant) — unquoted `opus[1m]` would trigger
+        // zsh's `nomatch` and abort before claude ever runs. Simple
+        // tokens like `--effort` or `claude-opus-4-7` single-quote to
+        // themselves harmlessly, so no existing flag regresses.
+        let allFlags = flags.map(shellEscape).joined(separator: " ")
         let cmd = allFlags.isEmpty ? "\(cli) \(escaped)" : "\(cli) \(allFlags) \(escaped)"
         return ("/bin/zsh", ["-l", "-c", cmd])
     }
@@ -139,6 +145,11 @@ enum ProcessSpawner {
         You are bootstrapping Tado's "auto mode" configuration for Claude Code.
         Project: "\(projectName)" at \(projectRoot).
 
+        (This setup is required because Continuous Eternal runs need
+        `--permission-mode auto` — Claude Code's classifier-gated autonomy
+        mode, available for Opus 4.7 on Max/Teams/Enterprise plans. Tado
+        pins Opus 4.7 automatically for Continuous runs.)
+
         ═══════════════════════════════════════════════════════════
         CONTEXT — WHAT YOU ARE DOING AND WHY
         ═══════════════════════════════════════════════════════════
@@ -168,9 +179,30 @@ enum ProcessSpawner {
         auto-approve if the classifier considers them in-scope.
 
         Your job: set up both layers of Tado's recommended auto-mode
-        config. Layer A is the user scope (affects every Claude Code
-        session on this machine); Layer B is project-local (gitignored,
-        specific to this project).
+        config:
+
+          * Layer A — USER SCOPE (`~/.claude/settings.json`). Machine-wide.
+            Lets auto mode work on EVERY Claude Code session on this
+            machine, not just ones spawned from this project. Without it,
+            the user running `claude` from a regular Terminal outside
+            Tado would still hit permission prompts.
+
+          * Layer B — PROJECT-LOCAL SCOPE
+            (`\(projectRoot)/.claude/settings.local.json`). Gitignored
+            by convention. Holds this project's specific trust context so
+            the classifier understands what's safe in THIS repo (the
+            `autoMode.environment` prose mentions this project's
+            filesystem, remotes, and build tools). Without it, the
+            classifier errs on the side of blocking routine in-repo
+            operations.
+
+        CRITICALLY, you will NOT touch the committed project-scoped
+        settings file at `\(projectRoot)/.claude/settings.json`. That
+        file is for hooks + a baseline allow list that other developers
+        on the team share via git. The classifier-context keys
+        (`autoMode.environment`, the full permissions.allow list) stay
+        in Layer A + Layer B only, so teammates don't inherit Tado-
+        specific trust context assuming unattended execution.
 
         ═══════════════════════════════════════════════════════════
         STEP 0 — READ THE CURRENT STATE
@@ -265,17 +297,26 @@ enum ProcessSpawner {
         STEP 3 — VERIFY AND REPORT
         ═══════════════════════════════════════════════════════════
 
-        Print a summary showing, for each of the two files:
+        Print a summary with a clearly-labeled section for EACH of the
+        two scopes (USER and PROJECT-LOCAL), so the user reading this
+        tile transcript can confirm both scopes were merged without
+        having to diff files by hand. For each scope, include:
 
+          * File path (absolute)
           * Did the file exist before you touched it? (yes/no)
           * What value `permissions.defaultMode` had before vs. after
-          * How many entries were already in `permissions.allow`,
-            how many you appended
-          * How many entries were already in `autoMode.environment`,
-            how many you appended
+          * Count of entries already in `permissions.allow` vs. how
+            many you appended (and which ones, in a bulleted list)
+          * Count of entries already in `autoMode.environment` vs. how
+            many you appended (and a short excerpt of each new one)
           * Whether `skipDangerousModePermissionPrompt` (a legacy
             bypass-mode key) is present — if so, note that it's now
             harmless under auto mode but can be removed
+
+        End the summary with one line confirming that
+        `\(projectRoot)/.claude/settings.json` (the committed file) was
+        NOT modified — so the user can confirm Tado's trust context
+        didn't leak into the shared repo.
 
         Then STOP. Do NOT:
           * Start any Eternal runs
@@ -283,6 +324,8 @@ enum ProcessSpawner {
           * tado-send anything
           * Modify CLAUDE.md, AGENTS.md, or project source code
           * Fiddle with permissions on unrelated files
+          * Touch `\(projectRoot)/.claude/settings.json` — that's the
+            committed team-shared file and is explicitly out of scope.
         """
     }
 
@@ -826,12 +869,33 @@ enum ProcessSpawner {
     /// `--permission-mode auto` is load-bearing: without auto mode, the
     /// session would stall on any tool-permission prompt. Auto mode
     /// replaces the old `--dangerously-skip-permissions` hack.
-    static func internalEternalCommand(projectRoot: String) -> (executable: String, args: [String]) {
+    ///
+    /// **Model and effort are threaded through explicitly.** Without this,
+    /// `claude` with no `--model`/`--effort` picks up the user's
+    /// `~/.claude/settings.json` defaults, so Tado's model/effort picker
+    /// silently didn't apply to internal-mode workers. Both values are
+    /// `shellEscape`d so the brackets in `opus[1m]` survive zsh parsing
+    /// (raw `opus[1m]` would hit `nomatch` and abort before `claude` ran).
+    static func internalEternalCommand(
+        projectRoot: String,
+        modelID: String?,
+        effortLevel: String?
+    ) -> (executable: String, args: [String]) {
         _ = projectRoot
-        // `claude` with no `-p` launches the interactive TUI. We rely on
-        // the user's PATH resolving `claude` — same contract as the
-        // regular per-session command.
-        let inner = "claude --permission-mode auto --setting-sources user,project,local"
+        var parts: [String] = [
+            "claude",
+            "--permission-mode", "auto",
+            "--setting-sources", "user,project,local",
+        ]
+        if let modelID, !modelID.isEmpty {
+            parts.append("--model")
+            parts.append(shellEscape(modelID))
+        }
+        if let effortLevel, !effortLevel.isEmpty {
+            parts.append("--effort")
+            parts.append(shellEscape(effortLevel))
+        }
+        let inner = parts.joined(separator: " ")
         return ("/bin/zsh", ["-l", "-c", inner])
     }
 
