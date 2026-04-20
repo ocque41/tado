@@ -21,6 +21,9 @@ struct TerminalTileView: View {
     /// underlying `TadoCore.Session` keeps running in Rust.
     let isVisible: Bool
     let scale: CGFloat
+    /// Paint the keyboard-selection accent ring around this tile. Set by
+    /// `CanvasView` when `AppState.focusedTileTodoID == session.todoID`.
+    var isFocused: Bool = false
     var onPositionChanged: ((CGPoint) -> Void)? = nil
     @Environment(TerminalManager.self) private var terminalManager
     @State private var dragOffset: CGSize = .zero
@@ -89,6 +92,9 @@ struct TerminalTileView: View {
             if isResizing {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Palette.accent.opacity(0.7), lineWidth: 2)
+            } else if isFocused {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Palette.accent, lineWidth: 2)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -127,6 +133,19 @@ struct TerminalTileView: View {
                     .foregroundStyle(Palette.textTertiary)
             }
 
+            // Run-role tag — disambiguates concurrent eternal/dispatch tiles
+            // in the same project zone. "worker", "architect", "interventor",
+            // or "phase" — read from TerminalSession.runRole set at spawn time.
+            if let role = session.runRole {
+                Text(role)
+                    .font(Typography.monoMicroEmph)
+                    .foregroundStyle(roleColor(role))
+                    .lineLimit(1)
+                Text("|")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+
             Text(session.todoText)
                 .font(Typography.monoCaption)
                 .foregroundStyle(Palette.textSecondary)
@@ -159,6 +178,18 @@ struct TerminalTileView: View {
         .background(Palette.surfaceElevated)
         .contentShape(Rectangle())
         .gesture(tileDragGesture)
+    }
+
+    /// Small distinct color per run role. Worker = green (long-lived), architect
+    /// = blue (planning), interventor = amber (one-shot directive), phase = gray.
+    private func roleColor(_ role: String) -> Color {
+        switch role {
+        case "worker":      return Palette.success
+        case "architect":   return Palette.accent
+        case "interventor": return Palette.warning
+        case "phase":       return Palette.textSecondary
+        default:            return Palette.textTertiary
+        }
     }
 
     // MARK: - Tile Drag (scale-compensated)

@@ -17,7 +17,25 @@ final class TerminalManager {
     /// repeats when randomTileColors is on.
     private var lastTheme: TerminalTheme?
 
-    func spawnSession(todoID: UUID, todoText: String, canvasPosition: CGPoint, gridIndex: Int, engine: TerminalEngine? = nil) -> TerminalSession {
+    func spawnSession(
+        todoID: UUID,
+        todoText: String,
+        canvasPosition: CGPoint,
+        gridIndex: Int,
+        engine: TerminalEngine? = nil,
+        modeFlagsOverride: [String]? = nil,
+        modelFlagsOverride: [String]? = nil,
+        effortFlagsOverride: [String]? = nil,
+        isEternalWorker: Bool = false,
+        eternalMode: String? = nil,
+        eternalDoneMarker: String? = nil,
+        eternalModelID: String? = nil,
+        eternalEffortLevel: String? = nil,
+        eternalSkipPermissionsFlag: Bool = true,
+        eternalRunID: UUID? = nil,
+        dispatchRunID: UUID? = nil,
+        runRole: String? = nil
+    ) -> TerminalSession {
         let session = TerminalSession(
             todoID: todoID,
             todoText: todoText,
@@ -32,6 +50,24 @@ final class TerminalManager {
         } else {
             session.theme = defaultTheme
         }
+        // Stash the overrides BEFORE appending so the canvas re-renders with
+        // the final values — without this, SwiftUI could observe the new
+        // session and ask for mode/model/effort flags while overrides are
+        // still nil, defeating the override and letting the global AppSettings
+        // drive the spawn (which is how Eternal's "Full Auto" toggle was
+        // silently ignored on first render). See EternalService.spawnEternal.
+        session.modeFlagsOverride = modeFlagsOverride
+        session.modelFlagsOverride = modelFlagsOverride
+        session.effortFlagsOverride = effortFlagsOverride
+        session.isEternalWorker = isEternalWorker
+        session.eternalMode = eternalMode
+        session.eternalDoneMarker = eternalDoneMarker
+        session.eternalModelID = eternalModelID
+        session.eternalEffortLevel = eternalEffortLevel
+        session.eternalSkipPermissionsFlag = eternalSkipPermissionsFlag
+        session.eternalRunID = eternalRunID
+        session.dispatchRunID = dispatchRunID
+        session.runRole = runRole
         sessions.append(session)
         if let engine = engine {
             ipcBroker?.registerSession(session, engine: engine)
@@ -66,13 +102,46 @@ final class TerminalManager {
         session.enqueueOrSend(text)
     }
 
-    func spawnAndWire(todo: TodoItem, engine: TerminalEngine, cwd: String? = nil, agentName: String? = nil, projectName: String? = nil, teamName: String? = nil, teamID: UUID? = nil, teamAgents: [String]? = nil) {
+    func spawnAndWire(
+        todo: TodoItem,
+        engine: TerminalEngine,
+        cwd: String? = nil,
+        agentName: String? = nil,
+        projectName: String? = nil,
+        teamName: String? = nil,
+        teamID: UUID? = nil,
+        teamAgents: [String]? = nil,
+        modeFlagsOverride: [String]? = nil,
+        modelFlagsOverride: [String]? = nil,
+        effortFlagsOverride: [String]? = nil,
+        isEternalWorker: Bool = false,
+        eternalMode: String? = nil,
+        eternalDoneMarker: String? = nil,
+        eternalModelID: String? = nil,
+        eternalEffortLevel: String? = nil,
+        eternalSkipPermissionsFlag: Bool = true,
+        eternalRunID: UUID? = nil,
+        dispatchRunID: UUID? = nil,
+        runRole: String? = nil
+    ) {
         let session = spawnSession(
             todoID: todo.id,
             todoText: todo.text,
             canvasPosition: todo.canvasPosition,
             gridIndex: todo.gridIndex,
-            engine: engine
+            engine: engine,
+            modeFlagsOverride: modeFlagsOverride,
+            modelFlagsOverride: modelFlagsOverride,
+            effortFlagsOverride: effortFlagsOverride,
+            isEternalWorker: isEternalWorker,
+            eternalMode: eternalMode,
+            eternalDoneMarker: eternalDoneMarker,
+            eternalModelID: eternalModelID,
+            eternalEffortLevel: eternalEffortLevel,
+            eternalSkipPermissionsFlag: eternalSkipPermissionsFlag,
+            eternalRunID: eternalRunID,
+            dispatchRunID: dispatchRunID,
+            runRole: runRole
         )
         if let cwd { session.lastKnownCwd = cwd }
         session.agentName = agentName

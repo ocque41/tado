@@ -75,6 +75,54 @@ final class TerminalSession: Identifiable {
     /// phase agents can run Haiku at max effort or Opus at high effort without
     /// the user having to touch Settings.
     @ObservationIgnored var effortFlagsOverride: [String]?
+
+    /// When true, this session spawns the Tado eternal-loop wrapper
+    /// (`.tado/eternal/hooks/eternal-loop.sh`) instead of invoking
+    /// `claude` directly. The wrapper respawns `claude -p "..."` per turn
+    /// with a fresh context, which is what makes the session genuinely
+    /// non-stop — Claude Code's in-session Stop-hook recursion counter
+    /// gets reset on every iteration.
+    ///
+    /// All the `eternal*` fields below are read by MetalTerminalTileView
+    /// at spawn time and passed to the wrapper as env vars.
+    @ObservationIgnored var isEternalWorker: Bool = false
+    /// "mega" or "sprint" — the wrapper surfaces SPRINT-DONE detection only
+    /// for sprint mode. Ignored when isEternalWorker is false.
+    @ObservationIgnored var eternalMode: String?
+    /// Completion marker, e.g. "ETERNAL-DONE". The wrapper exits when a
+    /// claude -p stdout emits this on its own line.
+    @ObservationIgnored var eternalDoneMarker: String?
+    /// Optional raw model id for `--model`, e.g. "claude-haiku-4-5". The
+    /// wrapper appends `--model <id>` when set.
+    @ObservationIgnored var eternalModelID: String?
+    /// Optional effort level for `--effort`, e.g. "max". The wrapper
+    /// appends `--effort <level>` when set.
+    @ObservationIgnored var eternalEffortLevel: String?
+    /// Controls whether the wrapper passes `--dangerously-skip-permissions`
+    /// to each claude -p invocation. Mirrors Project.eternalSkipPermissions.
+    @ObservationIgnored var eternalSkipPermissionsFlag: Bool = true
+
+    // MARK: - Run linkage (multi-run)
+
+    /// UUID of the `EternalRun` that owns this session, when the session is an
+    /// eternal architect, worker, or interventor tile. Set by `spawnAndWire`
+    /// from the spawn-time metadata; read by the hook/path-resolution code
+    /// (forwarded as `TADO_ETERNAL_RUN_ID` env var to workers) and by the
+    /// canvas tile header to label the tile with the run.
+    ///
+    /// Nil for non-eternal tiles. `dispatchRunID` is the analogous field for
+    /// Dispatch phases; the two are mutually exclusive per session.
+    @ObservationIgnored var eternalRunID: UUID?
+
+    /// UUID of the `DispatchRun` that owns this session, when the session is
+    /// the architect or a phase tile of a dispatch run. Mutually exclusive
+    /// with `eternalRunID`.
+    @ObservationIgnored var dispatchRunID: UUID?
+
+    /// Role of this session within its owning run — `"architect"`, `"worker"`,
+    /// `"interventor"`, or `"phase"`. Informational only (canvas label +
+    /// session-picker heuristics); not consulted by path resolution.
+    @ObservationIgnored var runRole: String?
     var onStatusChange: ((SessionStatus) -> Void)?
     var onCwdChange: ((String) -> Void)?
     var onLogFlush: ((String) -> Void)?

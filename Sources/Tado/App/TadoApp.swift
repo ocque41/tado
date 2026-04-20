@@ -44,7 +44,7 @@ struct TadoApp: App {
                     }
                 }
         }
-        .modelContainer(for: [TodoItem.self, AppSettings.self, Project.self, Team.self])
+        .modelContainer(for: [TodoItem.self, AppSettings.self, Project.self, Team.self, EternalRun.self, DispatchRun.self])
         .commands {
             CommandGroup(after: .appSettings) {
                 Button("Settings") {

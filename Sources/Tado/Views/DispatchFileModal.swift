@@ -2,7 +2,9 @@ import SwiftUI
 import SwiftData
 
 struct DispatchFileModal: View {
-    let project: Project
+    /// Dispatch run being edited. Created in `drafted` by the "New Dispatch"
+    /// button in ProjectDispatchSection before the modal is presented.
+    let run: DispatchRun
     @Environment(\.modelContext) private var modelContext
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(AppState.self) private var appState
@@ -29,7 +31,7 @@ struct DispatchFileModal: View {
 
                 Spacer()
 
-                Text("Dispatch File — \(project.name)")
+                Text("Dispatch — \(run.project?.name ?? "?") · \(run.label)")
                     .font(Typography.heading)
                     .foregroundStyle(Palette.textPrimary)
 
@@ -76,7 +78,7 @@ struct DispatchFileModal: View {
 
             // Footer hint
             HStack {
-                Text(project.dispatchState == "idle"
+                Text(run.state == "drafted"
                     ? "Accept spawns the Dispatch Architect on the canvas."
                     : "Accept replaces the existing plan and re-dispatches the architect.")
                     .font(Typography.caption)
@@ -93,7 +95,7 @@ struct DispatchFileModal: View {
         .frame(minWidth: 640, minHeight: 480)
         .background(Palette.background)
         .onAppear {
-            draft = project.dispatchMarkdown
+            draft = run.brief
         }
         .alert("Delete existing plan and re-plan?", isPresented: $showReplanAlert) {
             Button("Delete & Re-plan", role: .destructive) {
@@ -101,7 +103,7 @@ struct DispatchFileModal: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will remove .tado/dispatch/plan.json and all phase files, then spawn a new architect terminal on the canvas.")
+            Text("This will remove this run's plan.json and phase files, then spawn a new architect terminal on the canvas.")
         }
     }
 
@@ -109,7 +111,7 @@ struct DispatchFileModal: View {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        if project.dispatchState != "idle" && DispatchPlanService.planExistsOnDisk(project) {
+        if run.state != "drafted" && DispatchPlanService.planExistsOnDisk(run) {
             showReplanAlert = true
         } else {
             commitAndSpawnArchitect()
@@ -117,12 +119,11 @@ struct DispatchFileModal: View {
     }
 
     private func commitAndSpawnArchitect() {
-        project.dispatchMarkdown = draft
-        project.dispatchState = "drafted"
+        run.brief = draft
         try? modelContext.save()
 
         DispatchPlanService.spawnArchitect(
-            project: project,
+            run: run,
             modelContext: modelContext,
             terminalManager: terminalManager,
             appState: appState

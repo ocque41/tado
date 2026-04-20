@@ -125,14 +125,29 @@ struct MetalTerminalTileView: View {
     private func spawnIfNeeded() {
         guard session.coreSession == nil else { return }
 
-        let (executable, args) = ProcessSpawner.command(
-            for: session.todoText,
-            engine: engine,
-            modeFlags: modeFlags,
-            effortFlags: effortFlags,
-            modelFlags: modelFlags,
-            agentName: agentName
-        )
+        // Eternal workers run through the external-loop wrapper
+        // (`.tado/eternal/hooks/eternal-loop.sh`) instead of invoking
+        // `claude` directly. The wrapper respawns `claude -p` every turn
+        // so Claude Code's in-session Stop-hook recursion counter is
+        // reset each iteration — genuinely infinite.
+        let executable: String
+        let args: [String]
+        if session.isEternalWorker, let projectRoot = session.projectRoot {
+            let cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
+            executable = cmd.executable
+            args = cmd.args
+        } else {
+            let cmd = ProcessSpawner.command(
+                for: session.todoText,
+                engine: engine,
+                modeFlags: modeFlags,
+                effortFlags: effortFlags,
+                modelFlags: modelFlags,
+                agentName: agentName
+            )
+            executable = cmd.executable
+            args = cmd.args
+        }
 
         let envArray: [String]
         if let ipcRoot = ipcRoot {
@@ -164,6 +179,30 @@ struct MetalTerminalTileView: View {
                 let value = String(entry[entry.index(after: eq)...])
                 envDict[key] = value
             }
+        }
+
+        // Merge eternal-worker env knobs (TADO_ETERNAL_MODE, TADO_MODEL,
+        // etc.) after the base env so the wrapper sees them.
+        if session.isEternalWorker {
+            // eternalRunID must be set for any isEternalWorker session — the
+            // spawn-path in EternalService.spawnWorker stamps it before
+            // spawnAndWire returns. A nil here means the spawn path forgot
+            // to pass runID; hard-crash beats silently falling back to the
+            // legacy per-project path (which no longer exists post-migration).
+            guard let runID = session.eternalRunID else {
+                fatalError(
+                    "TerminalSession \(session.id) has isEternalWorker=true but eternalRunID=nil — spawn path bug"
+                )
+            }
+            let eternalEnv = ProcessSpawner.eternalWorkerEnv(
+                runID: runID,
+                mode: session.eternalMode ?? "mega",
+                doneMarker: session.eternalDoneMarker ?? "ETERNAL-DONE",
+                modelID: session.eternalModelID,
+                effortLevel: session.eternalEffortLevel,
+                skipPermissions: session.eternalSkipPermissionsFlag
+            )
+            for (k, v) in eternalEnv { envDict[k] = v }
         }
 
         let cols = gridCols(for: width)

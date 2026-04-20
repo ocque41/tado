@@ -1,10 +1,12 @@
 import SwiftUI
 import SwiftData
 
-/// Project list view — header with a single + New button, a stack
-/// of `ProjectCard`s, or a centered empty-state CTA when no projects
-/// exist. New Project opens as a sheet (see `NewProjectSheet`) so the
-/// list never shifts when creation starts.
+/// Project list view — body is a stack of `ProjectCard`s, or a
+/// centered empty-state CTA when no projects exist. The page header
+/// (title + "+ New Project" button) lives in `TopNavBar` now, so this
+/// view contributes only the scrollable list itself. New Project still
+/// opens as a sheet — `TopNavBar` flips `appState.showNewProjectSheet`
+/// and `ContentView` presents `NewProjectSheet` from there.
 ///
 /// Each card calls back via closures for project-tap, dispatch open,
 /// bootstrap tools / team, and delete. The ••• menu on the card
@@ -18,21 +20,15 @@ struct ProjectListView: View {
     @Query(sort: \Project.createdAt) private var projects: [Project]
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
     @Query(sort: \Team.createdAt) private var teams: [Team]
-    @State private var showNewProjectSheet: Bool = false
     @State private var showPlanNotReadyAlert: Bool = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        Group {
             if projects.isEmpty {
                 emptyState
             } else {
                 projectCards
             }
-        }
-        .sheet(isPresented: $showNewProjectSheet) {
-            NewProjectSheet()
         }
         .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
             Button("OK", role: .cancel) {}
@@ -43,34 +39,11 @@ struct ProjectListView: View {
 
     // MARK: - Pieces
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("Projects")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
-
-            Spacer()
-
-            Button(action: { showNewProjectSheet = true }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus")
-                    Text("New Project")
-                }
-                .font(Typography.label)
-                .foregroundStyle(Palette.accent)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Palette.surfaceElevated)
-    }
-
     /// Centered empty-state block. Uses Typography.heading for the line
     /// and body for the subline — matches the visual weight of other
-    /// empty states in the app (Settings, Done/Trash). A primary button
-    /// carries the same accent treatment as the header button, so a
-    /// fresh install has one clear CTA.
+    /// empty states in the app (Settings, Done/Trash). The primary CTA
+    /// flips the same `appState.showNewProjectSheet` flag the nav bar
+    /// uses, so a fresh install still has one obvious call to action.
     private var emptyState: some View {
         VStack(spacing: 12) {
             Spacer()
@@ -82,7 +55,7 @@ struct ProjectListView: View {
                 .foregroundStyle(Palette.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(action: { showNewProjectSheet = true }) {
+            Button(action: { appState.showNewProjectSheet = true }) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
                     Text("New Project")
@@ -98,7 +71,7 @@ struct ProjectListView: View {
             .padding(.top, 4)
             Spacer()
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var projectCards: some View {
@@ -127,17 +100,42 @@ struct ProjectListView: View {
             onTap: { onSelect(project) },
             onBootstrapTools: { bootstrapTools(for: project) },
             onBootstrapTeam: { bootstrapTeam(for: project) },
-            onDispatch: { appState.dispatchModalProjectID = project.id },
-            onStart: { startPhaseOne(for: project) },
+            onDispatch: { createDispatchRunAndEdit(for: project) },
+            onStart: { startMostRecentPhaseOne(for: project) },
             onDelete: { deleteProject(project) }
         )
     }
 
     // MARK: - Actions
 
-    private func startPhaseOne(for project: Project) {
-        let launched = DispatchPlanService.startPhaseOne(
+    /// Create a fresh DispatchRun in drafted state and open its brief editor.
+    /// The list card's "New Dispatch" shortcut no longer short-circuits to the
+    /// modal on the project's single dispatch — each click is a new run.
+    private func createDispatchRunAndEdit(for project: Project) {
+        let run = DispatchRun(
             project: project,
+            label: DispatchRun.defaultLabel(),
+            state: "drafted",
+            brief: ""
+        )
+        modelContext.insert(run)
+        try? modelContext.save()
+        appState.dispatchModalRunID = run.id
+    }
+
+    /// Start phase 1 of the project's most-recently-created "ready" dispatch.
+    /// Used by the list card's Start shortcut. If none, alert.
+    private func startMostRecentPhaseOne(for project: Project) {
+        let ready = project.dispatchRuns
+            .filter { DispatchPlanService.planExistsOnDisk($0) }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first
+        guard let run = ready else {
+            showPlanNotReadyAlert = true
+            return
+        }
+        let launched = DispatchPlanService.startPhaseOne(
+            run: run,
             modelContext: modelContext,
             terminalManager: terminalManager,
             appState: appState
@@ -148,84 +146,30 @@ struct ProjectListView: View {
     }
 
     private func deleteProject(_ project: Project) {
-        for todo in todos where todo.projectID == project.id {
-            terminalManager.terminateSessionForTodo(todo.id)
-        }
-        modelContext.delete(project)
-        try? modelContext.save()
+        ProjectActionsService.deleteProject(
+            project,
+            modelContext: modelContext,
+            terminalManager: terminalManager
+        )
     }
 
-    // MARK: - Bootstrap helpers (same behavior as the pre-redesign row)
-
     private func bootstrapTools(for project: Project) {
-        guard let tadoRoot = ProcessSpawner.tadoRepoRoot() else { return }
-
-        let prompt = ProcessSpawner.bootstrapPrompt(targetPath: project.rootPath)
-        let settings = bootstrapFetchOrCreateSettings()
-        let index = bootstrapNextAvailableGridIndex()
-        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
-
-        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
-        modelContext.insert(todo)
-
-        terminalManager.spawnAndWire(
-            todo: todo,
-            engine: .claude,
-            cwd: tadoRoot,
-            projectName: "Tado"
+        ProjectActionsService.bootstrapTools(
+            project: project,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
         )
-
-        try? modelContext.save()
-
-        appState.pendingNavigationID = todo.id
-        appState.currentView = .canvas
     }
 
     private func bootstrapTeam(for project: Project) {
         let projectTeams = teams.filter { $0.projectID == project.id }
-        guard !projectTeams.isEmpty else { return }
-
-        let prompt = ProcessSpawner.bootstrapTeamPrompt(
-            targetPath: project.rootPath,
-            projectName: project.name,
-            teams: projectTeams.map { ($0.name, $0.agentNames) }
+        ProjectActionsService.bootstrapTeam(
+            project: project,
+            teams: projectTeams,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
         )
-        let settings = bootstrapFetchOrCreateSettings()
-        let index = bootstrapNextAvailableGridIndex()
-        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
-
-        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
-        modelContext.insert(todo)
-
-        terminalManager.spawnAndWire(
-            todo: todo,
-            engine: .claude,
-            cwd: project.rootPath,
-            projectName: project.name
-        )
-
-        try? modelContext.save()
-
-        appState.pendingNavigationID = todo.id
-        appState.currentView = .canvas
-    }
-
-    private func bootstrapNextAvailableGridIndex() -> Int {
-        let activeTodos = todos.filter { $0.listState == .active }
-        let usedIndices = Set(activeTodos.map(\.gridIndex))
-        var index = 0
-        while usedIndices.contains(index) { index += 1 }
-        return index
-    }
-
-    private func bootstrapFetchOrCreateSettings() -> AppSettings {
-        let descriptor = FetchDescriptor<AppSettings>()
-        if let existing = try? modelContext.fetch(descriptor).first {
-            return existing
-        }
-        let settings = AppSettings()
-        modelContext.insert(settings)
-        try? modelContext.save()
-        return settings
     }
 }

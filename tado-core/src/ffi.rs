@@ -415,6 +415,55 @@ pub unsafe extern "C" fn tado_session_snapshot_full(
     r.unwrap_or(ptr::null_mut())
 }
 
+/// Capture the current live grid into the session's viewport history
+/// ring buffer. Intended to be called at ~2 fps from the Swift render
+/// loop; see `Session::capture_viewport_frame`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_capture_viewport_frame(session: *mut TadoSession) {
+    if session.is_null() {
+        return;
+    }
+    let _ = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.capture_viewport_frame();
+    });
+}
+
+/// Number of frames currently buffered in viewport history.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_viewport_frame_count(session: *mut TadoSession) -> u32 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.viewport_frame_count()
+    });
+    r.unwrap_or(0)
+}
+
+/// Snapshot a single historical frame, `offset` frames back from the
+/// newest (offset 1 = previous frame). Returns null past the end of
+/// history or when offset == 0. Caller must free with
+/// `tado_snapshot_free` when done.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_viewport_frame_snapshot(
+    session: *mut TadoSession,
+    offset: u32,
+) -> *mut TadoSnapshot {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        match s.viewport_frame_snapshot(offset) {
+            Some(snap) => Box::into_raw(Box::new(snap)) as *mut TadoSnapshot,
+            None => ptr::null_mut(),
+        }
+    });
+    r.unwrap_or(ptr::null_mut())
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn tado_snapshot_cols(snap: *mut TadoSnapshot) -> u16 {
     if snap.is_null() {

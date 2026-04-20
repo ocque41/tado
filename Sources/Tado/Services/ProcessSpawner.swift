@@ -250,13 +250,30 @@ enum ProcessSpawner {
     /// `~/.claude/skills/`. This keeps the architect's own context lean across 8-12 phase plans —
     /// previously it inline-invoked the upstream /skill-creator (479 lines) per phase, which
     /// bloated context and caused later phases to degrade after auto-compact.
-    static func dispatchArchitectPrompt(projectName: String, projectRoot: String) -> String {
-        """
+    static func dispatchArchitectPrompt(projectName: String, projectRoot: String, runID: UUID) -> String {
+        let runShortID = String(runID.uuidString.prefix(8)).lowercased()
+        let runDir = "\(projectRoot)/.tado/dispatch/runs/\(runID.uuidString)"
+        return """
         You are the Dispatch Architect for the "\(projectName)" project at \(projectRoot).
 
         The user has a super-project request. Your ONLY job right now is to plan it — you will \
         NOT execute the work. A separate chain of specialized phase agents, chosen and \
         orchestrated by you, will do the execution after the user clicks Start.
+
+        ═══════════════════════════════════════════════════════════
+        RUN SCOPE — multiple concurrent dispatches per project
+        ═══════════════════════════════════════════════════════════
+        This dispatch has a unique run id. ALL files you author — the plan JSON, \
+        phase JSONs, per-phase skills, and per-phase agents — MUST include the \
+        run short-id in their names or paths so two concurrent dispatches on the \
+        same project don't clobber each other.
+
+          run-id:           \(runID.uuidString)
+          run-short-id:     \(runShortID)
+          run-dir:          \(runDir)
+
+        The run-short-id is the first 8 hex chars of run-id. Use it wherever the \
+        templates below reference `<run-short-id>`.
 
         ═══════════════════════════════════════════════════════════
         STEP 0 — VERIFY YOUR TOOLING (fail fast)
@@ -273,7 +290,7 @@ enum ProcessSpawner {
         ═══════════════════════════════════════════════════════════
         STEP 1 — READ THE BRIEF + RESEARCH THE PROJECT
         ═══════════════════════════════════════════════════════════
-        Read \(projectRoot)/.tado/dispatch/dispatch.md in full — every sentence is a requirement.
+        Read \(runDir)/dispatch.md in full — every sentence is a requirement.
         Then understand the project by reading:
           - \(projectRoot)/CLAUDE.md and \(projectRoot)/AGENTS.md (if present)
           - The source tree (package manifests, main entry points, module boundaries)
@@ -323,21 +340,29 @@ enum ProcessSpawner {
           - phase-deliverables (bullet list)
           - project-name: \(projectName)
           - project-root: \(projectRoot)
+          - run-short-id: \(runShortID)
 
-        The skill writes one SKILL.md and returns its path + skill name. Use the returned skill \
-        name in Step 5's phase JSON. DO NOT use the upstream /skill-creator.
+        The skill writes one SKILL.md and returns its path + skill name. The
+        returned skill name MUST embed the run-short-id like
+        `dispatch-<projectslug>-\(runShortID)-<phase-id>` so concurrent
+        dispatches don't collide. Use the returned skill name in Step 5's phase
+        JSON. DO NOT use the upstream /skill-creator.
 
         ═══════════════════════════════════════════════════════════
         STEP 4 — CREATE AN AGENT PER PHASE (/tado-dispatch-agent-creator)
         ═══════════════════════════════════════════════════════════
         For each phase that needs an agent (most will), invoke /tado-dispatch-agent-creator with:
-          - agent-name (kebab-case), phase-order, phase-title
+          - agent-name (kebab-case — MUST include the run-short-id as a suffix,
+            e.g. `backend-\(runShortID)`, so the file name never collides with a
+            concurrently-running dispatch's agent on the same project)
+          - phase-order, phase-title
           - phase-responsibilities (prose)
           - engine (claude or codex from Step 2)
           - model (haiku | sonnet | opus — from Step 2's per-phase routing)
           - effort (low | medium | high | max — from Step 2's per-phase routing)
           - project-name: \(projectName)
           - project-root: \(projectRoot)
+          - run-short-id: \(runShortID)
 
         The `model` and `effort` inputs land as frontmatter fields in the emitted agent file. \
         Tado's dispatch pipeline (AgentDiscoveryService.phaseOverride) reads them at phase-spawn \
@@ -351,13 +376,15 @@ enum ProcessSpawner {
         ═══════════════════════════════════════════════════════════
         STEP 5 — WRITE THE JSON PLAN FILES
         ═══════════════════════════════════════════════════════════
-        Create these files under \(projectRoot)/.tado/dispatch/ :
+        Create these files under \(runDir)/ :
 
         plan.json:
         {
           "status": "ready",
           "totalPhases": <N>,
-          "createdAt": "<ISO8601 timestamp>"
+          "createdAt": "<ISO8601 timestamp>",
+          "runID": "\(runID.uuidString)",
+          "runShortID": "\(runShortID)"
         }
 
         One phase file per phase at phases/<order>-<kebab-phase-id>.json :
@@ -369,7 +396,7 @@ enum ProcessSpawner {
           "agent": "<name returned by /tado-dispatch-agent-creator, or null>",
           "engine": "claude" | "codex",
           "prompt": "<FULL self-contained prompt — see Step 6>",
-          "nextPhaseFile": ".tado/dispatch/phases/<next-order>-<next-id>.json",
+          "nextPhaseFile": ".tado/dispatch/runs/\(runID.uuidString)/phases/<next-order>-<next-id>.json",
           "status": "pending"
         }
 
@@ -383,7 +410,7 @@ enum ProcessSpawner {
         from what dispatch.md actually requires, which compounds across the \
         chain and is invisible until smoke-test time.
 
-        1. Re-read \(projectRoot)/.tado/dispatch/dispatch.md and enumerate its \
+        1. Re-read \(runDir)/dispatch.md and enumerate its \
            acceptance criteria as a numbered list — every testable claim \
            (commands that must work, files that must exist, formats that must \
            be supported, behaviors that must hold). Aim for 6–20 items; \
@@ -433,13 +460,13 @@ enum ProcessSpawner {
 
         …then continues with these sections in order:
 
-        1. "Read .tado/dispatch/phases/<this-phase-file>.json first. That JSON is your \
+        1. "Read .tado/dispatch/runs/\(runID.uuidString)/phases/<this-phase-file>.json first. That JSON is your \
         authoritative brief for this phase."
         2. "Load your specialized skill: /<skill-name>"
         3. The concrete work instructions — inputs, steps, deliverables, acceptance criteria. \
         Be exhaustive so the phase agent has zero ambiguity.
         4. "When done, update your phase JSON 'status' field to 'completed'."
-        5. "Write a retrospective at \(projectRoot)/.tado/dispatch/retros/<order>-<id>.md using \
+        5. "Write a retrospective at \(runDir)/retros/<order>-<id>.md using \
         EXACTLY this template (substitute your values):
 
            # Phase <order>: <title>
@@ -465,7 +492,7 @@ enum ProcessSpawner {
 
            If nextPhaseFile IS null (you are the last phase), the handoff is the full \
            RETROSPECTIVE MESSAGE — do not just send 'fully executed.' Instead:
-             1. Read every file in \(projectRoot)/.tado/dispatch/retros/ in order-sorted \
+             1. Read every file in \(runDir)/retros/ in order-sorted \
                 filename order (1-*, 2-*, …, N-*).
              2. Concatenate them into the message body below, wrapped by the heading and \
                 directive lines shown, substituting <projectName> = \(projectName) and \
@@ -517,7 +544,7 @@ enum ProcessSpawner {
         Append a '## Dispatch System' section to BOTH \(projectRoot)/CLAUDE.md and \
         \(projectRoot)/AGENTS.md (create the files with a '# CLAUDE.md' / '# AGENTS.md' header \
         first if missing; REPLACE the section if it already exists). Document:
-          - Filesystem layout at \(projectRoot)/.tado/dispatch/ :
+          - Filesystem layout at \(runDir)/ :
               dispatch.md  — user's brief
               plan.json    — plan summary
               phases/<order>-<id>.json — one per phase (schema below)
@@ -530,13 +557,13 @@ enum ProcessSpawner {
           - Retrospective: every phase writes retros/<order>-<id>.md; the LAST phase \
             concatenates them into a single tado-send back to the architect carrying the \
             OPTIMIZE/HARDEN/POLISH directive
-          - Pointer: active plan is at .tado/dispatch/plan.json
+          - Pointer: active plan is at .tado/dispatch/runs/\(runID.uuidString)/plan.json
 
         ═══════════════════════════════════════════════════════════
         STEP 8 — OPTIONAL MEMORY POINTER
         ═══════════════════════════════════════════════════════════
         If \(projectRoot)/.claude/MEMORY.md exists, add/update a one-line entry pointing at \
-        .tado/dispatch/plan.json. Do not create MEMORY.md if absent.
+        .tado/dispatch/runs/\(runID.uuidString)/plan.json. Do not create MEMORY.md if absent.
 
         ═══════════════════════════════════════════════════════════
         STEP 9 — FINISH AND STOP
@@ -602,6 +629,58 @@ enum ProcessSpawner {
     /// `skipPermissions = false` → mode only (Claude Code still refuses
     ///                              obviously dangerous commands but never
     ///                              opens a prompt in bypass mode).
+    /// Shell command that launches the Tado Eternal external-loop wrapper.
+    /// Used in place of `command(for:engine:…)` when
+    /// `TerminalSession.isEternalWorker == true`. The wrapper is installed
+    /// by `EternalService.installHooks` at
+    /// `<projectRoot>/.tado/eternal/hooks/eternal-loop.sh`. It reads
+    /// TADO_* env vars (see `eternalWorkerEnv(...)`) to build each
+    /// `claude -p` invocation and re-spawn until ETERNAL-DONE, the user
+    /// presses Stop, or the Max-Iter cap hits.
+    static func eternalWorkerCommand(projectRoot: String) -> (executable: String, args: [String]) {
+        let script = "\(projectRoot)/.tado/eternal/hooks/eternal-loop.sh"
+        // zsh -l so the user's login PATH is loaded (same convention as the
+        // normal spawn). The wrapper itself is bash-shebang; we invoke it
+        // explicitly via bash so the shebang doesn't need to resolve on $PATH.
+        return ("/bin/zsh", ["-l", "-c", "bash \(shellEscape(script))"])
+    }
+
+    /// Env-var dictionary consumed by the eternal-loop wrapper. Merged
+    /// with `ProcessSpawner.environment(...)` at spawn time so the
+    /// wrapper inherits everything else (Tado IPC, PATH, etc.) AND gets
+    /// the eternal-specific knobs.
+    static func eternalWorkerEnv(
+        runID: UUID,
+        mode: String,
+        doneMarker: String,
+        sprintMarker: String = "[SPRINT-DONE]",
+        modelID: String?,
+        effortLevel: String?,
+        skipPermissions: Bool
+    ) -> [String: String] {
+        var env: [String: String] = [
+            // Per-run scope key. Every hook script uses this to resolve
+            // paths under `.tado/eternal/runs/<run-id>/`. If it's empty
+            // the wrappers short-circuit to no-ops — that's how architect
+            // and interventor tiles (which don't set this) stay hook-inert.
+            "TADO_ETERNAL_RUN_ID": runID.uuidString,
+            "TADO_ETERNAL_MODE": mode,
+            "TADO_DONE_MARKER": doneMarker,
+            "TADO_SPRINT_MARKER": sprintMarker,
+            "TADO_SKIP_PERMISSIONS": skipPermissions ? "1" : "0",
+            // Constant now that external is the only loop kind — stop.sh
+            // reads this to allow-stop (the wrapper owns continuation).
+            "TADO_ETERNAL_LOOP_MODE": "1",
+        ]
+        if let modelID, !modelID.isEmpty {
+            env["TADO_MODEL"] = modelID
+        }
+        if let effortLevel, !effortLevel.isEmpty {
+            env["TADO_EFFORT"] = effortLevel
+        }
+        return env
+    }
+
     static func eternalPermissionFlags(skipPermissions: Bool) -> [String] {
         var flags = [
             "--permission-mode", "bypassPermissions",
@@ -616,13 +695,14 @@ enum ProcessSpawner {
     /// Prompt for a Mega-mode Eternal worker. Plain text — callers shell-escape
     /// when spawning. The Stop hook picks up context from `state.json` so this
     /// prompt only has to tell the worker what the session IS, not how it loops.
-    static func eternalMegaPrompt(projectName: String, projectRoot: String, marker: String) -> String {
-        """
+    static func eternalMegaPrompt(projectName: String, projectRoot: String, marker: String, runID: UUID) -> String {
+        let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
+        return """
         You are running as a Tado Eternal agent (MEGA mode) for project "\(projectName)" at \(projectRoot).
 
-        Your authoritative brief is \(projectRoot)/.tado/eternal/crafted.md — the Eternal Architect \
+        Your authoritative brief is \(runDir)/crafted.md — the Eternal Architect \
         wrote it for you. Read it before anything else. If it's missing, fall back to \
-        \(projectRoot)/.tado/eternal/user-brief.md (raw) or \(projectRoot)/.tado/eternal/eternal.md (legacy).
+        \(runDir)/user-brief.md (raw).
 
         You are in an ETERNAL session. A Stop hook will intercept your normal end-of-turn \
         and restart you automatically. The session exits only when:
@@ -630,9 +710,9 @@ enum ProcessSpawner {
           (b) The user presses Stop in Tado (the tile will close).
 
         Each iteration:
-          1. Read \(projectRoot)/.tado/eternal/progress.md to recall state (survives compaction).
+          1. Read \(runDir)/progress.md to recall state (survives compaction).
           2. Do the next unit of work — one chunk, don't stall on a single giant step.
-          3. Append ONE short progress line to \(projectRoot)/.tado/eternal/progress.md, e.g.
+          3. Append ONE short progress line to \(runDir)/progress.md, e.g.
              "2026-04-18 18:03: Refactored AuthMiddleware; tests green."
           4. If (and only if) the task is truly, fully done, output "\(marker)" on its own line.
 
@@ -652,7 +732,7 @@ enum ProcessSpawner {
             and any new subdirectory tree.
           • Prefer writing generated files OUTSIDE `.claude/` when possible
             (scratch files, trial-project outputs, reports, etc.). The
-            `.tado/scratch/` and `.tado/eternal/` directories are safe.
+            `.tado/scratch/` and `\(runDir)/` directories are safe.
           • If you genuinely need to create something under `.claude/`, create
             `.claude/` and its full subpath via mkdir FIRST, then Write.
           • Never use tools that open interactive dialogs or confirmations.
@@ -665,12 +745,14 @@ enum ProcessSpawner {
         projectName: String,
         projectRoot: String,
         marker: String,
-        sprintMarker: String
+        sprintMarker: String,
+        runID: UUID
     ) -> String {
-        """
+        let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
+        return """
         You are running as a Tado Eternal agent (SPRINT mode) for project "\(projectName)" at \(projectRoot).
 
-        Your authoritative brief is \(projectRoot)/.tado/eternal/crafted.md — the Eternal Architect \
+        Your authoritative brief is \(runDir)/crafted.md — the Eternal Architect \
         wrote it for you. Read it now. It contains these sections:
           TASK              — what to build/optimize each sprint
           EVALUATE          — exactly how to score a sprint (one command + formula)
@@ -682,11 +764,11 @@ enum ProcessSpawner {
 
           1. APPLY   — implement the current proposal, or apply the last sprint's chosen improvement.
           2. EVAL    — run the evaluation from the TASK/EVALUATE sections. Append one line to
-                       \(projectRoot)/.tado/eternal/metrics.jsonl in this exact shape:
+                       \(runDir)/metrics.jsonl in this exact shape:
                        {"sprint": N, "timestamp": "<iso>", "metric": <number-or-short-string>, "note": "<one-liner>"}
           3. IMPROVE — read the last 5 lines of metrics.jsonl. Decide what to change next, guided by
                        the IMPROVE section. Write your plan as ONE short line in
-                       \(projectRoot)/.tado/eternal/progress.md.
+                       \(runDir)/progress.md.
 
         Then output exactly \(sprintMarker) on its own line. A Stop hook starts the next sprint.
 
@@ -708,10 +790,122 @@ enum ProcessSpawner {
             and any new subdirectory tree in a fresh trial project.
           • Prefer writing generated files OUTSIDE `.claude/` when possible
             (scratch files, reports, trial-project sources). `.tado/scratch/`
-            and `.tado/eternal/` are safe.
+            and `\(runDir)/` are safe.
           • If you must create something under `.claude/`, create `.claude/`
             and the full subpath via `mkdir -p` FIRST, then Write.
           • Never use tools that open interactive dialogs or confirmations.
+        """
+    }
+
+    // MARK: - Eternal Interventor
+
+    /// One-shot agent spawned when the user clicks "Intervene" on a running
+    /// Eternal worker. Reads the user's plain-language message, grounds it
+    /// in the current worker state (crafted.md + progress.md tail), distills
+    /// it into a structured directive, writes a file under
+    /// `.tado/eternal/inbox/`, and prints a one-paragraph confirmation to
+    /// the tile so the user knows when the worker will pick it up.
+    ///
+    /// Pinned to Haiku 4.5 at high effort — this is pure note-distillation,
+    /// not planning. Opus would be overkill and slow.
+    static func eternalInterventorPrompt(
+        projectName: String,
+        projectRoot: String,
+        userMessage: String,
+        runID: UUID
+    ) -> String {
+        let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
+        // Escape the user's message for inclusion in a heredoc-ish region.
+        // The agent reads the triple-bar block as literal text regardless
+        // of its content.
+        return """
+        You are the Tado Eternal Interventor for project "\(projectName)" at \(projectRoot).
+
+        The user has clicked "Intervene" on a running Eternal worker (run id \
+        \(runID.uuidString)). Your job — and ONLY your job right now — is to \
+        translate that message into a structured note the worker will read \
+        at the top of its next iteration, then STOP. Do NOT run sprints, do \
+        NOT tado-deploy, do NOT modify crafted.md, do NOT tado-send.
+
+        ═══════════════════════════════════════════════════════════
+        THE USER'S MESSAGE
+        ═══════════════════════════════════════════════════════════
+        \(userMessage)
+        ═══════════════════════════════════════════════════════════
+
+        STEP 0 — Ground yourself. Read:
+          - \(runDir)/crafted.md (the worker's authoritative brief)
+          - \(runDir)/progress.md (tail ~30 lines — what the worker has done recently)
+          - \(runDir)/state.json (the worker's phase and lastActivityAt — tells you how soon the worker will pick up the intervention)
+
+        STEP 1 — Classify the user's intent. Pick ONE:
+          • PRIORITY   — change what the worker focuses on next.
+          • CORRECTION — worker did something wrong; fix it.
+          • CONSTRAINT — add a new never-violate rule.
+          • CONTEXT    — extra background info / clarification.
+          • QUESTION   — user wants an answer from the worker (e.g. "why are you on M2 still?").
+
+        STEP 2 — Decide the timing. Compare `state.json.lastActivityAt` \
+        (unix seconds) to the current time:
+          • If less than 60 seconds ago: the worker is mid-iteration. It \
+            will see this at the start of the NEXT iteration.
+          • Otherwise: the worker is between iterations. It will see this \
+            within seconds.
+
+        STEP 3 — Write the distilled directive to
+          \(runDir)/inbox/intervene-<iso-timestamp>.md
+
+        Use `Bash(mkdir -p \(runDir)/inbox)` first (the \
+        directory may not exist yet). Use a UTC-formatted timestamp with \
+        no colons in the filename, e.g. `intervene-20260419T001503Z.md`.
+
+        The file's body must be in this exact shape:
+
+          # Intervention: <short title, <= 60 chars>
+
+          **Type:** PRIORITY | CORRECTION | CONSTRAINT | CONTEXT | QUESTION
+          **Received (UTC):** <iso-8601 timestamp>
+          **User's raw message:** \\\"<original message, verbatim, newlines preserved>\\\"
+
+          ## Directive for the worker
+
+          <2-5 sentence precise instruction: what to do, what to stop doing, \
+          what to answer. Ground it in the actual files / phases the worker \
+          is touching — be specific, not generic.>
+
+          ## Act when
+
+          <one of: "before anything else this iteration" | "after current \
+          sprint ends" | "respond then continue normally">
+
+        STEP 4 — Print a single paragraph to the tile so the user can see \
+        that their intervention landed. Structure:
+          • What classification you gave it (PRIORITY / CORRECTION / ...).
+          • One-line summary of what you told the worker.
+          • When the worker will see it, based on STEP 2's timing. Use \
+            exact phrasing:
+              - mid-iteration: "The worker is mid-iteration — it'll read \
+                your note at the start of the next one (usually 1-3 \
+                minutes from now)."
+              - between iterations: "The worker is between iterations — \
+                it'll read your note within a few seconds."
+
+        STEP 5 — STOP. Do not loop, do not run sprints, do not tado-send. \
+        Your job is done the moment STEP 3 and STEP 4 are complete.
+
+        ═══════════════════════════════════════════════════════════
+        HARD RULES
+        ═══════════════════════════════════════════════════════════
+        • BEFORE any Write or Edit on a new path, run Bash(mkdir -p <dir>).
+        • DO NOT write under .claude/ — protected paths still prompt even \
+          in bypass mode. Use .tado/eternal/inbox/ as specified.
+        • DO NOT modify crafted.md. The architect owns that file. If the \
+          user's message implies a brief change, capture that as a \
+          CONSTRAINT in your directive and let the worker decide whether \
+          to escalate.
+        • Keep the directive precise and short. The worker re-reads the \
+          full crafted.md every iteration; your note is a DELTA, not a \
+          rewrite.
         """
     }
 
@@ -725,9 +919,11 @@ enum ProcessSpawner {
     static func eternalArchitectPrompt(
         projectName: String,
         projectRoot: String,
-        mode: String
+        mode: String,
+        runID: UUID
     ) -> String {
         let isSprint = (mode == "sprint")
+        let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
 
         let modeSectionSprint = """
 
@@ -742,7 +938,7 @@ enum ProcessSpawner {
                      ordered from safest to structural. Include plateau rules:
                      "if score within ±0.03 for N sprints, promote to next rung".
 
-        Write the crafted specification to \(projectRoot)/.tado/eternal/crafted.md \
+        Write the crafted specification to \(runDir)/crafted.md \
         in this exact shape:
 
           # Eternal Sprint — \(projectName)
@@ -774,7 +970,7 @@ enum ProcessSpawner {
           - Acceptance criteria: how the worker knows the task is done.
           - Hard rules: files off-limits, build-must-stay-green, etc.
 
-        Write the crafted specification to \(projectRoot)/.tado/eternal/crafted.md \
+        Write the crafted specification to \(runDir)/crafted.md \
         in this exact shape:
 
           # Eternal Mega — \(projectName)
@@ -802,18 +998,18 @@ enum ProcessSpawner {
         You are the Eternal Architect for the "\(projectName)" project at \(projectRoot).
 
         A Tado user has written a plain-language brief at
-          \(projectRoot)/.tado/eternal/user-brief.md
+          \(runDir)/user-brief.md
 
         Your job — and ONLY your job right now — is to translate that brief into a \
         properly-structured Eternal \(isSprint ? "SPRINT" : "MEGA") specification at \
-        \(projectRoot)/.tado/eternal/crafted.md, then STOP. A separate worker agent will run \
+        \(runDir)/crafted.md, then STOP. A separate worker agent will run \
         the actual infinite \(isSprint ? "sprints" : "plan") after the user reviews what \
         you produced and clicks Start.
 
         ═══════════════════════════════════════════════════════════
         STEP 0 — READ THE USER BRIEF + GROUND YOURSELF
         ═══════════════════════════════════════════════════════════
-        Read \(projectRoot)/.tado/eternal/user-brief.md. Then read the project's \
+        Read \(runDir)/user-brief.md. Then read the project's \
         CLAUDE.md, AGENTS.md, package manifests, and relevant source so your \
         specification is grounded in reality, not your prior-memory guess at \
         what the project is. The worker will run many iterations against this \
@@ -852,11 +1048,11 @@ enum ProcessSpawner {
              every prompt EXCEPT writes to protected paths under `.claude/` \
              when the parent directory has to be created. Prefer non-`.claude/` \
              output locations whenever possible; `.tado/scratch/` and \
-             `.tado/eternal/` are safe. If you must write under `.claude/`, \
+             `\(runDir)/` are safe. If you must write under `.claude/`, \
              mkdir the full subpath first.
 
           2. EVERY turn, BEFORE you end the turn, append at least one concrete \
-             line to `.tado/eternal/progress.md` in the format \
+             line to `\(runDir)/progress.md` in the format \
              `YYYY-MM-DD HH:MM: <one sentence describing what you did>`. This \
              survives compaction — it's the worker's memory across context \
              resets. The Stop hook shows you the last progress.md line on every \

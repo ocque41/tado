@@ -1,307 +1,356 @@
 import SwiftUI
+import SwiftData
 
-/// The detail view's dispatch zone — the single most prominent block
-/// on the page. Handles every dispatch lifecycle state with a distinct
-/// visual:
-///
-/// - **idle** (no plan): a dashed-border placeholder nudging the user
-///   to create a dispatch plan. Big primary CTA inside.
-/// - **drafted / planning, no plan on disk**: "ARCHITECT PLANNING"
-///   status with the brief preview + Edit. Architect is working on
-///   the canvas; the user watches, doesn't press anything.
-/// - **drafted / planning, plan on disk**: "READY · N phases" with
-///   Edit (secondary) + Start (primary, accent-filled). The plan is
-///   ready to launch.
-/// - **dispatching**: "RUNNING · N phases" with Edit + Watch on
-///   Canvas. Chain is live; the user goes to the canvas to watch.
-///
-/// Phase count is read live from `.tado/dispatch/phases/` via
-/// `DispatchPlanService.phaseFileCount`.
+/// Dispatch zone on the project detail page. Shows a list of every
+/// `DispatchRun` for this project with per-run state + controls, plus a
+/// top-level "New Dispatch" button that always creates a fresh run.
+/// Two concurrent dispatches can coexist — each writes under its own
+/// `.tado/dispatch/runs/<id>/` dir and namespaces its skills/agents with
+/// the run short-id, so there's no cross-talk.
 struct ProjectDispatchSection: View {
     let project: Project
-    let onNewDispatch: () -> Void
-    let onEdit: () -> Void
-    let onStart: () -> Void
-    let onWatchOnCanvas: () -> Void
+
+    @Environment(\.modelContext) private var modelContext
+    @Environment(AppState.self) private var appState
+    @Environment(TerminalManager.self) private var terminalManager
+
+    @Query private var allRuns: [DispatchRun]
+
+    /// Per-project lookup. Sorted newest-first.
+    private var projectRuns: [DispatchRun] {
+        allRuns
+            .filter { $0.project?.id == project.id }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var activeRuns: [DispatchRun] {
+        projectRuns.filter { $0.state == "drafted" || $0.state == "planning"
+                             || $0.state == "ready" || $0.state == "dispatching" }
+    }
+
+    private var archivedRuns: [DispatchRun] {
+        projectRuns.filter { $0.state == "completed" }
+    }
+
+    @State private var showPlanNotReadyRunID: UUID? = nil
+    /// Run the user clicked delete on; non-nil shows the confirmation alert.
+    @State private var runPendingDelete: DispatchRun? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("DISPATCH")
-                .font(Typography.callout)
-                .tracking(0.6)
-                .foregroundStyle(Palette.textSecondary)
-
-            cardBody
-        }
-    }
-
-    // MARK: - Body by state
-
-    @ViewBuilder
-    private var cardBody: some View {
-        switch currentState {
-        case .idle:
-            idleCard
-        case .planning:
-            planningCard
-        case .ready:
-            readyCard
-        case .dispatching:
-            dispatchingCard
-        }
-    }
-
-    /// No plan yet. Invite the user to start one.
-    private var idleCard: some View {
-        VStack(spacing: 14) {
-            VStack(spacing: 6) {
-                Text("No dispatch plan yet")
-                    .font(Typography.heading)
-                    .foregroundStyle(Palette.textPrimary)
-                Text("Describe a multi-phase super-project. Tado's Dispatch Architect will design the plan and launch the phases on your canvas.")
-                    .font(Typography.body)
+            HStack(alignment: .firstTextBaseline) {
+                Text("DISPATCH")
+                    .font(Typography.callout)
+                    .tracking(0.6)
                     .foregroundStyle(Palette.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Button(action: onNewDispatch) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                    Text("New Dispatch")
+
+                if !activeRuns.isEmpty {
+                    Text("·  \(activeRuns.count) active")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textTertiary)
                 }
-                .font(Typography.label)
-                .foregroundStyle(Palette.accent)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Palette.surfaceAccent)
-                .clipShape(Capsule())
+
+                Spacer()
+
+                newRunButton
             }
-            .buttonStyle(.plain)
+
+            if activeRuns.isEmpty && archivedRuns.isEmpty {
+                emptyCard
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(activeRuns, id: \.id) { run in
+                        runRow(run: run)
+                    }
+                }
+
+                if !archivedRuns.isEmpty {
+                    DisclosureGroup {
+                        VStack(spacing: 6) {
+                            ForEach(archivedRuns, id: \.id) { run in
+                                archivedRow(run: run)
+                            }
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        Text("Archived dispatches · \(archivedRuns.count)")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.textSecondary)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+        }
+        .alert("Architect still planning", isPresented: Binding(
+            get: { showPlanNotReadyRunID != nil },
+            set: { if !$0 { showPlanNotReadyRunID = nil } }
+        )) {
+            Button("OK", role: .cancel) { showPlanNotReadyRunID = nil }
+        } message: {
+            Text("The Dispatch Architect has not finished writing this run's plan yet. Watch its terminal on the canvas — once plan.json is on disk, try Start again.")
+        }
+        .alert("Delete \(runPendingDelete?.label ?? "dispatch")?", isPresented: Binding(
+            get: { runPendingDelete != nil },
+            set: { if !$0 { runPendingDelete = nil } }
+        ), presenting: runPendingDelete) { run in
+            Button("Delete", role: .destructive) {
+                DispatchPlanService.deleteRun(
+                    run,
+                    modelContext: modelContext,
+                    terminalManager: terminalManager
+                )
+                runPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                runPendingDelete = nil
+            }
+        } message: { run in
+            Text("Any live architect or phase tiles for this dispatch will be killed and the run's on-disk directory will be removed. Per-phase skill/agent files under `.claude/` stay — they're namespaced by run short-id and don't collide with new dispatches.")
+        }
+    }
+
+    private var newRunButton: some View {
+        Button(action: createAndEditRun) {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                Text("New Dispatch")
+            }
+            .font(Typography.label)
+            .foregroundStyle(Palette.accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Palette.surfaceAccent)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var emptyCard: some View {
+        VStack(spacing: 8) {
+            Text("No dispatch plans yet")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+            Text("Describe a multi-phase super-project. Tado's Dispatch Architect will design the plan and launch the phases on your canvas.")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textTertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 28)
-        .padding(.horizontal, 20)
+        .padding(16)
+        .background(Palette.surface)
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Palette.divider, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                .stroke(Palette.divider, style: StrokeStyle(lineWidth: 1, dash: [4]))
         )
-    }
-
-    /// Architect is working on the plan. Brief preview + planning status.
-    private var planningCard: some View {
-        cardChrome(
-            statusLabel: "ARCHITECT PLANNING",
-            statusFg: Palette.accent,
-            statusBg: Palette.accent.opacity(0.12),
-            substate: "Watch the architect terminal on the canvas",
-            leftBorderAccent: false
-        ) {
-            Button(action: onEdit) {
-                Text("Edit")
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.textSecondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Palette.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Palette.divider, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    /// Plan is on disk. Start is the primary CTA.
-    private var readyCard: some View {
-        cardChrome(
-            statusLabel: "READY",
-            statusFg: Palette.success,
-            statusBg: Palette.success.opacity(0.15),
-            substate: phaseCountLabel(suffix: "ready to launch"),
-            leftBorderAccent: false
-        ) {
-            HStack(spacing: 8) {
-                Button(action: onEdit) {
-                    Text("Edit")
-                        .font(Typography.label)
-                        .foregroundStyle(Palette.textSecondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Palette.surface)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Palette.divider, lineWidth: 1)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-
-                Button(action: onStart) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11, weight: .bold))
-                        Text("Start")
-                            .font(Typography.label)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Palette.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    /// Chain is live. Watch-on-canvas is the primary action.
-    private var dispatchingCard: some View {
-        cardChrome(
-            statusLabel: "RUNNING",
-            statusFg: Palette.accent,
-            statusBg: Palette.accent.opacity(0.22),
-            substate: phaseCountLabel(suffix: "dispatching"),
-            leftBorderAccent: true
-        ) {
-            HStack(spacing: 8) {
-                Button(action: onEdit) {
-                    Text("Redo…")
-                        .font(Typography.label)
-                        .foregroundStyle(Palette.warning)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Palette.warning.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-
-                Button(action: onWatchOnCanvas) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "eye")
-                            .font(.system(size: 11, weight: .bold))
-                        Text("Watch on Canvas")
-                            .font(Typography.label)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Palette.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    // MARK: - Shared card chrome
-
-    /// Brief preview + status capsule top, action buttons bottom-right.
-    /// Lifted into a helper because drafted/planning/ready/dispatching
-    /// all share the same shape — only the status pill and the action
-    /// buttons vary.
-    private func cardChrome<Actions: View>(
-        statusLabel: String,
-        statusFg: Color,
-        statusBg: Color,
-        substate: String?,
-        leftBorderAccent: Bool,
-        @ViewBuilder actions: () -> Actions
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(briefPreview)
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textPrimary)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let substate {
-                        Text(substate)
-                            .font(Typography.monoCaption)
-                            .foregroundStyle(Palette.textTertiary)
-                    }
-                }
-
-                Spacer()
-
-                Text(statusLabel)
-                    .font(Typography.microBold)
-                    .tracking(0.8)
-                    .foregroundStyle(statusFg)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(statusBg)
-                    .clipShape(Capsule())
-                    .fixedSize()
-            }
-
-            HStack {
-                Spacer()
-                actions()
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.surfaceElevated)
-        .overlay(alignment: .leading) {
-            if leftBorderAccent {
-                Rectangle()
-                    .fill(Palette.accent)
-                    .frame(width: 2)
-            }
-        }
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    // MARK: - Derived values
+    // MARK: - Run rows
 
-    private enum CardState {
-        case idle
-        case planning
-        case ready
-        case dispatching
+    @ViewBuilder
+    private func runRow(run: DispatchRun) -> some View {
+        let displayState = effectiveState(for: run)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                statePill(state: displayState)
+                Text(run.label)
+                    .font(Typography.bodyBold)
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                let phaseCount = DispatchPlanService.phaseFileCount(run)
+                if phaseCount > 0 {
+                    Text("·  \(phaseCount) phase\(phaseCount == 1 ? "" : "s")")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textTertiary)
+                }
+                Spacer()
+                actionButtons(run: run, state: displayState)
+            }
+            if !run.brief.isEmpty {
+                Text(briefPreview(run.brief))
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .padding(12)
+        .background(Palette.surfaceElevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(borderColor(for: displayState), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    private var currentState: CardState {
-        let state = project.dispatchState
-        if state == "idle" || state.isEmpty {
-            return .idle
+    @ViewBuilder
+    private func archivedRow(run: DispatchRun) -> some View {
+        HStack(spacing: 10) {
+            statePill(state: run.state)
+            Text(run.label)
+                .font(Typography.bodySm)
+                .foregroundStyle(Palette.textSecondary)
+                .lineLimit(1)
+            Spacer()
+            if let todoID = run.currentPhaseTodoID ?? run.architectTodoID {
+                Button("Canvas") {
+                    appState.pendingNavigationID = todoID
+                    appState.currentView = .canvas
+                }
+                .buttonStyle(.plain)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textSecondary)
+            }
+            deleteButton(run: run)
         }
-        if state == "dispatching" {
-            return .dispatching
-        }
-        // drafted / planning branches on whether plan.json is written
-        if DispatchPlanService.planExistsOnDisk(project) {
-            return .ready
-        }
-        return .planning
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
     }
 
-    /// First ~200 chars of the brief, first paragraph only, ellipsis if
-    /// truncated. Gives the user a reminder of what they asked for
-    /// without eating half the card.
-    private var briefPreview: String {
-        let md = project.dispatchMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
-        if md.isEmpty {
-            return "(no brief written yet)"
-        }
-        let firstParagraph = md.split(separator: "\n\n", maxSplits: 1).first.map(String.init) ?? md
-        let limit = 200
-        if firstParagraph.count <= limit {
-            return firstParagraph
-        }
-        let clipped = firstParagraph.prefix(limit).trimmingCharacters(in: .whitespacesAndNewlines)
-        return clipped + "…"
+    @ViewBuilder
+    private func statePill(state: String) -> some View {
+        let (label, color) = statePillStyle(state: state)
+        Text(label)
+            .font(Typography.microBold)
+            .tracking(0.6)
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    private func phaseCountLabel(suffix: String) -> String {
-        let n = DispatchPlanService.phaseFileCount(project)
-        if n == 0 {
-            return suffix
+    private func statePillStyle(state: String) -> (String, Color) {
+        switch state {
+        case "drafted":     return ("DRAFT",       Palette.textSecondary)
+        case "planning":    return ("PLANNING",    Palette.accent)
+        case "ready":       return ("READY",       Palette.success)
+        case "dispatching": return ("DISPATCHING", Palette.accent)
+        case "completed":   return ("COMPLETED",   Palette.success)
+        default:            return (state.uppercased(), Palette.textSecondary)
         }
-        return "\(n) \(n == 1 ? "phase" : "phases") · \(suffix)"
+    }
+
+    private func borderColor(for state: String) -> Color {
+        switch state {
+        case "dispatching": return Palette.accent.opacity(0.5)
+        case "planning":    return Palette.accent.opacity(0.3)
+        case "ready":       return Palette.success.opacity(0.5)
+        default:            return Palette.divider
+        }
+    }
+
+    @ViewBuilder
+    private func actionButtons(run: DispatchRun, state: String) -> some View {
+        HStack(spacing: 6) {
+            switch state {
+            case "drafted":
+                smallButton("Edit", tint: Palette.textPrimary) {
+                    appState.dispatchModalRunID = run.id
+                }
+            case "planning":
+                if let todoID = run.architectTodoID ?? run.currentPhaseTodoID {
+                    smallButton("Canvas", tint: Palette.textSecondary) {
+                        appState.pendingNavigationID = todoID
+                        appState.currentView = .canvas
+                    }
+                }
+                smallButton("Edit", tint: Palette.textSecondary) {
+                    appState.dispatchModalRunID = run.id
+                }
+            case "ready":
+                smallButton("Edit", tint: Palette.textSecondary) {
+                    appState.dispatchModalRunID = run.id
+                }
+                smallButton("Start", tint: Palette.success) {
+                    let launched = DispatchPlanService.startPhaseOne(
+                        run: run,
+                        modelContext: modelContext,
+                        terminalManager: terminalManager,
+                        appState: appState
+                    )
+                    if !launched {
+                        showPlanNotReadyRunID = run.id
+                    }
+                }
+            case "dispatching":
+                if let todoID = run.currentPhaseTodoID ?? run.architectTodoID {
+                    smallButton("Canvas", tint: Palette.accent) {
+                        appState.pendingNavigationID = todoID
+                        appState.currentView = .canvas
+                    }
+                }
+                smallButton("Redo", tint: Palette.warning) {
+                    appState.dispatchModalRunID = run.id
+                }
+            default:
+                EmptyView()
+            }
+            deleteButton(run: run)
+        }
+    }
+
+    @ViewBuilder
+    private func deleteButton(run: DispatchRun) -> some View {
+        Button(action: { runPendingDelete = run }) {
+            Image(systemName: "trash")
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.danger.opacity(0.8))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .help("Delete this dispatch — kills its live tiles and wipes the on-disk run dir")
+    }
+
+    @ViewBuilder
+    private func smallButton(_ label: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(Typography.label)
+                .foregroundStyle(tint)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(tint.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// First ~180 chars of the brief, trimmed. Matches the old single-run card.
+    private func briefPreview(_ md: String) -> String {
+        let trimmed = md.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstParagraph = trimmed.split(separator: "\n\n", maxSplits: 1).first.map(String.init) ?? trimmed
+        let limit = 180
+        if firstParagraph.count <= limit { return firstParagraph }
+        return firstParagraph.prefix(limit).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+    }
+
+    // MARK: - State reconciliation
+
+    /// If the architect has written plan.json while `run.state` is still
+    /// "planning", promote the display state to "ready" without mutating
+    /// SwiftData on every render. The user's Start action is the only
+    /// thing that flips state to "dispatching".
+    private func effectiveState(for run: DispatchRun) -> String {
+        if run.state == "planning" && DispatchPlanService.planExistsOnDisk(run) {
+            return "ready"
+        }
+        return run.state
+    }
+
+    // MARK: - Actions
+
+    private func createAndEditRun() {
+        let run = DispatchRun(
+            project: project,
+            label: DispatchRun.defaultLabel(),
+            state: "drafted",
+            brief: ""
+        )
+        modelContext.insert(run)
+        try? modelContext.save()
+        appState.dispatchModalRunID = run.id
     }
 }

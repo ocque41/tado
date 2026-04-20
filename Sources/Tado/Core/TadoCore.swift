@@ -250,6 +250,35 @@ enum TadoCore {
             }
             return Scrollback(raw: OpaquePointer(raw))
         }
+
+        /// Append the current live grid to the viewport-history ring
+        /// buffer. Drives the "scrub through time" scrollback for TUIs
+        /// that paint without newline scrolling. Cheap (one memcpy of
+        /// ~30 KB for 80×24); call at ~2 fps.
+        func captureViewportFrame() {
+            tado_session_capture_viewport_frame(UnsafeMutablePointer(handle))
+        }
+
+        /// How many frames are currently stored in viewport history.
+        /// `TerminalMTKView.scrollWheel` clamps `scrollOffset` against
+        /// this so the user can't scroll past the oldest capture.
+        func viewportFrameCount() -> UInt32 {
+            tado_session_viewport_frame_count(UnsafeMutablePointer(handle))
+        }
+
+        /// Full-grid snapshot of the viewport as it was `offset` frames
+        /// ago. `offset = 0` returns nil (caller renders live instead).
+        /// `offset = 1` is the previous frame. Shape matches the live
+        /// grid at capture time.
+        func viewportFrameSnapshot(offset: UInt32) -> Snapshot? {
+            guard let raw = tado_session_viewport_frame_snapshot(
+                UnsafeMutablePointer(handle),
+                offset
+            ) else {
+                return nil
+            }
+            return Snapshot(raw: OpaquePointer(raw))
+        }
     }
 
     /// Cell packed for direct upload to a Metal vertex/instance buffer.

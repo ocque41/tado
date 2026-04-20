@@ -1,11 +1,17 @@
 import Foundation
 
 enum CanvasLayout {
-    static let tileWidth: CGFloat = 660
-    static let tileHeight: CGFloat = 440
+    // Default tile dimensions. The outer `tileWidth/Height` includes
+    // padding + title bar; `contentWidth/Height` is the terminal body.
+    // At default zoom 0.75 → ~600 visible px → ~70 columns at 13pt mono,
+    // enough to fit typical Unix paths without ugly mid-path wrapping.
+    // Existing sessions keep their persisted width/height; only new
+    // sessions pick up these defaults.
+    static let tileWidth: CGFloat = 820
+    static let tileHeight: CGFloat = 540
     static let tilePadding: CGFloat = 20
-    static let contentWidth: CGFloat = 640
-    static let contentHeight: CGFloat = 420
+    static let contentWidth: CGFloat = 800
+    static let contentHeight: CGFloat = 520
 
     static func position(forIndex index: Int, gridColumns: Int = 3) -> CGPoint {
         let col = index % gridColumns

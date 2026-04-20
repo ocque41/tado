@@ -92,24 +92,22 @@ final class TerminalMTKView: MTKView {
     // MARK: Scrollback state
 
     /// Lines scrolled back from the live view. 0 = live, positive = history.
-    /// Capped by the session's scrollback length each scroll tick.
+    /// Interpreted as "frames back in viewport history". `0` = live
+    /// grid; each positive step walks one captured frame into the
+    /// past. Capped by `session.viewportFrameCount()` each scroll tick.
     private(set) var scrollOffset: Int = 0
-    /// Pixel accumulator for trackpad scrolling; one line emitted per
-    /// cellHeight of accumulated deltaY. Matches AppKit trackpad cadence.
+    /// Pixel accumulator for trackpad scrolling; one frame step emitted
+    /// per cellHeight of accumulated deltaY. Matches AppKit trackpad
+    /// cadence so a full-screen flick paces out as rapid time travel
+    /// rather than one snap.
     private var scrollPixelAccumulator: CGFloat = 0
-    /// `scrollOffset` from the previous draw tick. A `>0 → 0` transition
-    /// triggers a full-grid re-upload in the draw loop so the renderer's
-    /// local cell buffer — which `uploadScrolled` overwrote with a
-    /// scrollback composite — gets reset to the live grid. Without this,
-    /// returning to live left the composite stuck on screen ("freeze")
-    /// until new dirty rows came in to overwrite it.
+    /// `scrollOffset` from the previous draw tick. Any change triggers
+    /// a full-grid re-upload — either the live grid (when `scrollOffset
+    /// == 0`) or a historical frame from viewport history — so the
+    /// renderer's local cell buffer is always consistent with what
+    /// should be on screen. Without this, leftover cells from the
+    /// previous state stay stuck until new dirty rows overwrite them.
     private var lastRenderedScrollOffset: Int = 0
-
-    // MARK: Cached latest live snapshot
-
-    /// Kept so scroll-back renders can compose against the current live
-    /// grid without waiting for a new dirty tick from Rust.
-    private var latestLive: TadoCore.Snapshot?
 
     // MARK: Cursor blink
 
@@ -143,6 +141,13 @@ final class TerminalMTKView: MTKView {
     /// dispatches audio + visual feedback.
     var bellMode: BellMode = .audible
     private var lastIdleTick: TimeInterval = 0
+
+    /// Wall-clock timestamp of the last viewport-history capture. The
+    /// draw loop triggers a capture roughly every 500 ms when dirty
+    /// activity is landing, which gives scrollback ~3 minutes of
+    /// scrubbable history at the default `viewport_history_cap = 400`.
+    /// Idle tiles skip capture to avoid padding history with duplicates.
+    private var lastViewportCaptureTick: TimeInterval = 0
 
     /// Tracks silent `draw(in:)` early-returns so a blacked-out tile
     /// surfaces as an NSLog instead of just sitting there. Also drives
@@ -272,6 +277,13 @@ final class TerminalMTKView: MTKView {
         super.viewDidMoveToWindow()
         updateDrawableSize()
         reflowGridToBounds()
+        // Intentionally NOT calling `becomeFirstResponder()`. Focus only
+        // transfers to this tile on an explicit user click (see
+        // `mouseDown`). Auto-grabbing on mount is what caused "multiple
+        // terminals eat my arrow keys" — the most-recently-mounted MTKView
+        // would monopolise keyDown system-wide, blocking canvas tile
+        // navigation and even arrow cursor-moves in TextFields on other
+        // views. Let AppKit pick firstResponder based on actual user intent.
     }
 
     /// Set `drawableSize` to `bounds × backingScaleFactor`. On Retina
@@ -480,18 +492,30 @@ final class TerminalMTKView: MTKView {
         if lines == 0 { return }
         scrollPixelAccumulator -= CGFloat(lines) * cellH
 
+        // If the CLI has mouse reporting on (DECSET 1000/1002 + 1006),
+        // forward wheel events as xterm mouse sequences so it can drive
+        // its own scrollback — Claude Code and Codex both expose a
+        // scrollable message history that responds to wheel clicks when
+        // their fullscreen UI is active. Local VT-parser scrollback
+        // stays disabled in that case to avoid two scrollers fighting.
+        if session.mouseMode != .off, session.mouseSgrEncoding {
+            reportMouseWheel(event: event, wheelLines: lines)
+            // Keep `scrollOffset` at 0 so the tile stays on the live
+            // grid; the CLI paints its own history onto that grid.
+            if scrollOffset != 0 {
+                scrollOffset = 0
+            }
+            return
+        }
+
         // AppKit convention: positive deltaY == scroll toward older content.
         // Our offset grows toward history, so add lines directly. Clamp
-        // upward against the Rust-side scrollback length so a long flick
-        // can't drift past the top (which showed blank rows) or "bank"
-        // inertia that swallowed the first scroll-back-down event.
-        //
-        // Only query `scrollbackSnapshot` when lines > 0 — scrolling
-        // toward live never needs the upper bound, and each query
-        // allocates a one-row cell buffer.
+        // upward against the session's snapshot-history frame count so a
+        // long flick can't drift past the oldest frame or "bank" inertia
+        // that swallowed the first scroll-back-down event.
         let available: Int
         if lines > 0 {
-            available = Int(session.scrollbackSnapshot(offset: 0, rows: 1)?.totalAvailable ?? 0)
+            available = Int(session.viewportFrameCount())
         } else {
             available = scrollOffset
         }
@@ -504,6 +528,28 @@ final class TerminalMTKView: MTKView {
             scrollPixelAccumulator = 0
         }
         scrollOffset = newOffset
+    }
+
+    /// Emit xterm wheel-scroll sequences (button codes 64 = up, 65 = down)
+    /// for each accumulated line of wheel motion. `wheelLines > 0` means
+    /// "scroll toward older content" (send button 64); `< 0` means "scroll
+    /// toward newer" (button 65). Cursor column/row are reported so the
+    /// CLI can infer which of its panes you're scrolling.
+    private func reportMouseWheel(event: NSEvent, wheelLines: Int) {
+        guard let renderer = renderer else { return }
+        let local = convert(event.locationInWindow, from: nil)
+        let flippedY = max(0, bounds.height - local.y)
+        let col = max(1, Int(local.x / renderer.metrics.cellWidth) + 1)
+        let row = max(1, Int(flippedY / renderer.metrics.cellHeight) + 1)
+        let button = wheelLines > 0 ? 64 : 65
+        let ticks = abs(wheelLines)
+        // One SGR sequence per wheel notch. xterm only sends an "M"
+        // (press) for wheel events — there's no release for a wheel tick.
+        var buf = ""
+        for _ in 0..<ticks {
+            buf.append("\u{1B}[<\(button);\(col);\(row)M")
+        }
+        session.write(text: buf)
     }
 
     /// Pure version of the scroll-wheel clamp. `current` is the existing
@@ -616,17 +662,26 @@ extension TerminalMTKView: MTKViewDelegate {
 
         drawGuardTracker.recordSuccess()
 
-        // Scroll-offset transition: scrolling back overwrote the renderer's
-        // local cell buffer with a scrollback composite. When we return to
-        // live (offset > 0 → 0), re-seed from a full snapshot; otherwise
-        // the last composite stays stuck on screen until new dirty rows
-        // arrive (the "freeze" bug). `snapshotFull` doesn't consume dirty
-        // flags, so this doesn't race the dirty-row path.
-        if scrollOffset == 0, lastRenderedScrollOffset > 0 {
-            if let full = session.snapshotFull() {
-                renderer.upload(snapshot: full)
+        // Scroll-offset transition handling. A historical frame and the
+        // live grid are full-grid uploads, so the renderer's local cell
+        // buffer needs a fresh overwrite whenever the offset changes —
+        // otherwise the previous composite stays stuck on screen until
+        // new dirty rows arrive (the "freeze" bug). `snapshotFull`
+        // doesn't consume dirty flags, so this doesn't race the
+        // dirty-row path below.
+        if scrollOffset != lastRenderedScrollOffset {
+            if scrollOffset == 0 {
+                if let full = session.snapshotFull() {
+                    renderer.upload(snapshot: full)
+                }
+            } else if let frame = session.viewportFrameSnapshot(offset: UInt32(scrollOffset)) {
+                renderer.upload(snapshot: frame)
             }
-            latestLive = nil
+            // If no history frame exists at this offset (brand-new tile),
+            // we leave the renderer showing the most-recent content — the
+            // scroll is a no-op visually until enough frames have been
+            // captured, which matches the behavior of Terminal.app when
+            // the scrollback buffer is empty.
         }
         lastRenderedScrollOffset = scrollOffset
 
@@ -677,20 +732,18 @@ extension TerminalMTKView: MTKViewDelegate {
             }
         }
 
-        // For scrollback we need the FULL live grid (the dirty-row diff
-        // doesn't describe unchanged rows). Cache the latest full snapshot
-        // and refresh on scroll changes. Cheap: ~80×24×16B = 30 KB memcpy.
-        if scrollOffset > 0 {
-            if latestLive == nil || dirty?.dirtyRows.isEmpty == false {
-                latestLive = session.snapshotFull()
-            }
-            if let live = latestLive {
-                let sb = session.scrollbackSnapshot(
-                    offset: 0,
-                    rows: scrollOffset
-                )
-                renderer.uploadScrolled(live: live, scrollback: sb, scrollOffset: scrollOffset)
-            }
+        // Viewport-history capture. Runs at ~2 fps while the tile has
+        // recently been dirty — this is the scrollback mechanism for
+        // TUIs like Claude Code / Codex that paint via cursor
+        // positioning and never emit scrolling newlines. Skips idle
+        // tiles so history isn't padded with identical frames, and
+        // skips while scrolled back so the "live" tail you're about to
+        // return to stays fixed.
+        if scrollOffset == 0,
+           hadDirtyLastFrame,
+           now - lastViewportCaptureTick >= 0.5 {
+            session.captureViewportFrame()
+            lastViewportCaptureTick = now
         }
 
         // Pass selection (if any) through to the renderer. Normalized

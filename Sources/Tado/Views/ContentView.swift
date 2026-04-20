@@ -9,45 +9,43 @@ struct ContentView: View {
     @State private var eventMonitor: Any?
 
     var body: some View {
-        ZStack {
-            // All views stay alive — never destroyed/recreated.
-            // Terminals keep running when switching views.
-            CanvasView()
-                .opacity(appState.currentView == .canvas ? 1 : 0)
-                .allowsHitTesting(appState.currentView == .canvas)
+        VStack(spacing: 0) {
+            // .zIndex(1) forces the nav bar above the canvas ZStack in both
+            // rendering and hit-testing. Prevents a canvas tile whose NSView
+            // extends upward (via scale + pan transforms) from stealing
+            // clicks in the nav-bar's region. Replaces the former
+            // `.clipped()` on the canvas, which also broke tile drag /
+            // resize / scrollback.
+            TopNavBar()
+                .zIndex(1)
 
-            TodoListView()
-                .opacity(appState.currentView == .todos ? 1 : 0)
-                .allowsHitTesting(appState.currentView == .todos)
+            ZStack {
+                // All views stay alive — never destroyed/recreated.
+                // Terminals keep running when switching views.
+                CanvasView()
+                    .opacity(appState.currentView == .canvas ? 1 : 0)
+                    .allowsHitTesting(appState.currentView == .canvas)
 
-            ProjectsView()
-                .opacity(appState.currentView == .projects ? 1 : 0)
-                .allowsHitTesting(appState.currentView == .projects)
+                TodoListView()
+                    .opacity(appState.currentView == .todos ? 1 : 0)
+                    .allowsHitTesting(appState.currentView == .todos)
 
-            EternalView()
-                .opacity(appState.currentView == .eternal ? 1 : 0)
-                .allowsHitTesting(appState.currentView == .eternal)
+                ProjectsView()
+                    .opacity(appState.currentView == .projects ? 1 : 0)
+                    .allowsHitTesting(appState.currentView == .projects)
 
-            // Sidebar overlay
-            if appState.showSidebar {
-                HStack(spacing: 0) {
-                    SidebarView()
-                        .frame(width: 260)
-                        .transition(.move(edge: .leading))
+                // Sidebar overlay
+                if appState.showSidebar {
+                    HStack(spacing: 0) {
+                        SidebarView()
+                            .frame(width: 260)
+                            .transition(.move(edge: .leading))
 
-                    Spacer()
+                        Spacer()
+                    }
                 }
             }
-
-            // Page navigation indicator
-            VStack {
-                Spacer()
-                HStack {
-                    pageNavigation
-                        .padding(12)
-                    Spacer()
-                }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Paint the window base as neutral dark. Individual views
@@ -83,12 +81,36 @@ struct ContentView: View {
             TrashListView()
         }
         .sheet(isPresented: Binding(
-            get: { appState.dispatchModalProjectID != nil },
-            set: { if !$0 { appState.dispatchModalProjectID = nil } }
+            get: { appState.showNewProjectSheet },
+            set: { appState.showNewProjectSheet = $0 }
         )) {
-            if let id = appState.dispatchModalProjectID,
-               let project = fetchProject(id) {
-                DispatchFileModal(project: project)
+            NewProjectSheet()
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.dispatchModalRunID != nil },
+            set: { if !$0 { appState.dispatchModalRunID = nil } }
+        )) {
+            if let id = appState.dispatchModalRunID,
+               let run = fetchDispatchRun(id) {
+                DispatchFileModal(run: run)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.eternalModalRunID != nil },
+            set: { if !$0 { appState.eternalModalRunID = nil } }
+        )) {
+            if let id = appState.eternalModalRunID,
+               let run = fetchEternalRun(id) {
+                EternalFileModal(run: run)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { appState.eternalInterveneRunID != nil },
+            set: { if !$0 { appState.eternalInterveneRunID = nil } }
+        )) {
+            if let id = appState.eternalInterveneRunID,
+               let run = fetchEternalRun(id) {
+                EternalInterveneModal(run: run)
             }
         }
         .frame(minWidth: 800, minHeight: 600)
@@ -98,36 +120,14 @@ struct ContentView: View {
             reconnectOnLaunch()
             wireSpawnCallback()
             syncTerminalManagerSettings()
+            runEternalStartupMigrations()
         }
         .onChange(of: allSettings.first?.randomTileColor) { _, _ in
             syncTerminalManagerSettings()
         }
-    }
-
-    private var pageNavigation: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(ViewMode.allCases, id: \.self) { mode in
-                Button(action: { appState.currentView = mode }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: mode.icon)
-                            .font(.system(size: 10))
-                        Text(mode.label)
-                            .font(Typography.callout)
-                    }
-                    .frame(width: 100, alignment: .leading)
-                    .foregroundStyle(appState.currentView == mode ? Palette.accent : Palette.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(appState.currentView == mode ? Palette.surfaceAccent : Color.clear)
-                    )
-                }
-                .buttonStyle(.plain)
-            }
+        .onChange(of: appState.currentView) { _, newView in
+            releaseTerminalFocusIfNeeded(for: newView)
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func installKeyboardMonitor() {
@@ -289,6 +289,16 @@ struct ContentView: View {
         return (try? modelContext.fetch(descriptor))?.first { $0.id == id }
     }
 
+    private func fetchEternalRun(_ id: UUID) -> EternalRun? {
+        let descriptor = FetchDescriptor<EternalRun>()
+        return (try? modelContext.fetch(descriptor))?.first { $0.id == id }
+    }
+
+    private func fetchDispatchRun(_ id: UUID) -> DispatchRun? {
+        let descriptor = FetchDescriptor<DispatchRun>()
+        return (try? modelContext.fetch(descriptor))?.first { $0.id == id }
+    }
+
     /// Mirror tile-color randomness from AppSettings into the TerminalManager so
     /// new sessions pick a random theme. Called at startup and whenever the user
     /// flips the toggle in SettingsView.
@@ -296,6 +306,79 @@ struct ContentView: View {
         let settings = ContentView.fetchOrCreateSettings(modelContext: modelContext)
         terminalManager.randomTileColors = settings.randomTileColor
         terminalManager.defaultTheme = TerminalTheme.theme(id: settings.defaultThemeId)
+    }
+
+    /// One-shot migration (flip all projects to Full Auto on) plus every-launch
+    /// reconciliation (clean up stale `.tado/eternal/active` flags left by
+    /// crashed sessions). Order matters: migrate first so state is canonical
+    /// before we inspect which projects have live sessions.
+    ///
+    /// Also writes the user-scope `~/.claude/settings.json` so every Claude
+    /// Code session this machine spawns (not just Tado's) inherits
+    /// bypassPermissions + a wide allowlist + the no-prompt flag. This is
+    /// load-bearing: `--dangerously-skip-permissions` does not by itself
+    /// bypass the one-time "confirm bypass mode" dialog, nor the protected-
+    /// path prompts on `.claude/` writes. The merge is idempotent and runs
+    /// every launch cheaply.
+    private func runEternalStartupMigrations() {
+        EternalService.writeUserScopeSettings()
+        EternalService.migrateEternalDefaults(modelContext: modelContext)
+        // One-shot: lift legacy per-project eternal/dispatch state into
+        // EternalRun / DispatchRun rows, with files moved under
+        // `.tado/{eternal,dispatch}/runs/<id>/`. Gated by
+        // `AppSettings.didMigrateToMultipleRuns` so it only runs once.
+        // MUST run BEFORE `refreshAllHookScripts` (hooks now reference the
+        // run-scoped layout) and BEFORE `reconcileActiveFlagsOnLaunch`
+        // (that pass iterates EternalRun, not Project).
+        EternalService.migrateToMultipleRuns(modelContext: modelContext)
+        // Overwrite every project's on-disk hook scripts with the current
+        // in-binary templates. An already-running worker keeps its in-
+        // memory copy, but the next Stop + Start picks up the fresh file
+        // immediately — users don't have to wait for the "next spawn after
+        // upgrading" cycle to see wrapper improvements.
+        EternalService.refreshAllHookScripts(modelContext: modelContext)
+        EternalService.reconcileActiveFlagsOnLaunch(
+            modelContext: modelContext,
+            terminalManager: terminalManager
+        )
+        // Start the 15-min watchdog. Idempotent: successive calls cancel
+        // any previous timer and re-schedule from now.
+        EternalWatchdog.shared.start(
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+    }
+
+    /// When the user switches away from the canvas, release any terminal
+    /// that still holds firstResponder back to the window's contentView.
+    /// All three views stay mounted (opacity toggle in this ZStack), so a
+    /// Metal tile that had been clicked would otherwise keep eating key
+    /// events — including arrow keys in TextFields on the newly-visible
+    /// Projects/Todos view. Bug fix for the "arrow keys break with ≥2
+    /// terminals" report.
+    private func releaseTerminalFocusIfNeeded(for view: ViewMode) {
+        guard view != .canvas else { return }
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
+              let contentView = window.contentView else { return }
+        // Only resign if the current firstResponder is actually a terminal
+        // view — don't clobber a TextField's focus on the destination view.
+        if isFirstResponderInsideTerminal(window: window) {
+            window.makeFirstResponder(contentView)
+        }
+        // Also clear the canvas's tile selection so returning to canvas
+        // starts fresh rather than with a stale highlight.
+        appState.focusedTileTodoID = nil
+    }
+
+    private func isFirstResponderInsideTerminal(window: NSWindow) -> Bool {
+        guard let view = window.firstResponder as? NSView else { return false }
+        var current: NSView? = view
+        while let v = current {
+            if v is TerminalMTKView { return true }
+            current = v.superview
+        }
+        return false
     }
 
     private func reconnectOnLaunch() {

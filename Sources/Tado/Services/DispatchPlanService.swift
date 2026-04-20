@@ -14,6 +14,8 @@ struct PhaseJSON: Codable {
 }
 
 enum DispatchPlanService {
+    // MARK: - Paths (project-scoped — single-run legacy)
+
     static func dispatchRoot(_ project: Project) -> URL {
         URL(fileURLWithPath: project.rootPath)
             .appendingPathComponent(".tado")
@@ -36,42 +38,81 @@ enum DispatchPlanService {
         FileManager.default.fileExists(atPath: planFileURL(project).path)
     }
 
-    /// Number of phase JSON files in `.tado/dispatch/phases/`. Used by the
-    /// detail view's dispatch card to show "READY · 7 phases" without
-    /// having to parse plan.json. Zero when the dir is missing or empty.
-    static func phaseFileCount(_ project: Project) -> Int {
+    // MARK: - Paths (run-scoped — multi-run)
+
+    /// Parent dir holding every dispatch run's on-disk state for a project:
+    /// `<project>/.tado/dispatch/runs/`. Used only by migration and
+    /// orchestration; individual runs build paths via `dispatchRoot(_ run:)`.
+    static func runsRootURL(_ project: Project) -> URL {
+        URL(fileURLWithPath: project.rootPath)
+            .appendingPathComponent(".tado")
+            .appendingPathComponent("dispatch")
+            .appendingPathComponent("runs")
+    }
+
+    /// On-disk directory for one dispatch run:
+    /// `<project>/.tado/dispatch/runs/<uuid>/`.
+    static func dispatchRoot(_ run: DispatchRun) -> URL {
+        guard let project = run.project else {
+            fatalError(
+                "DispatchRun \(run.id) has nil project — cascade inverse corrupted."
+            )
+        }
+        return runsRootURL(project).appendingPathComponent(run.id.uuidString)
+    }
+
+    static func dispatchFileURL(_ run: DispatchRun) -> URL {
+        dispatchRoot(run).appendingPathComponent("dispatch.md")
+    }
+
+    static func planFileURL(_ run: DispatchRun) -> URL {
+        dispatchRoot(run).appendingPathComponent("plan.json")
+    }
+
+    static func phasesDirURL(_ run: DispatchRun) -> URL {
+        dispatchRoot(run).appendingPathComponent("phases")
+    }
+
+    static func planExistsOnDisk(_ run: DispatchRun) -> Bool {
+        FileManager.default.fileExists(atPath: planFileURL(run).path)
+    }
+
+    /// Number of phase JSON files in this run's `phases/` dir. Used by the
+    /// section's row to show "READY · 7 phases" without parsing plan.json.
+    /// Zero when the dir is missing or empty.
+    static func phaseFileCount(_ run: DispatchRun) -> Int {
         let fm = FileManager.default
-        let dir = phasesDirURL(project)
+        let dir = phasesDirURL(run)
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
             return 0
         }
         return files.filter { $0.pathExtension == "json" }.count
     }
 
-    /// Clear plan.json and all phases/*.json, then write the current project.dispatchMarkdown to dispatch.md.
-    /// Creates the directory tree if missing.
-    static func resetPlan(_ project: Project) {
+    /// Clear plan.json and all phases/*.json for one run, then write the run's
+    /// brief to dispatch.md. Creates the run directory tree if missing.
+    static func resetPlan(_ run: DispatchRun) {
         let fm = FileManager.default
-        let root = dispatchRoot(project)
+        let root = dispatchRoot(run)
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
 
-        let planURL = planFileURL(project)
+        let planURL = planFileURL(run)
         try? fm.removeItem(at: planURL)
 
-        let phasesDir = phasesDirURL(project)
+        let phasesDir = phasesDirURL(run)
         if fm.fileExists(atPath: phasesDir.path) {
             try? fm.removeItem(at: phasesDir)
         }
         try? fm.createDirectory(at: phasesDir, withIntermediateDirectories: true)
 
-        let dispatchURL = dispatchFileURL(project)
-        try? project.dispatchMarkdown.write(to: dispatchURL, atomically: true, encoding: .utf8)
+        let dispatchURL = dispatchFileURL(run)
+        try? run.brief.write(to: dispatchURL, atomically: true, encoding: .utf8)
     }
 
     /// Parse every .json in phases/ and return the one with order == 1, or nil.
-    static func firstPhase(_ project: Project) -> PhaseJSON? {
+    static func firstPhase(_ run: DispatchRun) -> PhaseJSON? {
         let fm = FileManager.default
-        let phasesDir = phasesDirURL(project)
+        let phasesDir = phasesDirURL(run)
         guard let files = try? fm.contentsOfDirectory(at: phasesDir, includingPropertiesForKeys: nil) else {
             return nil
         }
@@ -83,6 +124,43 @@ enum DispatchPlanService {
                 return try? decoder.decode(PhaseJSON.self, from: data)
             }
         return phases.first { $0.order == 1 }
+    }
+
+    // MARK: - Delete
+
+    /// Irreversibly drop a Dispatch run: kill any architect/phase tiles
+    /// attached to it, wipe its on-disk `.tado/dispatch/runs/<id>/` dir,
+    /// and remove the SwiftData row. Called from the project detail
+    /// page's delete action.
+    ///
+    /// Skill/agent files the architect wrote under
+    /// `.claude/skills/dispatch-<project>-<shortid>-*` and
+    /// `.claude/agents/dispatch-<project>-<shortid>-*.md` are NOT cleaned
+    /// up — those names are scoped by run-short-id so they don't collide
+    /// with future runs, and wiping them risks removing files a still-
+    /// live phase tile has open. The user can delete them manually if
+    /// they want the project root pristine.
+    @MainActor
+    static func deleteRun(
+        _ run: DispatchRun,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager
+    ) {
+        let runDir = dispatchRoot(run)
+
+        let linked = terminalManager.sessions.filter { $0.dispatchRunID == run.id }
+        for session in linked {
+            terminalManager.terminateSession(session.id)
+        }
+
+        do {
+            try FileManager.default.removeItem(at: runDir)
+        } catch {
+            NSLog("DispatchPlanService: deleteRun failed to remove \(runDir.path): \(error.localizedDescription)")
+        }
+
+        modelContext.delete(run)
+        try? modelContext.save()
     }
 
     // MARK: - Spawn helpers
@@ -109,22 +187,29 @@ enum DispatchPlanService {
         return settings
     }
 
-    /// Spawn the dispatch architect terminal using the current selected harness.
-    /// Writes dispatch.md from project.dispatchMarkdown, clears any existing plan,
-    /// transitions the project state to "planning", and navigates to the canvas.
+    /// Spawn the dispatch architect terminal for one run. Writes dispatch.md
+    /// from `run.brief`, clears any existing plan under the run dir, transitions
+    /// the run state to "planning", and navigates to the canvas.
     @MainActor
     static func spawnArchitect(
-        project: Project,
+        run: DispatchRun,
         modelContext: ModelContext,
         terminalManager: TerminalManager,
         appState: AppState
     ) {
-        resetPlan(project)
+        guard let project = run.project else { return }
+
+        resetPlan(run)
 
         let settings = fetchOrCreateSettings(modelContext: modelContext)
+        // The architect receives the project name PLUS the run's short-id
+        // suffix so every skill/agent file it authors is scoped to this run
+        // and two concurrent dispatches can't clobber each other under
+        // `.claude/skills/dispatch-<project>-<shortid>-<phase-id>/`.
         let prompt = ProcessSpawner.dispatchArchitectPrompt(
             projectName: project.name,
-            projectRoot: project.rootPath
+            projectRoot: project.rootPath,
+            runID: run.id
         )
         let index = nextAvailableGridIndex(modelContext: modelContext)
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
@@ -137,32 +222,37 @@ enum DispatchPlanService {
             todo: todo,
             engine: settings.engine,
             cwd: project.rootPath,
-            projectName: project.name
+            projectName: project.name,
+            dispatchRunID: run.id,
+            runRole: "architect"
         )
 
-        project.dispatchState = "planning"
+        run.state = "planning"
+        run.architectTodoID = todo.id
         try? modelContext.save()
 
         appState.pendingNavigationID = todo.id
         appState.currentView = .canvas
     }
 
-    /// Launch phase 1 using the architect-authored prompt. Returns false if plan.json is missing
-    /// or no phase has order == 1 — caller should show a "still planning" message in that case.
+    /// Launch phase 1 using the architect-authored prompt. Returns false if
+    /// plan.json is missing or no phase has order == 1 — caller should show a
+    /// "still planning" message in that case.
     ///
-    /// No in-app supervision: once phase 1 spawns, Tado does nothing to observe or intervene in
-    /// the chain. Each phase is responsible for its own tado-deploy handoff; failures surface as
-    /// tile-level silence rather than a UI-level alert. This is intentional — see the "revert
-    /// watchdog" commit for the rationale.
+    /// No in-app supervision: once phase 1 spawns, Tado does nothing to
+    /// observe or intervene in the chain. Each phase is responsible for its
+    /// own tado-deploy handoff; failures surface as tile-level silence rather
+    /// than a UI-level alert. Matches user memory "no dispatch safety systems".
     @MainActor
     @discardableResult
     static func startPhaseOne(
-        project: Project,
+        run: DispatchRun,
         modelContext: ModelContext,
         terminalManager: TerminalManager,
         appState: AppState
     ) -> Bool {
-        guard planExistsOnDisk(project), let phase = firstPhase(project) else {
+        guard let project = run.project else { return false }
+        guard planExistsOnDisk(run), let phase = firstPhase(run) else {
             return false
         }
 
@@ -190,7 +280,9 @@ enum DispatchPlanService {
             engine: engine,
             cwd: project.rootPath,
             agentName: phase.agent,
-            projectName: project.name
+            projectName: project.name,
+            dispatchRunID: run.id,
+            runRole: "phase"
         )
 
         if let agentName = phase.agent, engine == .claude,
@@ -203,7 +295,8 @@ enum DispatchPlanService {
             session.effortFlagsOverride = override.effortFlags
         }
 
-        project.dispatchState = "dispatching"
+        run.state = "dispatching"
+        run.currentPhaseTodoID = todo.id
         try? modelContext.save()
 
         appState.pendingNavigationID = todo.id

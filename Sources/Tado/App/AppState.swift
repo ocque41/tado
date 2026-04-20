@@ -188,5 +188,38 @@ final class AppState {
     var pendingNavigationID: UUID? = nil
     var forwardTargetTodoID: UUID? = nil
     var activeProjectID: UUID? = nil
-    var dispatchModalProjectID: UUID? = nil
+    /// Set to true from the top nav bar's actions menu to ask
+    /// `ProjectDetailView` to expand its inline new-team form. The
+    /// detail view binds its `showNewTeamInProject` flag to this so the
+    /// nav bar can drive a piece of UI it doesn't render itself.
+    var showNewTeamForActiveProject: Bool = false
+    /// Drives the New Project sheet. Lifted out of `ProjectListView`
+    /// so the top nav bar can present the sheet from its right-side
+    /// "+ New Project" affordance — and so the sheet keeps working
+    /// regardless of which sub-view of `ProjectsView` is mounted.
+    var showNewProjectSheet: Bool = false
+    /// Which `DispatchRun`'s brief-editor modal is open. Non-nil = sheet
+    /// presented, nil = dismissed. Set by the "New Dispatch" / "Edit"
+    /// buttons in ProjectDispatchSection, which create the run in `drafted`
+    /// state first and then stash its id here.
+    var dispatchModalRunID: UUID? = nil
+    /// Which `EternalRun`'s brief-editor modal is open. Same pattern as
+    /// `dispatchModalRunID`.
+    var eternalModalRunID: UUID? = nil
+
+    /// Which tile on the canvas holds the "keyboard selection" ring.
+    /// Independent of AppKit's first responder — a tile can be SELECTED
+    /// (arrow keys move between selected tiles) without being IN EDIT MODE
+    /// (terminal owns keyDown). Edit mode is entered by clicking into a
+    /// tile; exited via Escape or a click on the canvas background. When
+    /// no tile is selected, arrow keys pick the nearest tile in the arrow
+    /// direction.
+    var focusedTileTodoID: UUID? = nil
+
+    /// Which `EternalRun`'s Intervene sheet is presented. Non-nil while the
+    /// user is composing a directive to that specific run's worker; nil
+    /// when dismissed. Same presentation pattern as `eternalModalRunID`.
+    /// Carries a run id (not a project id) so when multiple concurrent
+    /// runs exist, the modal can't misclick onto the wrong worker's inbox.
+    var eternalInterveneRunID: UUID? = nil
 }

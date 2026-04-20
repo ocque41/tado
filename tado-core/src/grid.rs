@@ -107,6 +107,30 @@ pub struct Grid {
     /// 5000 is ~2 MB of cell data for 80-col terminals and matches the
     /// default SwiftTerm scrollback; tune via `set_scrollback_cap`.
     pub scrollback_cap: usize,
+
+    /// Ring buffer of full-grid snapshots captured over time. Serves as
+    /// a "tape recorder" scrollback for TUIs (Claude Code, Codex, vim)
+    /// that paint via cursor positioning rather than newline scrolling —
+    /// traditional line-based scrollback stays empty for those sessions,
+    /// but every captured frame here is a complete record of what the
+    /// tile displayed at that moment. Capture is driven from Swift
+    /// (`capture_viewport_frame`) so the cadence matches the render
+    /// loop without burning idle cycles.
+    ///
+    /// Each entry is a `cols*rows` cell buffer — oldest at index 0,
+    /// newest at `len-1`. Layout intentionally mirrors `self.cells` so
+    /// `viewport_frame_snapshot` can hand the Metal renderer the same
+    /// shape as a regular full snapshot.
+    pub viewport_history: VecDeque<Vec<Cell>>,
+    /// Hard cap on `viewport_history`. 400 frames × (80*24 cells ×
+    /// 16 B) ≈ 12 MB per tile in the worst case; at ~2 fps capture
+    /// cadence that's ~3 minutes of scrubbable history. Tunable via
+    /// `set_viewport_history_cap`.
+    pub viewport_history_cap: usize,
+    /// (cols, rows) the snapshots in `viewport_history` were captured
+    /// at. A resize drops history because the old frame shape doesn't
+    /// compose with the new grid.
+    viewport_history_shape: (u16, u16),
     /// DECSET 25 — cursor visibility. TUIs hide the cursor during render
     /// to prevent flicker. Consumed by the Metal renderer.
     pub cursor_visible: bool,
@@ -182,6 +206,9 @@ impl Grid {
             current_bg: Cell::BLANK.bg,
             scrollback: VecDeque::new(),
             scrollback_cap: 5000,
+            viewport_history: VecDeque::new(),
+            viewport_history_cap: 400,
+            viewport_history_shape: (cols, rows),
             cursor_visible: true,
             saved_cursor: None,
             scroll_top: 0,
@@ -299,6 +326,59 @@ impl Grid {
         while self.scrollback.len() > cap {
             self.scrollback.pop_front();
         }
+    }
+
+    /// Push a copy of the current grid into `viewport_history`, evicting
+    /// the oldest frame once the cap is reached. Callers drive the
+    /// cadence from Swift (typically ~2 fps) so idle tiles don't pad
+    /// history with duplicate frames and animation-heavy tiles don't
+    /// drown storage either. Shape changes (resize) clear history first
+    /// — rendering a mismatched-shape frame would look corrupted.
+    pub fn capture_viewport_frame(&mut self) {
+        let shape = (self.cols, self.rows);
+        if shape != self.viewport_history_shape {
+            self.viewport_history.clear();
+            self.viewport_history_shape = shape;
+        }
+        // Don't record anything while alt-screen is active — those
+        // frames show the TUI's transient buffer (e.g., vim while
+        // editing) and would clutter scrollback with garbage between
+        // the primary-screen frames users actually want to revisit.
+        if self.alt_screen.is_some() {
+            return;
+        }
+        self.viewport_history.push_back(self.cells.clone());
+        while self.viewport_history.len() > self.viewport_history_cap {
+            self.viewport_history.pop_front();
+        }
+    }
+
+    pub fn set_viewport_history_cap(&mut self, cap: usize) {
+        self.viewport_history_cap = cap;
+        while self.viewport_history.len() > cap {
+            self.viewport_history.pop_front();
+        }
+    }
+
+    /// Copy the viewport frame `offset` steps back from the newest into a
+    /// freshly allocated `Vec<Cell>`. `offset = 1` is "one capture ago",
+    /// `offset = 0` means "return the newest frame" (rarely useful —
+    /// the caller almost always wants the live grid there instead).
+    /// Returns `None` past the end of history.
+    pub fn viewport_frame(&self, offset: usize) -> Option<Vec<Cell>> {
+        if offset == 0 {
+            return None;
+        }
+        let len = self.viewport_history.len();
+        if offset > len {
+            return None;
+        }
+        let idx = len - offset;
+        self.viewport_history.get(idx).cloned()
+    }
+
+    pub fn viewport_frame_count(&self) -> usize {
+        self.viewport_history.len()
     }
 
     /// Change the palette that blank / erased / SGR-reset cells pick up.
@@ -717,5 +797,61 @@ mod scrollback_tests {
         g.scroll_up(1);
         let snap = g.scrollback_snapshot(0, 10);
         assert_eq!(snap.len(), 2); // only 1 row of history, 2 cols
+    }
+
+    #[test]
+    fn capture_viewport_frame_snapshots_current_cells() {
+        let mut g = Grid::new(2, 2);
+        fill_row(&mut g, 0, b'a');
+        fill_row(&mut g, 1, b'b');
+        g.capture_viewport_frame();
+        assert_eq!(g.viewport_frame_count(), 1);
+        // Mutating cells after capture must not change the captured frame.
+        fill_row(&mut g, 0, b'z');
+        let frame = g.viewport_frame(1).expect("frame exists");
+        assert_eq!(frame[0].ch, b'a' as u32);
+    }
+
+    #[test]
+    fn viewport_frame_offset_indexes_back_in_time() {
+        let mut g = Grid::new(2, 1);
+        for i in 0..4 {
+            fill_row(&mut g, 0, b'a' + i);
+            g.capture_viewport_frame();
+        }
+        // Newest is "d" at offset 1, oldest is "a" at offset 4.
+        assert_eq!(g.viewport_frame(1).unwrap()[0].ch, b'd' as u32);
+        assert_eq!(g.viewport_frame(2).unwrap()[0].ch, b'c' as u32);
+        assert_eq!(g.viewport_frame(4).unwrap()[0].ch, b'a' as u32);
+        assert!(g.viewport_frame(5).is_none());
+        assert!(g.viewport_frame(0).is_none());
+    }
+
+    #[test]
+    fn viewport_history_respects_cap() {
+        let mut g = Grid::new(2, 1);
+        g.set_viewport_history_cap(3);
+        for i in 0..10 {
+            fill_row(&mut g, 0, b'a' + i);
+            g.capture_viewport_frame();
+        }
+        assert_eq!(g.viewport_frame_count(), 3);
+        // The three most-recent captures survived (h, i, j).
+        assert_eq!(g.viewport_frame(1).unwrap()[0].ch, b'j' as u32);
+        assert_eq!(g.viewport_frame(3).unwrap()[0].ch, b'h' as u32);
+    }
+
+    #[test]
+    fn viewport_history_clears_on_shape_change() {
+        let mut g = Grid::new(2, 1);
+        fill_row(&mut g, 0, b'x');
+        g.capture_viewport_frame();
+        assert_eq!(g.viewport_frame_count(), 1);
+        g.resize(4, 2);
+        // Next capture detects the shape mismatch and clears first.
+        g.capture_viewport_frame();
+        assert_eq!(g.viewport_frame_count(), 1);
+        // The surviving capture has the new shape (4*2 = 8 cells).
+        assert_eq!(g.viewport_frame(1).unwrap().len(), 8);
     }
 }

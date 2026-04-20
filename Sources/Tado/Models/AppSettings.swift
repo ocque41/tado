@@ -60,6 +60,28 @@ final class AppSettings {
     // frame, since the blink timer lives in the view, not the renderer.
     var cursorBlink: Bool = true
 
+    // One-shot migration flag: when false on launch, iterate all Projects
+    // and set `eternalSkipPermissions = true`. This catches projects created
+    // before the default flipped, so every existing project honors the
+    // "dangerously-skip-permissions on by default" rule after a single
+    // launch. Users who later flip the toggle OFF explicitly are not re-
+    // migrated — the flag stays true forever.
+    var didMigrateEternalDefaults: Bool = false
+
+    // One-shot migration flag for the multi-run upgrade. When false on
+    // launch, iterate all Projects and:
+    //   1. For any project with non-idle `eternalState` OR a legacy
+    //      `.tado/eternal/{state.json,crafted.md,…}` on disk, create one
+    //      `EternalRun` row and MOVE the legacy files under
+    //      `.tado/eternal/runs/<run-uuid>/`.
+    //   2. Same for Dispatch → `DispatchRun` + `.tado/dispatch/runs/<id>/`.
+    // Running workers can't hot-migrate (bash wrappers reference the old
+    // paths in memory), so any `eternalState == "running"` demotes to
+    // `stopped` after the move — the user restarts manually.
+    // Once set to true, the migration never runs again; callers rely on
+    // the flag for idempotence.
+    var didMigrateToMultipleRuns: Bool = false
+
     // How terminal bells (0x07) are surfaced on the Metal path. Stored
     // as a raw string so SwiftData schema stays stable if we add modes
     // later. Default matches Terminal.app: audible-only.

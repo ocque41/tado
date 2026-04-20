@@ -36,6 +36,9 @@ struct ProjectCard: View {
                         .font(Typography.titleLg)
                         .foregroundStyle(Palette.textPrimary)
                     Spacer()
+                    if isEternalRunning {
+                        eternalGlyph
+                    }
                     dispatchStatusCapsule
                 }
 
@@ -61,7 +64,7 @@ struct ProjectCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Palette.surfaceElevated)
             .overlay(alignment: .leading) {
-                if isDispatching {
+                if isDispatching || isEternalRunning {
                     Rectangle()
                         .fill(Palette.accent)
                         .frame(width: 2)
@@ -84,22 +87,42 @@ struct ProjectCard: View {
 
     // MARK: - Pieces
 
-    /// State-driven pill on the right of row 1. Hidden for idle projects —
-    /// the absence of a capsule is itself a signal ("no dispatch going on").
+    /// State-driven pill on the right of row 1. Shows the worst-active state
+    /// across the project's dispatches (since the project may have multiple
+    /// concurrent runs). Priority order: dispatching > planning > drafted.
+    /// Hidden when no runs are active — the absence of a capsule is itself
+    /// a signal ("no dispatch going on").
     @ViewBuilder
     private var dispatchStatusCapsule: some View {
-        let state = project.dispatchState
-        if state == "idle" || state.isEmpty {
-            EmptyView()
-        } else if state == "drafted" {
-            capsule(label: "DRAFTED", fg: Palette.warning, bg: Palette.warning.opacity(0.12))
-        } else if state == "planning" {
-            capsule(label: "PLANNING", fg: Palette.accent, bg: Palette.accent.opacity(0.12))
-        } else if state == "dispatching" {
-            capsule(label: "DISPATCHING", fg: Palette.accent, bg: Palette.accent.opacity(0.22))
+        if let state = mostActiveDispatchState {
+            switch state {
+            case "drafted":
+                capsule(label: "DRAFTED", fg: Palette.warning, bg: Palette.warning.opacity(0.12))
+            case "planning":
+                capsule(label: "PLANNING", fg: Palette.accent, bg: Palette.accent.opacity(0.12))
+            case "ready":
+                capsule(label: "READY", fg: Palette.success, bg: Palette.success.opacity(0.15))
+            case "dispatching":
+                capsule(label: "DISPATCHING", fg: Palette.accent, bg: Palette.accent.opacity(0.22))
+            default:
+                capsule(label: state.uppercased(), fg: Palette.textSecondary, bg: Palette.surface)
+            }
         } else {
-            capsule(label: state.uppercased(), fg: Palette.textSecondary, bg: Palette.surface)
+            EmptyView()
         }
+    }
+
+    /// Worst-active state across this project's dispatch runs, or nil when
+    /// every run is terminal (or there are none). Priority reflects
+    /// "user-impact": dispatching > ready > planning > drafted.
+    private var mostActiveDispatchState: String? {
+        let activeOrder = ["dispatching", "ready", "planning", "drafted"]
+        for state in activeOrder {
+            if project.dispatchRuns.contains(where: { $0.state == state }) {
+                return state
+            }
+        }
+        return nil
     }
 
     private func capsule(label: String, fg: Color, bg: Color) -> some View {
@@ -131,18 +154,18 @@ struct ProjectCard: View {
     private var actionsMenu: some View {
         Menu {
             Button(action: onDispatch) {
-                Label(project.dispatchState == "idle" || project.dispatchState.isEmpty
+                Label(project.dispatchRuns.isEmpty
                       ? "New Dispatch…"
-                      : "Edit Dispatch…",
+                      : "New Dispatch run…",
                       systemImage: "doc.text.badge.plus")
             }
-            // "Start" lives in the menu here temporarily — Step 3 will move
-            // it into the detail view's dispatch card as the primary CTA.
-            // Until then, keep it reachable so the workflow never stalls.
+            // "Start" triggers phase 1 of the most-recently-created READY
+            // dispatch. When there's none, the card's onStart handler shows
+            // the "plan not ready" alert.
             Button(action: onStart) {
-                Label("Start dispatching", systemImage: "play.fill")
+                Label("Start latest dispatch", systemImage: "play.fill")
             }
-            .disabled(project.dispatchState == "idle" || project.dispatchState.isEmpty)
+            .disabled(!project.dispatchRuns.contains(where: { $0.state == "ready" || $0.state == "planning" }))
             Divider()
             Button(action: onBootstrapTools) {
                 Label("Bootstrap A2A tools", systemImage: "wrench.and.screwdriver")
@@ -168,6 +191,25 @@ struct ProjectCard: View {
     }
 
     private var isDispatching: Bool {
-        project.dispatchState == "dispatching"
+        project.dispatchRuns.contains { $0.state == "dispatching" }
+    }
+
+    private var isEternalRunning: Bool {
+        project.eternalRuns.contains { $0.state == "running" }
+    }
+
+    /// Visual-only infinity indicator — shows the card has a live Eternal
+    /// session. Tapping anywhere on the card opens the project detail page
+    /// (where the full Eternal section lives), so the glyph itself doesn't
+    /// need a separate tap handler.
+    private var eternalGlyph: some View {
+        Image(systemName: "infinity")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Palette.accent)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Palette.accent.opacity(0.14))
+            .clipShape(Capsule())
+            .help("Eternal running — open this project to see details.")
     }
 }

@@ -99,7 +99,8 @@ struct CanvasView: View {
                         cursorBlink: fetchSettings().cursorBlink,
                         bellMode: fetchSettings().bellMode,
                         isVisible: visible,
-                        scale: scale
+                        scale: scale,
+                        isFocused: appState.focusedTileTodoID == session.todoID
                     ) { newPosition in
                         persistPosition(session: session, position: newPosition)
                     }
@@ -112,6 +113,14 @@ struct CanvasView: View {
             }
             .scaleEffect(scale, anchor: .topLeading)
             .offset(offset)
+            // Do NOT wrap with .frame + .clipped here. It was used to
+            // prevent a tile near the canvas origin from bleeding into
+            // the TopNavBar's hit region, but clipping also blocks
+            // AppKit mouse-event delivery to every child MTKView that
+            // extends past the clip rect — which kills scrollback,
+            // tile drag, and resize gestures. The TopNavBar is
+            // protected instead by `.zIndex(1)` in ContentView, which
+            // wins hit-testing without clipping canvas children.
             .onAppear {
                 viewportSize = geometry.size
                 installMonitors()
@@ -173,8 +182,9 @@ struct CanvasView: View {
 
     private func installMonitors() {
         // Scroll: 2-finger pan or shift+2-finger zoom
-        // If the cursor is over a terminal, regular scroll goes to it
-        // (terminal scrollback) — regardless of focus state.
+        // Hover alone never routes scroll to a terminal — the tile must
+        // also be the focused one (accent border visible). Any other
+        // cursor position pans the canvas.
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
 
@@ -187,12 +197,14 @@ struct CanvasView: View {
                 return nil
             }
 
-            // If the cursor is over a Metal tile, let AppKit deliver
-            // scrollWheel natively to `TerminalMTKView.scrollWheel(with:)`
-            // — it accumulates trackpad pixels and drives scrollback
-            // without needing help from this monitor. Returning the
-            // event (not nil) means we don't consume it.
-            if self.metalTileUnderCursor(for: event) != nil {
+            // Only pass scroll through to the terminal when the cursor
+            // is over the *focused* tile. Returning the event (not nil)
+            // lets AppKit deliver it to `TerminalMTKView.scrollWheel`
+            // for scrollback / mouse-reporting. Unfocused hover falls
+            // through to canvas pan below.
+            if let mtk = self.metalTileUnderCursor(for: event),
+               let session = self.sessionForMTKView(mtk),
+               self.appState.focusedTileTodoID == session.todoID {
                 return event
             }
 
@@ -204,11 +216,54 @@ struct CanvasView: View {
             return nil
         }
 
-        // Cmd+/- = zoom in/out, Cmd+0 = reset zoom
+        // Keyboard: arrow-key tile selection, Escape for edit-mode exit,
+        // Cmd+/-/0 for zoom.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
-            guard event.modifierFlags.contains(.command) else { return event }
 
+            // A sheet is open (Settings, Dispatch modal, Eternal modal,
+            // Done list, Trash list) — let its TextFields / pickers use
+            // arrows + Escape natively. We still handle Cmd+zoom below
+            // because the main canvas is what's being zoomed; even with
+            // a sheet over it, that's fine.
+            let anySheetOpen = self.appState.showSettings
+                || self.appState.showDoneList
+                || self.appState.showTrashList
+                || self.appState.dispatchModalRunID != nil
+                || self.appState.eternalModalRunID != nil
+                || self.appState.eternalInterveneRunID != nil
+
+            let modifierMask: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+            let hasModifier = !event.modifierFlags.intersection(modifierMask).isEmpty
+
+            // Arrow keys (no modifier) — tile selection navigation.
+            if !hasModifier, !anySheetOpen, let direction = ArrowDirection(keyCode: event.keyCode) {
+                // Edit mode: a terminal already owns firstResponder, arrows
+                // go to the PTY (bash readline, vim, etc.).
+                if self.isFirstResponderATerminal(event.window) {
+                    return event
+                }
+                self.moveSelection(direction)
+                return nil
+            }
+
+            // Escape — exit terminal edit mode OR clear selection.
+            if !hasModifier, event.keyCode == 53 {
+                if self.isFirstResponderATerminal(event.window),
+                   let window = event.window,
+                   let contentView = window.contentView {
+                    window.makeFirstResponder(contentView)
+                    return nil
+                }
+                if self.appState.focusedTileTodoID != nil {
+                    self.appState.focusedTileTodoID = nil
+                    return nil
+                }
+                return event
+            }
+
+            // Cmd+/- = zoom in/out, Cmd+0 = reset zoom.
+            guard event.modifierFlags.contains(.command) else { return event }
             switch event.charactersIgnoringModifiers {
             case "=", "+":
                 withAnimation(.easeOut(duration: 0.15)) {
@@ -228,7 +283,8 @@ struct CanvasView: View {
             }
         }
 
-        // Click outside a terminal = unfocus it so scroll goes back to canvas pan
+        // Click outside a terminal = unfocus it so scroll goes back to canvas
+        // pan. Click ON a terminal = make that tile the keyboard selection.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
             guard let window = event.window, let contentView = window.contentView else { return event }
@@ -236,11 +292,144 @@ struct CanvasView: View {
             let location = event.locationInWindow
             if let hitView = contentView.hitTest(location) {
                 if !isViewInsideTerminal(hitView) {
-                    // Clicked on canvas background — resign terminal focus
                     window.makeFirstResponder(contentView)
+                    self.appState.focusedTileTodoID = nil
+                } else if let mtk = self.metalTileUnderCursor(for: event),
+                          let session = self.sessionForMTKView(mtk) {
+                    self.appState.focusedTileTodoID = session.todoID
                 }
             }
             return event // always pass clicks through
+        }
+    }
+
+    /// Map an MTKView back to its owning `TerminalSession` via the shared
+    /// `TadoCore.Session` reference. Returns nil if the tile hasn't
+    /// finished spawning (coreSession still nil on the session side).
+    private func sessionForMTKView(_ mtk: TerminalMTKView) -> TerminalSession? {
+        for session in terminalManager.sessions {
+            if let core = session.coreSession, core === mtk.session {
+                return session
+            }
+        }
+        return nil
+    }
+
+    /// True when the current first responder chain begins with a terminal
+    /// tile (the user is actively typing into a PTY). Gates the arrow-key
+    /// tile navigation so arrows inside bash / vim / etc. still work.
+    private func isFirstResponderATerminal(_ window: NSWindow?) -> Bool {
+        guard let first = window?.firstResponder as? NSView else { return false }
+        var current: NSView? = first
+        while let v = current {
+            if v is TerminalMTKView { return true }
+            current = v.superview
+        }
+        return false
+    }
+
+    /// Direction picked from the four arrow keys. Maps macOS virtual
+    /// keyCodes (stable across locales) to a logical axis+sign.
+    private enum ArrowDirection {
+        case up, down, left, right
+        init?(keyCode: UInt16) {
+            switch keyCode {
+            case 123: self = .left
+            case 124: self = .right
+            case 125: self = .down
+            case 126: self = .up
+            default:  return nil
+            }
+        }
+    }
+
+    /// Move the tile-selection ring in the given direction. Picks the
+    /// nearest tile along the primary axis, breaking ties with distance on
+    /// the secondary axis. When no tile is currently selected, picks the
+    /// first tile in reading order (top-left-most). After moving, pans the
+    /// canvas so the newly-selected tile is centred.
+    private func moveSelection(_ direction: ArrowDirection) {
+        let sessions = terminalManager.sessions
+        guard !sessions.isEmpty else { return }
+
+        // Resolve (session, worldX, worldY) for every tile — world
+        // coordinates include the project zone offset so tiles from
+        // different zones compare consistently.
+        let positioned: [(session: TerminalSession, x: CGFloat, y: CGFloat)] = sessions.map { s in
+            let zoneIndex = projectZones.firstIndex(where: { $0.name == (s.projectName ?? "General") }) ?? 0
+            let xOff = zoneOffset(for: zoneIndex)
+            return (s, s.canvasPosition.x + xOff, s.canvasPosition.y)
+        }
+
+        let currentID = appState.focusedTileTodoID
+        let currentEntry = positioned.first(where: { $0.session.todoID == currentID })
+
+        let chosen: (session: TerminalSession, x: CGFloat, y: CGFloat)?
+        if let cur = currentEntry {
+            chosen = pickNeighbor(from: cur, among: positioned, direction: direction)
+        } else {
+            // No selection yet — pick the first tile in reading order.
+            chosen = positioned.sorted { a, b in
+                if a.y != b.y { return a.y < b.y }
+                return a.x < b.x
+            }.first
+        }
+
+        guard let target = chosen else { return }
+        appState.focusedTileTodoID = target.session.todoID
+
+        // Pan the canvas to centre the selected tile. Matches the
+        // existing pendingNavigationID animation cadence.
+        let vp = viewportSize
+        guard vp.width > 0, vp.height > 0 else { return }
+        withAnimation(.easeOut(duration: 0.18)) {
+            offset = CGSize(
+                width: -target.x * scale + vp.width / 2,
+                height: -target.y * scale + vp.height / 2
+            )
+        }
+    }
+
+    /// Filter + score candidates on the axis dominated by `direction`.
+    /// Returns the best match or nil if no tile lies in that direction.
+    private func pickNeighbor(
+        from current: (session: TerminalSession, x: CGFloat, y: CGFloat),
+        among all: [(session: TerminalSession, x: CGFloat, y: CGFloat)],
+        direction: ArrowDirection
+    ) -> (session: TerminalSession, x: CGFloat, y: CGFloat)? {
+        let candidates = all.filter { $0.session.id != current.session.id }
+        let inDirection = candidates.filter { c in
+            switch direction {
+            case .up:    return c.y < current.y
+            case .down:  return c.y > current.y
+            case .left:  return c.x < current.x
+            case .right: return c.x > current.x
+            }
+        }
+        // If no tile strictly in-direction, wrap within the axis (e.g.
+        // "down" from the bottom-most tile wraps to the top-most in
+        // the same column region). Matches Finder / iOS springboard feel.
+        let pool = inDirection.isEmpty ? candidates : inDirection
+        return pool.min { a, b in
+            neighborScore(current: current, candidate: a, direction: direction)
+                < neighborScore(current: current, candidate: b, direction: direction)
+        }
+    }
+
+    /// Lower score = better match. Primary axis weighted more heavily so a
+    /// tile directly below is preferred over one far to the side.
+    private func neighborScore(
+        current: (session: TerminalSession, x: CGFloat, y: CGFloat),
+        candidate: (session: TerminalSession, x: CGFloat, y: CGFloat),
+        direction: ArrowDirection
+    ) -> CGFloat {
+        let dx = candidate.x - current.x
+        let dy = candidate.y - current.y
+        switch direction {
+        case .up, .down:
+            return abs(dy) + abs(dx) * 2
+        case .left, .right:
+            return abs(dx) + abs(dy) * 2
         }
     }
 

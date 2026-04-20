@@ -272,6 +272,48 @@ impl Session {
         }
     }
 
+    /// Push a full-grid frame into the viewport history ring buffer.
+    /// Intended to be called by the render loop at ~2 fps so scrolling
+    /// back shows a "tape recorder" of past viewport states — the only
+    /// scrollback mechanism that captures anything from TUIs (Claude
+    /// Code, Codex, vim) that paint via cursor positioning rather than
+    /// newline scrolling.
+    pub fn capture_viewport_frame(&self) {
+        let mut g = self.grid.lock();
+        g.capture_viewport_frame();
+    }
+
+    /// Number of frames currently buffered in viewport history. The
+    /// `scrollOffset` clamp on the Swift side uses this to know how far
+    /// the user can scroll back.
+    pub fn viewport_frame_count(&self) -> u32 {
+        self.grid.lock().viewport_frame_count() as u32
+    }
+
+    /// Return a full-grid snapshot from viewport history, `offset` frames
+    /// back from the newest. Offset 1 = previous frame, offset N =
+    /// N frames ago. Returns None past the end of history or when
+    /// offset == 0 (callers render the live grid for "live" themselves).
+    pub fn viewport_frame_snapshot(&self, offset: u32) -> Option<GridSnapshot> {
+        let g = self.grid.lock();
+        let cells = g.viewport_frame(offset as usize)?;
+        let cols = g.cols;
+        let rows = g.rows;
+        let dirty: Vec<u16> = (0..rows).collect();
+        // Historical frames have no live cursor — we hide it there so
+        // the user isn't confused by a cursor moving over static
+        // content.
+        Some(GridSnapshot {
+            cols,
+            rows,
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: false,
+            cells,
+            dirty_rows: dirty,
+        })
+    }
+
     /// Snapshot `rows` lines of scrollback starting at `offset` lines back
     /// from the most-recently-evicted line. `offset=0, rows=10` returns the
     /// ten most-recently-evicted rows (newest last).
