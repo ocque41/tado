@@ -7,9 +7,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 swift build          # Build the project
 swift run            # Build and run the app
+make dev             # Build Rust core (release) + run Swift app
+cargo test -p tado-ipc -p tado-settings   # Run Rust-side unit tests
 ```
 
-No tests exist yet. The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+).
+The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+) plus a Cargo workspace under `tado-core/` (see Architecture for the split).
+
+## Conventions (foundation-v2 and beyond)
+
+- **Rust-first for new non-UI logic.** When you're adding persistence, IPC, atomic file IO, settings merging, scheduling, or anything that's fundamentally systems-y — write it in Rust inside the `tado-core/` workspace (one of `tado-terminal`, `tado-shared`, `tado-ipc`, `tado-settings`, future crates as they arrive). Swift is for views + thin bindings + macOS-specific integrations (NSView bridges, NSPasteboard, SwiftUI plumbing, AppKit glue).
+- **The write barrier stays.** Every mutation that reaches disk goes through the atomic-store discipline (temp + sync + rename). Do not bypass it.
+- **No new safety systems around dispatch.** Per the existing feedback rule: no watchdogs, auto-retry, or timeouts for the agent-dispatch chain. Existing retry policies on long-running automations stay as-is; don't add new ones.
+- **Extensions-first for optional features.** If a feature is valuable but optional (examples: Eternal, Dispatch, Notifications), ship it as an extension using the `AppExtension` protocol in `Sources/Tado/Extensions/`. Core Tado stays "canvas of agent terminals" plus the minimum UI shell.
+- **Compile-time extension registry.** Adding an extension = (1) new Swift type conforming to `AppExtension`, (2) entry in `ExtensionRegistry.all`, (3) matching `WindowGroup(id: ExtensionWindowID.string(for:))` block in `TadoApp.body`. No dynamic loading for v0.
+- **Treat every feature change as a full-system change until proven otherwise.** Do not stop at the literal UI tweak the user asked for. When a feature already exists, trace and update every affected layer: window wiring, state, settings precedence, Swift views, Rust services, FFI, create/read/update/delete paths, filtering, and tests. If you add a field, scope, toggle, topic, or action, check the whole lifecycle so the feature still works end to end after the change.
+- **Prefer typed Swift↔Rust bindings over ad-hoc JSON-RPC payloads.** For desktop UI bindings, call typed Rust service methods through dedicated FFI when possible. Avoid hand-building actor/method JSON at the Swift bridge unless the feature truly needs generic RPC. If JSON-RPC is unavoidable, support legacy field aliases deliberately and test the full request shape end to end.
 
 ## What This Is
 
@@ -132,3 +144,54 @@ tado-memory {read,note,search,path} [scope]
 - `Events/RunEventWatcher.swift` — diff state.json / phases/ to emit eternal/dispatch events
 - `Views/InAppBannerOverlay.swift` — transient banner stack
 - `Views/NotificationsView.swift` — full history view (sidebar bell opens this)
+
+## Releasing ("release next version")
+
+When the user says "release next version", "release v0.X.Y", or "ship a
+release", follow this exact flow end-to-end. No plan mode, no
+confirmation prompts — this is a documented release procedure.
+
+1. **Read `CHANGELOG.md`** to find the current top version. The next
+   version is a minor bump by default (e.g. `0.8.0 → 0.9.0`). Only
+   bump the major when the user explicitly asks.
+2. **Audit the working tree**: `git status`, `git log v<prev>..HEAD`.
+   Identify every uncommitted source change, every untracked source
+   file, and every relevant commit since the previous tag.
+3. **Verify the build**: `swift build` (Swift app) and
+   `cd tado-mcp && npm run build` (MCP server). Do not release if
+   either fails — fix first.
+4. **Keep runtime artifacts out** — make sure `.tado/eternal/`,
+   `.tado/dispatch/`, and `.tado/memory/notes/` are gitignored. Any
+   new per-run runtime directory should be added to `.gitignore`
+   before staging.
+5. **Update `CHANGELOG.md`**: insert a new `## [X.Y.Z] - YYYY-MM-DD`
+   section at the top (above the previous version). Categorize under
+   `### Added` / `### Changed` / `### Fixed` / `### Removed`. Each
+   bullet leads with the feature in bold and explains the *why* in
+   one to three sentences — a user reading release notes should be
+   able to tell whether a change affects them without opening a diff.
+6. **Stage explicitly by path** (not `git add -A`). Include source,
+   `CHANGELOG.md`, `CLAUDE.md` (if updated), `docs/` additions, and
+   MCP `src/` + `dist/`. Use `git rm` for intentional deletions.
+7. **Commit with a release message**:
+   - Subject: `Release vX.Y.Z — <short headline>`
+   - Body: summary paragraph + bulleted highlights grouped by
+     subsystem, each bullet 2–5 lines explaining *what* shipped and
+     *why* it matters. Co-author trailer with
+     `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+8. **Tag annotated**: `git tag -a vX.Y.Z -m "Tado vX.Y.Z — <headline>\n\n<3-5 line blurb pointing to CHANGELOG.md>"`.
+9. **Push**: `git push origin master && git push origin vX.Y.Z`.
+10. **Create the GitHub Release** (mandatory — the tag alone won't
+    flip the "Latest" badge on github.com):
+    ```bash
+    awk '/^## \[X\.Y\.Z\]/,/^## \[<prev>\]/' CHANGELOG.md \
+      | sed '$d' > /tmp/tado-release.md
+    gh release create vX.Y.Z --title "X.Y.Z" \
+      --notes-file /tmp/tado-release.md
+    ```
+    **Title is just the bare version** (e.g. `0.8.0`) — no prefix, no
+    headline. All prose lives in the description, which is the
+    unaltered CHANGELOG section.
+11. **Verify**: `gh release view vX.Y.Z` — confirm title is the bare
+    version, body matches CHANGELOG, and the release is not marked
+    as draft/prerelease.

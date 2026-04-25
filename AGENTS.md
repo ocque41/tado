@@ -141,6 +141,6 @@ swift build          # Build the project
 swift run            # Build and run the app
 ```
 
-The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+). No tests exist yet.
+The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+). Focused Swift tests live under `Tests/TadoCoreTests`.
 
-## For full architecture details, see CLAUDE.md in this same directory.
+## For full architecture details and cross-cutting implementation rules, see CLAUDE.md in this same directory.

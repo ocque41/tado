@@ -1,7 +1,8 @@
+export declare function appSupportRoot(): string;
 export declare const paths: {
-    globalSettings: string;
-    userMemoryMarkdown: string;
-    eventsCurrent: string;
+    readonly globalSettings: string;
+    readonly userMemoryMarkdown: string;
+    readonly eventsCurrent: string;
 };
 export declare function findProjectRoot(cwd?: string): string | null;
 export declare function projectConfigPath(cwd?: string): string | null;

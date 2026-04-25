@@ -17,6 +17,7 @@ struct GlobalSettings: Codable, Equatable {
     var engine: EngineBlock = EngineBlock()
     var canvas: Canvas = Canvas()
     var notifications: Notifications = Notifications()
+    var dome: Dome = Dome()
 
     struct UI: Codable, Equatable {
         var defaultThemeId: String = "ember"
@@ -36,7 +37,7 @@ struct GlobalSettings: Codable, Equatable {
     struct ClaudeSettings: Codable, Equatable {
         var mode: String = "askPermissions"
         var effort: String = "high"
-        var model: String = "opus47"
+        var model: String = "claude-opus-4-7"
         var noFlicker: Bool = false
         var mouseEnabled: Bool = true
         var scrollSpeed: Int = 3
@@ -45,7 +46,7 @@ struct GlobalSettings: Codable, Equatable {
     struct CodexSettings: Codable, Equatable {
         var mode: String = "defaultPermissions"
         var effort: String = "high"
-        var model: String = "gpt54"
+        var model: String = "gpt-5.5"
         var alternateScreen: Bool = false
     }
 
@@ -58,6 +59,13 @@ struct GlobalSettings: Codable, Equatable {
         var eventRouting: [String: [String]] = defaultEventRouting
         var retentionDays: Int = 30
         var quietHours: QuietHours = QuietHours()
+    }
+
+    struct Dome: Codable, Equatable {
+        var defaultKnowledgeScope: String = "global"
+        var includeGlobalInProject: Bool = true
+        var defaultKnowledgeKind: String = "knowledge"
+        var agentRegistrationEnabled: Bool = true
     }
 
     struct Channels: Codable, Equatable {
@@ -76,7 +84,12 @@ struct GlobalSettings: Codable, Equatable {
     static let defaultEventRouting: [String: [String]] = [
         "terminal.bell":            ["sound"],
         "terminal.spawnFailed":     ["inApp", "system"],
-        "terminal.needsInput":      ["inApp", "dockBadge"],
+        // Routed to dockBadge only — finishing a turn shouldn't pop a
+        // banner. The dock badge + per-row idle indicator are enough.
+        "terminal.idle":            ["dockBadge"],
+        // Loud: inApp + system + sound + dock. The agent is blocked
+        // until the user responds, so we want the user to notice.
+        "terminal.awaitingResponse":["inApp", "system", "sound", "dockBadge"],
         "terminal.completed":       ["inApp", "system", "dockBadge"],
         "terminal.failed":          ["inApp", "system", "dockBadge"],
         "ipc.messageReceived":      ["inApp", "dockBadge"],

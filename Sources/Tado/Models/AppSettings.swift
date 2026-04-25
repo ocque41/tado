@@ -11,7 +11,7 @@ final class AppSettings {
     var claudeEffortRaw: String = ClaudeEffort.high.rawValue
     var codexEffortRaw: String = CodexEffort.high.rawValue
     var claudeModelRaw: String = ClaudeModel.opus47.rawValue
-    var codexModelRaw: String = CodexModel.gpt54.rawValue
+    var codexModelRaw: String = CodexModel.gpt55.rawValue
 
     // Display / harness UI. Off by default because the fullscreen ("no flicker")
     // UI runs in alt-screen mode — every frame Claude Code paints replaces the
@@ -100,7 +100,7 @@ final class AppSettings {
         self.claudeEffortRaw = ClaudeEffort.high.rawValue
         self.codexEffortRaw = CodexEffort.high.rawValue
         self.claudeModelRaw = ClaudeModel.opus47.rawValue
-        self.codexModelRaw = CodexModel.gpt54.rawValue
+        self.codexModelRaw = CodexModel.gpt55.rawValue
     }
 
     var engine: TerminalEngine {
@@ -129,12 +129,12 @@ final class AppSettings {
     }
 
     var claudeModel: ClaudeModel {
-        get { ClaudeModel(rawValue: claudeModelRaw) ?? .opus47 }
+        get { ClaudeModel(rawValue: ClaudeModel.normalizedRawValue(claudeModelRaw)) ?? .opus47 }
         set { claudeModelRaw = newValue.rawValue }
     }
 
     var codexModel: CodexModel {
-        get { CodexModel(rawValue: codexModelRaw) ?? .gpt54 }
+        get { CodexModel(rawValue: CodexModel.normalizedRawValue(codexModelRaw)) ?? .gpt55 }
         set { codexModelRaw = newValue.rawValue }
     }
 }

@@ -1,15 +1,34 @@
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 /// Shared filesystem path helpers for the Tado MCP server. Mirrors
 /// Swift's `StorePaths` — identical locations so the Swift app,
 /// CLI tools, and MCP all write through the same canonical files.
-const APP_SUPPORT = join(homedir(), "Library", "Application Support", "Tado");
+const DEFAULT_APP_SUPPORT = process.env.TADO_STORAGE_DEFAULT_ROOT ||
+    join(homedir(), "Library", "Application Support", "Tado");
+export function appSupportRoot() {
+    const locator = join(DEFAULT_APP_SUPPORT, "storage-location.json");
+    if (!existsSync(locator))
+        return DEFAULT_APP_SUPPORT;
+    try {
+        const parsed = JSON.parse(readFileSync(locator, "utf-8"));
+        return parsed.activeRoot || DEFAULT_APP_SUPPORT;
+    }
+    catch {
+        return DEFAULT_APP_SUPPORT;
+    }
+}
 export const paths = {
-    globalSettings: join(APP_SUPPORT, "settings", "global.json"),
-    userMemoryMarkdown: join(APP_SUPPORT, "memory", "user.md"),
-    eventsCurrent: join(APP_SUPPORT, "events", "current.ndjson"),
+    get globalSettings() {
+        return join(appSupportRoot(), "settings", "global.json");
+    },
+    get userMemoryMarkdown() {
+        return join(appSupportRoot(), "memory", "user.md");
+    },
+    get eventsCurrent() {
+        return join(appSupportRoot(), "events", "current.ndjson");
+    },
 };
 /// Walk up from `cwd` looking for a `.tado/` directory. Returns the
 /// containing project root, or null if none found (user is outside

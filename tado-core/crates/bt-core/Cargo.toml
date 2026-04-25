@@ -1,0 +1,37 @@
+# bt-core — Dome's trusted-mutator crate, migrated from Dome's own
+# Cargo workspace into Tado's for the foundation-v2 fusion. Legacy name
+# `bt-` is preserved intentionally (the plan explicitly calls this out:
+# renaming has zero user benefit and costs a wide mechanical refactor).
+#
+# This crate owns the write barrier, markdown notes store + FTS5
+# indexing + vector search, the automation scheduler, and the
+# JSON-RPC service surface the desktop shell + MCP server call into.
+#
+# Phase 1 lands bt-core compiling inside tado-core as a library.
+# Phase 2 introduces the FFI entry (`tado_dome_start`) that boots this
+# crate's service layer as a Tokio task from Swift at app launch.
+
+[package]
+name = "bt-core"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10.4"
+croner = "3.0.1"
+diffy = "0.4"
+hex = "0.4"
+rand = "0.8"
+rusqlite = { version = "0.38.0", features = ["bundled", "chrono", "serde_json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net", "io-util", "io-std", "sync", "time", "signal", "process", "fs"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"

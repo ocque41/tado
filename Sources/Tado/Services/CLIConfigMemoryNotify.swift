@@ -24,9 +24,11 @@ enum CLIConfigMemoryNotify {
         writeTadoConfig(to: binDir)
         writeTadoNotify(to: binDir)
         writeTadoMemory(to: binDir)
+        writeTadoDome(to: binDir)
         install("tado-config", from: binDir, to: localBin)
         install("tado-notify", from: binDir, to: localBin)
         install("tado-memory", from: binDir, to: localBin)
+        install("tado-dome", from: binDir, to: localBin)
     }
 
     // MARK: - tado-config
@@ -34,13 +36,41 @@ enum CLIConfigMemoryNotify {
     private static func writeTadoConfig(to binDir: URL) {
         let script = #"""
         #!/bin/bash
-        # Tado settings CLI. Reads + writes ~/Library/Application Support/Tado/settings/global.json
+        # Tado settings CLI. Reads + writes the active Tado storage root's settings/global.json
         # and <cwd>/.tado/{config,local}.json with the same atomic flock+rename
         # discipline as the Swift app.
 
         set -e
 
-        GLOBAL="$HOME/Library/Application Support/Tado/settings/global.json"
+        default_root() {
+            if [ -n "${TADO_STORAGE_DEFAULT_ROOT:-}" ]; then
+                echo "$TADO_STORAGE_DEFAULT_ROOT"
+            else
+                echo "$HOME/Library/Application Support/Tado"
+            fi
+        }
+
+        storage_root() {
+            local root locator
+            root="$(default_root)"
+            locator="$root/storage-location.json"
+            if [ -f "$locator" ]; then
+                python3 - "$locator" "$root" <<'PYEOF'
+        import json, sys
+        try:
+            with open(sys.argv[1]) as f:
+                data = json.load(f)
+            print(data.get("activeRoot") or sys.argv[2])
+        except Exception:
+            print(sys.argv[2])
+        PYEOF
+            else
+                echo "$root"
+            fi
+        }
+
+        ROOT="$(storage_root)"
+        GLOBAL="$ROOT/settings/global.json"
 
         find_project_root() {
             dir="$PWD"
@@ -145,26 +175,36 @@ enum CLIConfigMemoryNotify {
         cmd_export() {
             dest="${1:-}"
             [ -z "$dest" ] && { echo "usage: tado-config export <path-to-tarball>" >&2; exit 2; }
-            root="$HOME/Library/Application Support/Tado"
+            root="$ROOT"
             [ -d "$root" ] || { echo "no Tado store at $root" >&2; exit 2; }
             # Skip caches + prior backups to keep archive lean + non-recursive.
             tar -czf "$dest" \
-                --exclude 'Tado/backups' \
-                --exclude 'Tado/cache' \
-                --exclude 'Tado/logs' \
-                -C "$HOME/Library/Application Support" \
-                "Tado"
+                --exclude "$(basename "$root")/backups" \
+                --exclude "$(basename "$root")/cache" \
+                --exclude "$(basename "$root")/logs" \
+                --exclude "$(basename "$root")/storage-location.json" \
+                --exclude "$(basename "$root")/storage-location.json.lock" \
+                -C "$(dirname "$root")" \
+                "$(basename "$root")"
             echo "wrote $dest"
         }
 
         cmd_import() {
             src="${1:-}"
             [ -z "$src" ] || [ ! -f "$src" ] && { echo "usage: tado-config import <path-to-tarball>" >&2; exit 2; }
-            parent="$HOME/Library/Application Support"
-            mkdir -p "$parent"
-            # Archive's top-level entry is `Tado/` — extract into parent
-            # and it lands in the right place.
-            tar -xzf "$src" -C "$parent"
+            root="$ROOT"
+            tmp="$(mktemp -d)"
+            mkdir -p "$root"
+            tar -xzf "$src" -C "$tmp"
+            top="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+            [ -n "$top" ] || top="$tmp"
+            for item in "$top"/* "$top"/.[!.]* "$top"/..?*; do
+                [ -e "$item" ] || continue
+                [ "$(basename "$item")" = "storage-location.json" ] && continue
+                rm -rf "$root/$(basename "$item")"
+                cp -R "$item" "$root/"
+            done
+            rm -rf "$tmp"
             echo "restored from $src"
             echo "note: relaunch Tado.app so SwiftData + watchers pick up the new tree."
         }
@@ -214,13 +254,40 @@ enum CLIConfigMemoryNotify {
         let script = #"""
         #!/bin/bash
         # Publishes a Tado event by appending a single NDJSON line to
-        # ~/Library/Application Support/Tado/events/current.ndjson under
+        # the active Tado storage root's events/current.ndjson under
         # the same flock discipline as the Swift-side EventPersister.
         # Works whether or not Tado.app is running — the app picks up
         # events on next launch from the durable log.
         set -e
 
-        EVENTS_FILE="$HOME/Library/Application Support/Tado/events/current.ndjson"
+        default_root() {
+            if [ -n "${TADO_STORAGE_DEFAULT_ROOT:-}" ]; then
+                echo "$TADO_STORAGE_DEFAULT_ROOT"
+            else
+                echo "$HOME/Library/Application Support/Tado"
+            fi
+        }
+
+        storage_root() {
+            local root locator
+            root="$(default_root)"
+            locator="$root/storage-location.json"
+            if [ -f "$locator" ]; then
+                python3 - "$locator" "$root" <<'PYEOF'
+        import json, sys
+        try:
+            with open(sys.argv[1]) as f:
+                data = json.load(f)
+            print(data.get("activeRoot") or sys.argv[2])
+        except Exception:
+            print(sys.argv[2])
+        PYEOF
+            else
+                echo "$root"
+            fi
+        }
+
+        EVENTS_FILE="$(storage_root)/events/current.ndjson"
 
         usage() {
             cat <<'HLP'
@@ -299,12 +366,39 @@ enum CLIConfigMemoryNotify {
         #!/bin/bash
         # Tado memory CLI. Agent-facing read/write surface for the
         # user-global and project-scoped memory substrates.
-        #   user.md     — ~/Library/Application Support/Tado/memory/user.md
+        #   user.md     — <active Tado storage root>/memory/user.md
         #   project.md  — <project>/.tado/memory/project.md
         #   notes/      — <project>/.tado/memory/notes/<ISO>-<slug>.md
         set -e
 
-        USER_MD="$HOME/Library/Application Support/Tado/memory/user.md"
+        default_root() {
+            if [ -n "${TADO_STORAGE_DEFAULT_ROOT:-}" ]; then
+                echo "$TADO_STORAGE_DEFAULT_ROOT"
+            else
+                echo "$HOME/Library/Application Support/Tado"
+            fi
+        }
+
+        storage_root() {
+            local root locator
+            root="$(default_root)"
+            locator="$root/storage-location.json"
+            if [ -f "$locator" ]; then
+                python3 - "$locator" "$root" <<'PYEOF'
+        import json, sys
+        try:
+            with open(sys.argv[1]) as f:
+                data = json.load(f)
+            print(data.get("activeRoot") or sys.argv[2])
+        except Exception:
+            print(sys.argv[2])
+        PYEOF
+            else
+                echo "$root"
+            fi
+        }
+
+        USER_MD="$(storage_root)/memory/user.md"
 
         find_project_root() {
             dir="$PWD"
@@ -452,6 +546,39 @@ enum CLIConfigMemoryNotify {
         """#
 
         let url = binDir.appendingPathComponent("ext-tado-memory")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    // MARK: - tado-dome
+
+    private static func writeTadoDome(to binDir: URL) {
+        let devBinary = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("tado-core/target/release/tado-dome")
+            .path
+        let script = #"""
+        #!/bin/bash
+        # Wrapper for the Rust tado-dome CLI shipped by Tado.
+        set -e
+
+        candidates=(
+          "\#(devBinary)"
+          "$PWD/tado-core/target/release/tado-dome"
+          "$(dirname "$0")/../../target/release/tado-dome"
+          "/Applications/Tado.app/Contents/MacOS/tado-dome"
+        )
+
+        for candidate in "${candidates[@]}"; do
+          if [ -x "$candidate" ]; then
+            exec "$candidate" "$@"
+          fi
+        done
+
+        echo "tado-dome binary not found. Run 'make core' from the Tado repo first." >&2
+        exit 127
+        """#
+
+        let url = binDir.appendingPathComponent("ext-tado-dome")
         try? script.write(to: url, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }

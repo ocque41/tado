@@ -24,11 +24,26 @@ struct TadoApp: App {
         // `CTFontManager`, not SwiftUI state.
         Typography.registerFonts()
 
+        StorageLocationManager.applyPendingMoveIfNeeded()
+        StorageLocationManager.importLegacySwiftDataStoreIfNeeded()
+        try? FileManager.default.createDirectory(
+            at: StorageLocationManager.swiftDataStoreURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
         let container: ModelContainer
         do {
-            container = try ModelContainer(
-                for: TodoItem.self, AppSettings.self, Project.self,
+            let schema = Schema([
+                TodoItem.self, AppSettings.self, Project.self,
                 Team.self, EternalRun.self, DispatchRun.self
+            ])
+            let configuration = ModelConfiguration(
+                schema: schema,
+                url: StorageLocationManager.swiftDataStoreURL
+            )
+            container = try ModelContainer(
+                for: schema,
+                configurations: [configuration]
             )
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
@@ -61,11 +76,30 @@ struct TadoApp: App {
             SoundPlayer.shared.install()
             DockBadgeUpdater.shared.install()
             SystemNotifier.shared.install()
+            // A6: real-time A2A socket at
+            // `/tmp/tado-ipc-<pid>/events.sock`. Install before
+            // `.systemAppLaunched` so that the boundary event
+            // itself is on the firehose for any early subscriber.
+            EventsSocketBridge.install()
             // Mark the session boundary for the event log. Useful
             // when paging through `events/current.ndjson` — you can
             // spot where one launch ended and the next began.
             EventBus.shared.publish(.systemAppLaunched())
         }
+
+        // Fan out to every registered extension's `onAppLaunch` hook.
+        // Detached so extensions that block (model downloads, daemon
+        // boot, etc.) never stall the first-frame paint. Extensions are
+        // expected to run their own MainActor hops for UI work.
+        Task.detached(priority: .utility) {
+            await ExtensionRegistry.runOnAppLaunchHooks()
+        }
+
+        // A7: register the Rust tado-mcp bridge with Claude Code if
+        // it's installed. Independent of ExtensionRegistry because
+        // tado-mcp isn't a UI extension — it's a stdio tool Claude
+        // spawns on demand.
+        TadoMcpAutoRegister.kickoff()
     }
 
     var body: some Scene {
@@ -129,5 +163,44 @@ struct TadoApp: App {
                 .keyboardShortcut("t", modifiers: .command)
             }
         }
+
+        // Extension windows — one WindowGroup per registered extension.
+        // SwiftUI's Scene composition can't iterate dynamic lists, so each
+        // scene is wired explicitly. Adding an entry to
+        // ExtensionRegistry.all requires a matching block here.
+        WindowGroup(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id)) {
+            NotificationsExtension.makeView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+                .frame(
+                    minWidth: NotificationsExtension.manifest.defaultWindowSize.width,
+                    minHeight: NotificationsExtension.manifest.defaultWindowSize.height
+                )
+        }
+        .windowResizability(NotificationsExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
+
+        WindowGroup(id: ExtensionWindowID.string(for: DomeExtension.manifest.id)) {
+            DomeExtension.makeView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+                .frame(
+                    minWidth: DomeExtension.manifest.defaultWindowSize.width,
+                    minHeight: DomeExtension.manifest.defaultWindowSize.height
+                )
+        }
+        .modelContainer(modelContainer)
+        .windowResizability(DomeExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
+
+        WindowGroup(id: ExtensionWindowID.string(for: CrossRunBrowserExtension.manifest.id)) {
+            CrossRunBrowserExtension.makeView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+                .frame(
+                    minWidth: CrossRunBrowserExtension.manifest.defaultWindowSize.width,
+                    minHeight: CrossRunBrowserExtension.manifest.defaultWindowSize.height
+                )
+        }
+        .modelContainer(modelContainer)
+        .windowResizability(CrossRunBrowserExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
     }
 }

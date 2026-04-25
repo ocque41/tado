@@ -163,7 +163,7 @@ struct TopNavBar: View {
             } else {
                 newProjectButton
             }
-        case .canvas, .todos:
+        case .canvas, .todos, .extensions:
             EmptyView()
         }
     }

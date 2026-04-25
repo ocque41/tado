@@ -166,7 +166,7 @@ Every meaningful state transition publishes a typed `TadoEvent`:
 1. **Producer** calls `EventBus.shared.publish(.terminalCompleted(...))`.
 2. `EventPersister` appends one NDJSON line to `events/current.ndjson` (fsynced).
 3. Registered **deliverers** fan out:
-   - `InAppBannerOverlay` — top-right transient pill, 5s auto-dismiss, stack of 3.
+   - `InAppBannerOverlay` — top-right transient pill, 240 px wide, single-line title + optional 1-line body. Auto-dismiss 2 s for info/success, 3.5 s for warning/error. Stack of 2.
    - `SoundPlayer` — plays a severity-mapped sound.
    - `DockBadgeUpdater` — sets `NSApp.dockTile.badgeLabel`.
    - `SystemNotifier` — `UNUserNotificationCenter` banner when app isn't frontmost.
@@ -187,8 +187,9 @@ For `terminal.bell`, `ui.bellMode` is the authoritative decision
 
 ```
 terminal.spawned         terminal.spawnFailed
-terminal.needsInput      terminal.completed
-terminal.failed          terminal.bell
+terminal.idle            terminal.awaitingResponse
+terminal.completed       terminal.failed
+terminal.bell
 ipc.messageReceived      ipc.messageDelivered
 eternal.runStarted       eternal.phaseCompleted
 eternal.runCompleted     eternal.runStopped

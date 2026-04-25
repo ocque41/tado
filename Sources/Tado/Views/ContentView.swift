@@ -46,6 +46,13 @@ struct ContentView: View {
                         .opacity(appState.currentView == .projects ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .projects)
 
+                    // Extensions page — discovery surface for every
+                    // bundled extension. Stays mounted like the others
+                    // so its scroll position survives view switches.
+                    ExtensionsPageView()
+                        .opacity(appState.currentView == .extensions ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .extensions)
+
                     // Non-blocking banner overlay. Sits on top of whatever
                     // page is active; hit-testing limited to visible pills
                     // so it doesn't eat clicks on the canvas/todos below.
@@ -82,12 +89,6 @@ struct ContentView: View {
             set: { appState.showDoneList = $0 }
         )) {
             DoneListView()
-        }
-        .sheet(isPresented: Binding(
-            get: { appState.showNotifications },
-            set: { appState.showNotifications = $0 }
-        )) {
-            NotificationsView()
         }
         .sheet(isPresented: Binding(
             get: { appState.showTrashList },
@@ -401,7 +402,10 @@ struct ContentView: View {
         guard let todos = try? modelContext.fetch(todoDescriptor) else { return }
         // Mark stale sessions as completed — the processes died when the app closed.
         // Do NOT re-spawn terminals; that would re-run CLI prompts and waste tokens.
-        for todo in todos where !todo.isComplete && (todo.status == .running || todo.status == .needsInput) {
+        for todo in todos where !todo.isComplete
+            && (todo.status == .running
+                || todo.status == .needsInput
+                || todo.status == .awaitingResponse) {
             todo.status = .completed
         }
         try? modelContext.save()

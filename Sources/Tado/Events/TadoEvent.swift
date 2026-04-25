@@ -99,13 +99,33 @@ extension TadoEvent {
         )
     }
 
-    static func terminalNeedsInput(sessionID: UUID, title: String, projectName: String?) -> TadoEvent {
+    /// Agent has finished a turn and is sitting at its idle prompt.
+    /// Lower-urgency than `.terminalAwaitingResponse` — the user does
+    /// NOT need to take a specific action; the next instruction can
+    /// wait. Routed quietly (dock badge only by default) so a session
+    /// that idles 20 times across the day doesn't fill the screen.
+    static func terminalIdle(sessionID: UUID, title: String, projectName: String?) -> TadoEvent {
         TadoEvent(
-            type: "terminal.needsInput",
+            type: "terminal.idle",
             severity: .info,
             source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
-            title: "Waiting for input: \(title)",
-            body: "Terminal is idle; queued prompts (if any) will drain."
+            title: "Idle: \(title)",
+            body: ""
+        )
+    }
+
+    /// Agent is actively asking a question, presenting a plan, or
+    /// awaiting numbered selection — detected by scraping the grid
+    /// for selector arrows / `(y/n)` / plan-approval phrasing. Higher
+    /// urgency: routed to inApp + system + sound by default so the
+    /// user notices even when Tado isn't frontmost.
+    static func terminalAwaitingResponse(sessionID: UUID, title: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "terminal.awaitingResponse",
+            severity: .warning,
+            source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
+            title: "Needs response: \(title)",
+            body: "Agent is asking a question or awaiting plan approval."
         )
     }
 
@@ -166,5 +186,58 @@ extension TadoEvent {
 
     static func userBroadcast(title: String, body: String, severity: Severity = .info) -> TadoEvent {
         TadoEvent(type: "user.broadcast", severity: severity, source: .system, title: title, body: body)
+    }
+
+    // MARK: - Dome (second-brain daemon) lifecycle
+
+    /// Emitted after `tado_dome_start` returns success — the Unix
+    /// socket is bound and bt-core's RPC loop is accepting connections.
+    /// Used by the Calendar surface to render a daemon-up marker on
+    /// the activity timeline, and by any agent-facing CLI that wants
+    /// to confirm Dome is actually reachable before hitting the socket.
+    ///
+    /// The body includes the manual `claude mcp add dome` command as
+    /// a fallback until Phase 3b lands full MCP auto-registration.
+    /// Users can copy/paste from the Notifications extension to hook
+    /// dome-mcp into their Claude Code scope.
+    static func domeDaemonStarted(vaultPath: String, mcpBinaryPath: String) -> TadoEvent {
+        let registerHint = "claude mcp add dome --scope user -- \(mcpBinaryPath) \(vaultPath) <agent-token>"
+        return TadoEvent(
+            type: "dome.daemonStarted",
+            severity: .success,
+            source: .system,
+            title: "Dome second-brain online",
+            body: "Vault at \(vaultPath)\n\nRegister MCP (first run only):\n\(registerHint)"
+        )
+    }
+
+    /// Emitted when `tado_dome_start` returns a non-zero status. The
+    /// code surfaces in the body so we can diagnose in the Notifications
+    /// extension without tailing a separate log file. Severity is
+    /// `.error` because failure here means every agent in every
+    /// terminal loses `dome_search` / `dome_read` / `dome_note` for
+    /// the session.
+    static func domeDaemonFailed(code: Int32, vaultPath: String) -> TadoEvent {
+        TadoEvent(
+            type: "dome.daemonFailed",
+            severity: .error,
+            source: .system,
+            title: "Dome daemon failed to start",
+            body: "tado_dome_start returned \(code) for vault \(vaultPath)"
+        )
+    }
+
+    /// Progress marker for the first-launch bge-small-en-v1.5 model
+    /// download. Phase-4 plumbing — factory added here so the Calendar
+    /// surface can subscribe without requiring a second TadoEvent.swift
+    /// edit later. `progress` is 0.0–1.0.
+    static func domeModelDownloading(progress: Double) -> TadoEvent {
+        TadoEvent(
+            type: "dome.modelDownloading",
+            severity: .info,
+            source: .system,
+            title: "Dome embedding model",
+            body: String(format: "Downloading bge-small-en-v1.5 — %.0f%%", progress * 100)
+        )
     }
 }

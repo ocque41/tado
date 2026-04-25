@@ -1,21 +1,11 @@
 import SwiftUI
 
-/// Full event history, opened from the sidebar bell. Reads the
-/// in-memory ring (`EventBus.shared.recent`) — older events live in
+/// Window-style notifications surface for the migrated extension.
+/// Reads the in-memory ring (`EventBus.shared.recent`) plus supports
+/// severity filter + free-text search. Older events live in
 /// `~/Library/Application Support/Tado/events/archive/*.ndjson` and
 /// will be paged in by a follow-up packet.
-///
-/// Filters:
-///   - Severity chip row (info / success / warning / error; defaults
-///     to "all")
-///   - Free-text search across title + body
-///
-/// Actions per row:
-///   - Click → mark read
-///   - Context menu → copy title, copy JSON
-struct NotificationsView: View {
-    @Environment(AppState.self) private var appState
-
+struct NotificationsWindowView: View {
     @State private var severityFilter: TadoEvent.Severity? = nil
     @State private var query: String = ""
 
@@ -29,7 +19,7 @@ struct NotificationsView: View {
             Divider()
             footer
         }
-        .frame(width: 560, height: 600)
+        .frame(minWidth: 520, minHeight: 520)
         .background(Palette.surface)
     }
 
@@ -41,8 +31,6 @@ struct NotificationsView: View {
                 .font(Typography.heading)
                 .foregroundStyle(Palette.textPrimary)
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.escape, modifiers: [])
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -151,13 +139,6 @@ struct NotificationsView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Palette.surfaceElevated)
-    }
-
-    // MARK: - Actions
-
-    @MainActor
-    private func dismiss() {
-        appState.showNotifications = false
     }
 }
 

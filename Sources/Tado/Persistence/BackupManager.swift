@@ -42,6 +42,8 @@ enum BackupManager {
             "--exclude", "\(root.lastPathComponent)/backups",
             "--exclude", "\(root.lastPathComponent)/cache",
             "--exclude", "\(root.lastPathComponent)/logs",
+            "--exclude", "\(root.lastPathComponent)/\(StorageLocationManager.locatorFileName)",
+            "--exclude", "\(root.lastPathComponent)/\(StorageLocationManager.locatorFileName).lock",
             root.lastPathComponent
         ]
         task.standardOutput = FileHandle.nullDevice
@@ -76,12 +78,16 @@ enum BackupManager {
             return false
         }
 
-        let parent = StorePaths.root.deletingLastPathComponent()
-        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let root = StorePaths.root
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let tempDir = fm.temporaryDirectory
+            .appendingPathComponent("tado-restore-\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tempDir) }
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        task.arguments = ["-xzf", archive.path, "-C", parent.path]
+        task.arguments = ["-xzf", archive.path, "-C", tempDir.path]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = Pipe()
 
@@ -92,7 +98,36 @@ enum BackupManager {
             NSLog("[BackupManager] restore run failed: \(error)")
             return false
         }
-        return task.terminationStatus == 0
+        guard task.terminationStatus == 0 else { return false }
+
+        do {
+            let entries = try fm.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent != ".DS_Store" }
+            let sourceRoot: URL
+            if entries.count == 1 {
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: entries[0].path, isDirectory: &isDir), isDir.boolValue {
+                    sourceRoot = entries[0]
+                } else {
+                    sourceRoot = tempDir
+                }
+            } else {
+                sourceRoot = tempDir
+            }
+
+            let restoredEntries = try fm.contentsOfDirectory(at: sourceRoot, includingPropertiesForKeys: nil)
+            for entry in restoredEntries where entry.lastPathComponent != StorageLocationManager.locatorFileName {
+                let destination = root.appendingPathComponent(entry.lastPathComponent, isDirectory: entry.hasDirectoryPath)
+                if fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.copyItem(at: entry, to: destination)
+            }
+            return true
+        } catch {
+            NSLog("[BackupManager] restore copy failed: \(error)")
+            return false
+        }
     }
 
     // MARK: - Private

@@ -12,6 +12,7 @@ struct CanvasView: View {
     @State private var scrollMonitor: Any?
     @State private var clickMonitor: Any?
     @State private var keyMonitor: Any?
+    @State private var canvasWindowNumber: Int?
     @State private var viewportSize: CGSize = .zero
     @State private var hasInitialized: Bool = false
 
@@ -154,6 +155,11 @@ struct CanvasView: View {
             }
         }
         .background(Palette.canvas)
+        .background(
+            CanvasWindowProbe { window in
+                canvasWindowNumber = window?.windowNumber
+            }
+        )
         .overlay(alignment: .bottomTrailing) {
             zoomControls.padding(16)
         }
@@ -187,6 +193,7 @@ struct CanvasView: View {
         // cursor position pans the canvas.
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
+            guard event.window?.windowNumber == self.canvasWindowNumber else { return event }
 
             // Shift + scroll = zoom always, even over a terminal
             if event.modifierFlags.contains(.shift) {
@@ -220,6 +227,7 @@ struct CanvasView: View {
         // Cmd+/-/0 for zoom.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
+            guard event.window?.windowNumber == self.canvasWindowNumber else { return event }
 
             // A sheet is open (Settings, Dispatch modal, Eternal modal,
             // Done list, Trash list) — let its TextFields / pickers use
@@ -287,6 +295,7 @@ struct CanvasView: View {
         // pan. Click ON a terminal = make that tile the keyboard selection.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [self] event in
             guard self.appState.currentView == .canvas else { return event }
+            guard event.window?.windowNumber == self.canvasWindowNumber else { return event }
             guard let window = event.window, let contentView = window.contentView else { return event }
 
             let location = event.locationInWindow
@@ -582,6 +591,32 @@ struct CanvasView: View {
         if let todo = try? modelContext.fetch(descriptor).first {
             todo.canvasX = position.x
             todo.canvasY = position.y
+        }
+    }
+}
+
+private struct CanvasWindowProbe: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ProbeView()
+        view.onWindowChange = onResolve
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ProbeView)?.onWindowChange = onResolve
+        DispatchQueue.main.async {
+            onResolve(nsView.window)
+        }
+    }
+
+    private final class ProbeView: NSView {
+        var onWindowChange: ((NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onWindowChange?(window)
         }
     }
 }

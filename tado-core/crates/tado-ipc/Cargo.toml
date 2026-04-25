@@ -1,0 +1,30 @@
+#
+# tado-ipc — Rust side of Tado's `/tmp/tado-ipc/` broker contract.
+#
+# T2 lands the crate skeleton + contract types that mirror Swift's
+# `IPCMessage.swift` + `IPCSessionEntry` byte-for-byte. Follow-up
+# phases port the actual broker loop (file watcher, delivery,
+# shell-script generation) out of
+# `Sources/Tado/Services/IPCBroker.swift` into this crate; until
+# then, Swift stays authoritative at runtime and the Rust types here
+# give external consumers (Dome's Copy-to-Tado extension, future
+# automation tooling) a library surface for the same JSON shapes.
+#
+
+[package]
+name = "tado-ipc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Rust contract types + helpers for Tado's file-based IPC (`/tmp/tado-ipc/`)."
+
+[lib]
+name = "tado_ipc"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }

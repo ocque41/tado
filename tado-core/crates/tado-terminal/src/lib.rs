@@ -18,4 +18,14 @@ pub mod performer;
 pub mod pty;
 pub mod session;
 
+// Re-exports of sibling workspace crates' C ABI surface so they ship
+// inside the unified libtado_core.a that Package.swift links. See
+// `sibling_ffi` for the symbol list and ownership conventions.
+pub mod sibling_ffi;
+
+// Dome second-brain daemon lifecycle (tado_dome_start / tado_dome_stop).
+// Spawns bt-core's RPC loop on a dedicated Tokio runtime the first
+// time Swift's `DomeExtension.onAppLaunch()` fires.
+pub mod dome_ffi;
+
 pub use session::Session;

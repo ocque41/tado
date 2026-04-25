@@ -316,6 +316,20 @@ final class ScopedConfig {
             out.notifications.eventRouting = routing
         }
 
+        // Dome
+        if local.dome.includeGlobal != defaults.dome.includeGlobal {
+            out.dome.includeGlobal = local.dome.includeGlobal
+        }
+        if local.dome.defaultKnowledgeKind != defaults.dome.defaultKnowledgeKind {
+            out.dome.defaultKnowledgeKind = local.dome.defaultKnowledgeKind
+        }
+        if local.dome.agentRegistrationEnabled != defaults.dome.agentRegistrationEnabled {
+            out.dome.agentRegistrationEnabled = local.dome.agentRegistrationEnabled
+        }
+        if local.dome.advancedWorkflowsEnabled != defaults.dome.advancedWorkflowsEnabled {
+            out.dome.advancedWorkflowsEnabled = local.dome.advancedWorkflowsEnabled
+        }
+
         return out
     }
 }

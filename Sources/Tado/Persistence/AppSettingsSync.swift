@@ -67,13 +67,15 @@ final class AppSettingsSync {
         if row.engineRaw          != s.engine.default          { row.engineRaw = s.engine.default }
         if row.claudeModeRaw      != s.engine.claude.mode      { row.claudeModeRaw = s.engine.claude.mode }
         if row.claudeEffortRaw    != s.engine.claude.effort    { row.claudeEffortRaw = s.engine.claude.effort }
-        if row.claudeModelRaw     != s.engine.claude.model     { row.claudeModelRaw = s.engine.claude.model }
+        let claudeModel = ClaudeModel.normalizedRawValue(s.engine.claude.model)
+        if row.claudeModelRaw     != claudeModel               { row.claudeModelRaw = claudeModel }
         if row.claudeNoFlicker    != s.engine.claude.noFlicker { row.claudeNoFlicker = s.engine.claude.noFlicker }
         if row.claudeMouseEnabled != s.engine.claude.mouseEnabled { row.claudeMouseEnabled = s.engine.claude.mouseEnabled }
         if row.claudeScrollSpeed  != s.engine.claude.scrollSpeed  { row.claudeScrollSpeed = s.engine.claude.scrollSpeed }
         if row.codexModeRaw       != s.engine.codex.mode          { row.codexModeRaw = s.engine.codex.mode }
         if row.codexEffortRaw     != s.engine.codex.effort        { row.codexEffortRaw = s.engine.codex.effort }
-        if row.codexModelRaw      != s.engine.codex.model         { row.codexModelRaw = s.engine.codex.model }
+        let codexModel = CodexModel.normalizedRawValue(s.engine.codex.model)
+        if row.codexModelRaw      != codexModel                   { row.codexModelRaw = codexModel }
         if row.codexAlternateScreen != s.engine.codex.alternateScreen { row.codexAlternateScreen = s.engine.codex.alternateScreen }
 
         if row.gridColumns        != s.canvas.gridColumns { row.gridColumns = s.canvas.gridColumns }
@@ -109,13 +111,13 @@ final class AppSettingsSync {
         next.engine.default          = row.engineRaw
         next.engine.claude.mode      = row.claudeModeRaw
         next.engine.claude.effort    = row.claudeEffortRaw
-        next.engine.claude.model     = row.claudeModelRaw
+        next.engine.claude.model     = row.claudeModel.rawValue
         next.engine.claude.noFlicker = row.claudeNoFlicker
         next.engine.claude.mouseEnabled = row.claudeMouseEnabled
         next.engine.claude.scrollSpeed  = row.claudeScrollSpeed
         next.engine.codex.mode          = row.codexModeRaw
         next.engine.codex.effort        = row.codexEffortRaw
-        next.engine.codex.model         = row.codexModelRaw
+        next.engine.codex.model         = row.codexModel.rawValue
         next.engine.codex.alternateScreen = row.codexAlternateScreen
 
         next.canvas.gridColumns = row.gridColumns

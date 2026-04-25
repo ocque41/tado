@@ -4,12 +4,14 @@ enum ViewMode: String, CaseIterable, Equatable {
     case canvas
     case projects
     case todos
+    case extensions
 
     var label: String {
         switch self {
         case .canvas: "Canvas"
         case .projects: "Projects"
         case .todos: "Todos"
+        case .extensions: "Extensions"
         }
     }
 
@@ -18,6 +20,7 @@ enum ViewMode: String, CaseIterable, Equatable {
         case .canvas: "square.grid.3x3"
         case .projects: "folder"
         case .todos: "checklist"
+        case .extensions: "puzzlepiece.extension"
         }
     }
 }
@@ -172,31 +175,58 @@ enum ClaudeModel: String, Codable, CaseIterable {
     var cliFlags: [String] {
         return ["--model", rawValue]
     }
+
+    static func normalizedRawValue(_ raw: String) -> String {
+        switch raw {
+        case "opus47": return ClaudeModel.opus47.rawValue
+        case "opus47_1M": return ClaudeModel.opus47_1M.rawValue
+        case "sonnet46": return ClaudeModel.sonnet46.rawValue
+        case "haiku45": return ClaudeModel.haiku45.rawValue
+        default:
+            return ClaudeModel(rawValue: raw)?.rawValue ?? ClaudeModel.opus47.rawValue
+        }
+    }
 }
 
 enum CodexModel: String, Codable, CaseIterable {
+    case gpt55 = "gpt-5.5"
     case gpt54 = "gpt-5.4"
-    case gpt52Codex = "gpt-5.2-codex"
-    case gpt51CodexMax = "gpt-5.1-codex-max"
     case gpt54Mini = "gpt-5.4-mini"
     case gpt53Codex = "gpt-5.3-codex"
     case gpt52 = "gpt-5.2"
-    case gpt51CodexMini = "gpt-5.1-codex-mini"
 
     var displayName: String {
         switch self {
+        case .gpt55: "GPT-5.5"
         case .gpt54: "GPT-5.4"
-        case .gpt52Codex: "GPT-5.2-Codex"
-        case .gpt51CodexMax: "GPT-5.1-Codex-Max"
         case .gpt54Mini: "GPT-5.4-Mini"
         case .gpt53Codex: "GPT-5.3-Codex"
         case .gpt52: "GPT-5.2"
-        case .gpt51CodexMini: "GPT-5.1-Codex-Mini"
         }
     }
 
     var cliFlags: [String] {
         return ["-c", "model=\"\(rawValue)\""]
+    }
+
+    static func normalizedRawValue(_ raw: String) -> String {
+        switch raw {
+        case "gpt55": return CodexModel.gpt55.rawValue
+        case "gpt54": return CodexModel.gpt54.rawValue
+        case "gpt54Mini": return CodexModel.gpt54Mini.rawValue
+        case "gpt53Codex": return CodexModel.gpt53Codex.rawValue
+        case "gpt52": return CodexModel.gpt52.rawValue
+        case "gpt-5.1-codex-max",
+             "gpt-5.1-codex",
+             "gpt-5.1-codex-mini",
+             "gpt-5.2-codex",
+             "gpt52Codex",
+             "gpt51CodexMax",
+             "gpt51CodexMini":
+            return CodexModel.gpt55.rawValue
+        default:
+            return CodexModel(rawValue: raw)?.rawValue ?? CodexModel.gpt55.rawValue
+        }
     }
 }
 
@@ -208,9 +238,6 @@ final class AppState {
     var showSidebar: Bool = false
     var showDoneList: Bool = false
     var showTrashList: Bool = false
-    /// Drives the Notifications history sheet (bell icon in sidebar
-    /// header). Opens on click, dismisses on Escape / Done button.
-    var showNotifications: Bool = false
     var pendingNavigationID: UUID? = nil
     var forwardTargetTodoID: UUID? = nil
     var activeProjectID: UUID? = nil

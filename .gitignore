@@ -46,3 +46,8 @@ tado-core/include/tado_core.h
 .tado/eternal/
 .tado/dispatch/
 .tado/memory/notes/
+
+# AtomicStore flock byproducts under .tado/. Created next to every
+# tracked file we touch; always 0 bytes; never meaningful diff.
+.tado/*.lock
+.tado/.*.lock

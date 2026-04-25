@@ -151,6 +151,16 @@ struct NewProjectSheet: View {
         let project = Project(name: trimmed, rootPath: path)
         modelContext.insert(project)
         try? modelContext.save()
+
+        // C2: Seed the project's Dome topic with an overview note so
+        // every agent spawned into the project wakes with at least
+        // one discoverable fact about it. Best-effort — if Dome
+        // isn't online yet (race between first-launch hook fan-out
+        // and a project-creation click), the seed is skipped and
+        // the project still works; the first agent note or user
+        // note will create the topic lazily.
+        DomeProjectMemory.seedOverview(for: project)
+
         dismiss()
     }
 }

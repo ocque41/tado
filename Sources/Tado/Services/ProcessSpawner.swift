@@ -55,6 +55,7 @@ enum ProcessSpawner {
         engine: TerminalEngine,
         ipcRoot: URL,
         projectName: String? = nil,
+        projectID: UUID? = nil,
         projectRoot: String? = nil,
         teamName: String? = nil,
         teamID: UUID? = nil,
@@ -64,10 +65,12 @@ enum ProcessSpawner {
     ) -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TADO_IPC_ROOT"] = ipcRoot.path
+        env["TADO_STORAGE_ROOT"] = StorePaths.root.path
         env["TADO_SESSION_ID"] = sessionID.uuidString.lowercased()
         env["TADO_SESSION_NAME"] = sessionName
         env["TADO_ENGINE"] = engine.rawValue
         if let projectName { env["TADO_PROJECT_NAME"] = projectName }
+        if let projectID { env["TADO_PROJECT_ID"] = projectID.uuidString.lowercased() }
         if let projectRoot { env["TADO_PROJECT_ROOT"] = projectRoot }
         if let teamName { env["TADO_TEAM_NAME"] = teamName }
         if let teamID { env["TADO_TEAM_ID"] = teamID.uuidString.lowercased() }
@@ -89,6 +92,8 @@ enum ProcessSpawner {
             // stall for ralph-loop style sessions. Users who want to update
             // can do so manually via `claude doctor`.
             env["CLAUDE_CODE_AUTO_UPDATE_DISABLED"] = "1"
+            env["TADO_DOME_VAULT"] = DomeVault.resolveRoot().path
+            env["TADO_DOME_RETRIEVAL_FRESHNESS"] = "spawn"
         }
 
         let binPath = ipcRoot.appendingPathComponent("bin").path
@@ -1290,6 +1295,29 @@ enum ProcessSpawner {
         specification is grounded in reality, not your prior-memory guess at \
         what the project is. The worker will run many iterations against this \
         spec — every ambiguity you leave becomes a wasted iteration.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 0.5 — QUERY DOME FOR PRIOR ART (IF AVAILABLE)
+        ═══════════════════════════════════════════════════════════
+        If the `dome` MCP server is registered (check via `/mcp` in \
+        Claude Code, or try calling `dome_search` directly — the tool \
+        is a no-op in error-tolerant mode if not wired up), run:
+
+          dome_search("\(projectName) architect prior art", limit=5)
+          dome_search("\(projectName) sprint retro", limit=5)
+          dome_search("\(projectName) metric evaluation", limit=5)
+
+        These queries pull any prior sprints' retros, architect \
+        outputs, and metric evaluations stored by previous Eternal runs \
+        on this project. If Dome returns hits, read them via `dome_read` \
+        and weave the insights into your TASK / EVALUATE / IMPROVE \
+        sections — especially the IMPROVE ladder, where knowing which \
+        knobs plateaued last time saves the worker many iterations.
+
+        If Dome returns zero hits (first run on this project, or Dome \
+        isn't registered), proceed without it — the spec still has to \
+        stand on its own. Your goal is to be informed by history when \
+        history exists, not blocked by its absence.
 
         ═══════════════════════════════════════════════════════════
         STEP 1 — DESIGN THE SPECIFICATION

@@ -3,7 +3,16 @@ use std::path::PathBuf;
 
 fn main() {
     let crate_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let out = PathBuf::from(&crate_dir).join("include").join("tado_core.h");
+    // After the T1 workspace split the terminal crate sits at
+    // `tado-core/crates/tado-terminal/`. The canonical header path
+    // (consumed by `Sources/CTadoCore`) stays at `tado-core/include/`,
+    // so this climbs two directories up before writing. Keeps
+    // Package.swift + CTadoCore unchanged.
+    let workspace_include = PathBuf::from(&crate_dir)
+        .join("..")
+        .join("..")
+        .join("include");
+    let out = workspace_include.join("tado_core.h");
     std::fs::create_dir_all(out.parent().unwrap()).ok();
 
     cbindgen::Builder::new()

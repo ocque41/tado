@@ -4,7 +4,16 @@ import AppKit
 enum SessionStatus: String, Equatable {
     case pending
     case running
+    /// The agent has stopped writing output but no question UI is on
+    /// screen — it's idling at its input prompt waiting for the next
+    /// user instruction. Lower-urgency than `.awaitingResponse`.
     case needsInput
+    /// The agent is actively asking the user a question / presenting a
+    /// plan and awaiting an explicit response (yes/no, plan approval,
+    /// numbered selection). Detected by scraping the bottom of the
+    /// grid for selector arrows (`❯`), `(y/n)` markers, plan-approval
+    /// language. Higher-urgency: SystemNotifier + sound by default.
+    case awaitingResponse
     case completed
     case failed
 }
@@ -59,6 +68,7 @@ final class TerminalSession: Identifiable {
     /// typical agent output — more than enough between 5 s flushes.
     static let logBufferByteCap = 256 * 1024
     var projectName: String?
+    var projectID: UUID?
     var agentName: String?
     var teamName: String?
     var teamID: UUID?
@@ -227,7 +237,8 @@ final class TerminalSession: Identifiable {
 
     /// Send immediately if agent is idle, otherwise queue
     func enqueueOrSend(_ text: String) {
-        if status == .needsInput || status == .completed || status == .failed {
+        if status == .needsInput || status == .awaitingResponse
+            || status == .completed || status == .failed {
             sendToTerminal(text)
             markActivity()
         } else {
@@ -319,21 +330,39 @@ final class TerminalSession: Identifiable {
 
     func markActivity() {
         lastActivityDate = Date()
-        if status == .needsInput {
+        if status == .needsInput || status == .awaitingResponse {
             status = .running
             onStatusChange?(.running)
         }
     }
 
+    /// Snapshot of the bottom of the grid, refreshed only when
+    /// `checkIdle` has to decide between `.needsInput` and
+    /// `.awaitingResponse`. Avoids re-allocating a snapshot on every
+    /// idle tick: once the session has settled into a steady idle
+    /// state, the cursor stops moving so the screen contents don't
+    /// change either, and we already cached the answer in `status`.
     func checkIdle() {
         guard isRunning else { return }
         if Date().timeIntervalSince(lastActivityDate) > 5.0 {
-            if status != .needsInput {
-                status = .needsInput
-                onStatusChange?(.needsInput)
-                EventBus.shared.publish(
-                    .terminalNeedsInput(sessionID: id, title: title, projectName: projectName)
-                )
+            let detected: SessionStatus = isScreenAwaitingResponse()
+                ? .awaitingResponse
+                : .needsInput
+            if status != detected {
+                status = detected
+                onStatusChange?(detected)
+                switch detected {
+                case .awaitingResponse:
+                    EventBus.shared.publish(
+                        .terminalAwaitingResponse(sessionID: id, title: title, projectName: projectName)
+                    )
+                case .needsInput:
+                    EventBus.shared.publish(
+                        .terminalIdle(sessionID: id, title: title, projectName: projectName)
+                    )
+                default:
+                    break
+                }
             }
             drainQueueIfReady()
         } else {
@@ -343,6 +372,73 @@ final class TerminalSession: Identifiable {
             }
         }
     }
+
+    /// Read the bottom rows of the live grid and look for markers that
+    /// imply the agent is asking a question or asking the user to
+    /// approve a plan. Detection is intentionally permissive — false
+    /// positives just mean an extra prominent notification, while
+    /// false negatives leave the user thinking nothing is asking for
+    /// their attention.
+    ///
+    /// Markers (any one is sufficient):
+    ///   - `❯` (U+276F) — the heavy right-pointing angle bracket used
+    ///     by Claude Code's numbered selectors and Codex's prompts.
+    ///   - `(y/n)`, `(Y/n)`, `(y/N)`, `[y/n]`, `(yes/no)` — generic
+    ///     CLI prompts.
+    ///   - `Approve plan`, `Do you want`, `Press Enter`, `Continue?`,
+    ///     `(esc to`, `Approve this` — plan-approval / continuation
+    ///     language emitted by both engines.
+    private func isScreenAwaitingResponse() -> Bool {
+        guard let core = coreSession,
+              let snap = core.snapshotFull() else { return false }
+        let cols = Int(snap.cols)
+        let rows = Int(snap.rows)
+        guard cols > 0, rows > 0,
+              snap.cells.count >= cols * rows else { return false }
+        // Scan up to 16 rows from the bottom — Claude's selector menus
+        // routinely span ~6-10 rows; 16 covers plan approval too.
+        let scanRows = min(rows, 16)
+        let startRow = rows - scanRows
+        var text = String()
+        text.reserveCapacity(scanRows * cols + scanRows)
+        for r in startRow..<rows {
+            for c in 0..<cols {
+                let cell = snap.cells[r * cols + c]
+                if cell.ch == 0 {
+                    text.append(" ")
+                } else if let scalar = Unicode.Scalar(cell.ch) {
+                    text.unicodeScalars.append(scalar)
+                }
+            }
+            text.append("\n")
+        }
+        return Self.awaitingResponseMarkers.contains { text.contains($0) }
+            || Self.awaitingResponseLowercaseMarkers.contains {
+                text.lowercased().contains($0)
+            }
+    }
+
+    /// Case-sensitive markers — kept separate so we don't lowercase
+    /// every scan when the symbol-only markers can short-circuit.
+    private static let awaitingResponseMarkers: [String] = [
+        "❯",
+        "(y/n)",
+        "(Y/n)",
+        "(y/N)",
+        "[y/n]",
+        "(yes/no)",
+        "(esc to"
+    ]
+
+    /// Lowercase substring markers. The scan text is lowercased once
+    /// before testing each.
+    private static let awaitingResponseLowercaseMarkers: [String] = [
+        "approve plan",
+        "do you want",
+        "press enter",
+        "continue?",
+        "approve this"
+    ]
 
     func markTerminated(exitCode: Int32?) {
         self.isRunning = false

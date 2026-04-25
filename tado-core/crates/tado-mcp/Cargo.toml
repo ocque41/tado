@@ -1,0 +1,44 @@
+#
+# tado-mcp — stdio MCP bridge to Tado's in-app services.
+#
+# Port of the Node-based `tado-mcp/` server at the repo root. The
+# two ship side-by-side for one release: the Node one stays as
+# reference, the Rust one is what Tado auto-registers at launch
+# via `claude mcp add tado`.
+#
+# Why Rust
+# --------
+# Every other piece of Tado's runtime is Rust (bt-core, tado-ipc,
+# tado-settings, dome-mcp). The Node MCP was the last JavaScript
+# surface shipped with the app; porting it means the `.app` no
+# longer needs a Node runtime on the user's machine to answer MCP
+# tool calls, and tool behavior stays byte-identical across
+# whatever Node/deno/bun policy an agent environment happens to
+# have.
+#
+# Ship target: `Tado.app/Contents/MacOS/tado-mcp`. The Makefile's
+# packaging step copies this binary alongside `dome-mcp` after
+# `cargo build --release`.
+#
+
+[package]
+name = "tado-mcp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "stdio MCP server exposing Tado's A2A + settings + events tools."
+
+[[bin]]
+name = "tado-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+tado-ipc = { path = "../tado-ipc" }
+tado-settings = { path = "../tado-settings" }

@@ -134,6 +134,12 @@ struct ProjectDetailView: View {
         let team = Team(name: trimmed, projectID: project.id, agentNames: Array(newTeamAgentsInProject))
         modelContext.insert(team)
         try? modelContext.save()
+
+        // C3: write the team roster to the project's Dome topic so
+        // agents spawned into any team in this project can query
+        // `dome_search --topic project-<id>` for membership context.
+        DomeTeamTopic.writeRoster(project: project, team: team)
+
         cancelNewTeam()
     }
 

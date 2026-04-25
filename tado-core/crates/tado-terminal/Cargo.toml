@@ -1,0 +1,70 @@
+#
+# Tado's terminal emulator core.
+#
+# Produces `libtado_core.a` (+ `.rlib`) in the workspace's
+# `target/<profile>/` directory. The staticlib is what
+# `Package.swift` links into the macOS app; the rlib exists so
+# sibling workspace crates can depend on the exported types
+# without going back through the C FFI.
+#
+# Crate name stays `tado-core` (was the whole workspace before
+# T1 split it out) so external scripts / docs that refer to the
+# crate by name keep working; the directory path is the only
+# thing that changed.
+#
+
+[package]
+name = "tado-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Tado terminal core: PTY, VT parsing, cell grid. Linked into the Swift app as a static library."
+
+[lib]
+name = "tado_core"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+portable-pty = "0.9"
+vte = "0.13"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+# East-Asian Wide character classification. Used by `Grid::put_char`
+# to know when a codepoint should occupy two terminal cells (CJK,
+# box-drawing wide variants, etc.). Stable since 0.1.
+unicode-width = "0.2"
+# NFC precomposition for combining marks. `Grid::compose_combining`
+# folds `"a" + U+0301` → `"á"` so accented text matches master's
+# SwiftTerm-era rendering instead of dropping the diacritic.
+unicode-normalization = "0.1"
+# Sibling workspace crates — re-exported through this crate's FFI so
+# their symbols ship inside the unified libtado_core.a that
+# Package.swift links. Keep direct deps minimal here; the sibling
+# crates' own internal deps are their own concern.
+tado-ipc = { path = "../tado-ipc" }
+tado-settings = { path = "../tado-settings" }
+# bt-core drives Dome's second-brain daemon (notes store, vector
+# search, automation scheduler, JSON-RPC service). Added as a path
+# dep so its C-ABI re-exports land inside the unified libtado_core.a
+# that Package.swift links. See `dome_ffi` for the exported symbols.
+bt-core = { path = "../bt-core" }
+# Multi-threaded Tokio runtime needed by the Dome FFI entry; its
+# Unix-socket listener + scheduler task run inside a dedicated runtime
+# owned by the app process.
+tokio = { version = "1.47", features = ["rt-multi-thread"] }
+# Used inline by the FFI re-export shims for stable C-string handling.
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[dev-dependencies]
+# Criterion drives `cargo bench`. Harness = false on the bench target
+# below so criterion can install its own main(); doesn't leak into
+# `cargo test` (dev-deps only).
+criterion = "0.5"
+
+[[bench]]
+name = "grid_bench"
+harness = false

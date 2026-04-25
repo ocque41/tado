@@ -4,19 +4,11 @@ enum StorePaths {
     static let appName = "Tado"
 
     static var root: URL {
-        let fm = FileManager.default
-        let base = try? fm.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let url = (base ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Application Support", isDirectory: true))
-            .appendingPathComponent(appName, isDirectory: true)
-        try? fm.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        StorageLocationManager.currentRoot
     }
+
+    static var defaultRoot: URL { StorageLocationManager.defaultRoot }
+    static var storageLocatorFile: URL { StorageLocationManager.locatorFile }
 
     static var settingsDir: URL { sub("settings") }
     static var memoryDir: URL { sub("memory") }

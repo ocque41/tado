@@ -22,6 +22,7 @@ struct ProjectSettings: Codable, Equatable {
     var eternal: EternalBlock = EternalBlock()
     var dispatch: DispatchBlock = DispatchBlock()
     var notifications: NotificationsBlock = NotificationsBlock()
+    var dome: DomeBlock = DomeBlock()
 
     enum CommitPolicy: String, Codable, CaseIterable {
         /// `config.json` tracked by git, `local.json` gitignored.
@@ -55,6 +56,13 @@ struct ProjectSettings: Codable, Equatable {
     /// Reserved for future dispatch-level config. Empty today so the
     /// file layout doesn't churn when we start populating it.
     struct DispatchBlock: Codable, Equatable {}
+
+    struct DomeBlock: Codable, Equatable {
+        var includeGlobal: Bool = true
+        var defaultKnowledgeKind: String = "knowledge"
+        var agentRegistrationEnabled: Bool = true
+        var advancedWorkflowsEnabled: Bool = true
+    }
 
     /// Project-level override for event routing. Keys match the
     /// event-type taxonomy in `GlobalSettings.defaultEventRouting`.

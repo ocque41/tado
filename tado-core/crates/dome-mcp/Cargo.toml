@@ -1,0 +1,33 @@
+# dome-mcp — stdio MCP bridge for Dome.
+#
+# Claude Code spawns this binary per-agent (one process per
+# `claude mcp` connection). It translates MCP tool calls into
+# JSON-RPC requests against the bt-core daemon running in-process
+# inside the Tado app at `<vault>/.bt/bt-core.sock`.
+#
+# Ship target: `Tado.app/Contents/MacOS/dome-mcp`. The Makefile's
+# packaging step copies the release binary into the bundle after
+# `cargo build --release` + `swift build -c release`.
+#
+# Why not in-process MCP: Claude Code's MCP transport is stdio-per-
+# server. A single background server can't fan out stdio to every
+# agent process that launches `claude`. This binary is a thin
+# translator — it holds no state beyond the socket connection and
+# the authenticated token it validated at startup.
+
+[package]
+name = "dome-mcp"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "dome-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "io-std", "io-util", "net"] }
+bt-core = { path = "../bt-core" }

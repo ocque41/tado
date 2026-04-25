@@ -1,0 +1,7 @@
+# Managed by Tado — edit via Settings → Project → Commit policy,
+# or set policy to `none` in `config.json` to hand-maintain.
+local.json
+hooks.log
+eternal/runs/
+dispatch/runs/
+memory/notes/archive.tar.gz

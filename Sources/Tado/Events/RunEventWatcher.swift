@@ -147,6 +147,13 @@ final class RunEventWatcher {
                     body: "Metric: \(metric)"
                 )
             )
+            // C5: mirror the sprint retro into Dome so future
+            // architects can dome_search it (see
+            // eternalArchitectPrompt STEP 0.5).
+            if let project = run.project {
+                let retroLine = "Sprint \(newState.sprints) complete (run \(runLabel)). Metric: \(metric). Iterations so far: \(newState.iterations). Last progress: \(newState.lastProgressNote ?? "—")"
+                DomeProjectMemory.appendOverview(for: project, line: retroLine)
+            }
         }
 
         if newState.phase != old.phase {
@@ -166,6 +173,11 @@ final class RunEventWatcher {
                         body: "\(newState.sprints) sprints, \(newState.iterations) iterations."
                     )
                 )
+                // C5: write a structured completion retro to Dome.
+                if let project = run.project {
+                    let retroLine = "Eternal run \(runLabel) COMPLETED. Mode: \(newState.mode). Final sprints: \(newState.sprints). Iterations: \(newState.iterations). Final metric: \(newState.lastMetric?.display ?? "—"). Last note: \(newState.lastProgressNote ?? "—")"
+                    DomeProjectMemory.appendOverview(for: project, line: retroLine)
+                }
             case "stopped":
                 EventBus.shared.publish(
                     TadoEvent(

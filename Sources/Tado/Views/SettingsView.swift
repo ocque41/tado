@@ -421,6 +421,9 @@ private struct NotificationsSection: View {
 private struct StorageSection: View {
     @State private var lastExport: String?
     @State private var importError: String?
+    @State private var storageError: String?
+    @State private var pendingRoot: URL?
+    @State private var lastMoveError: String?
 
     var body: some View {
         Section {
@@ -431,6 +434,19 @@ private struct StorageSection: View {
                     .lineLimit(1)
                     .truncationMode(.head)
             }
+            if let pendingRoot {
+                Text("Move pending: \(pendingRoot.path). Restart Tado to finish.")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.warning)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            if let lastMoveError {
+                Text("Last move failed: \(lastMoveError)")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.danger)
+                    .lineLimit(3)
+            }
             HStack {
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([StorePaths.root])
@@ -439,6 +455,18 @@ private struct StorageSection: View {
                     NSWorkspace.shared.open(StorePaths.eventsCurrent)
                 }
                 .disabled(!FileManager.default.fileExists(atPath: StorePaths.eventsCurrent.path))
+            }
+
+            HStack {
+                Button("Change Location…") { chooseStorageLocation() }
+                Button("Reset to Default") { resetStorageLocation() }
+                    .disabled(StorageLocationManager.isUsingDefaultRoot && pendingRoot == nil)
+            }
+            if let storageError {
+                Text(storageError)
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.danger)
+                    .lineLimit(3)
             }
 
             HStack {
@@ -457,6 +485,40 @@ private struct StorageSection: View {
             }
         } header: {
             Text("Storage")
+        }
+        .onAppear { refreshStorageState() }
+        .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
+            refreshStorageState()
+        }
+    }
+
+    private func refreshStorageState() {
+        pendingRoot = StorageLocationManager.pendingRoot
+        lastMoveError = StorageLocationManager.lastMoveError
+    }
+
+    private func chooseStorageLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = StorePaths.root.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        scheduleStorageMove(to: url)
+    }
+
+    private func resetStorageLocation() {
+        scheduleStorageMove(to: StorageLocationManager.defaultRoot)
+    }
+
+    private func scheduleStorageMove(to url: URL) {
+        do {
+            try StorageLocationManager.scheduleMove(to: url)
+            storageError = nil
+            refreshStorageState()
+        } catch {
+            storageError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
         }
     }
 

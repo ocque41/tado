@@ -1,0 +1,29 @@
+#
+# tado-settings — Rust side of Tado's scoped-config + atomic-store
+# layer.
+#
+# T3 scope: atomic JSON IO + the 5-scope type + canonical path
+# helpers. The full Swift porters (ScopedConfig, AppSettingsSync,
+# ProjectSettingsSync, MigrationRunner, BackupManager,
+# FileWatcher) will move across progressively; this crate gives
+# the new Rust code a stable home and the Swift code something to
+# gradually delegate into.
+#
+
+[package]
+name = "tado-settings"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Atomic JSON IO + scope model + path helpers for Tado's persisted config."
+
+[lib]
+name = "tado_settings"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

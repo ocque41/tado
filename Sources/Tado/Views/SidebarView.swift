@@ -297,11 +297,12 @@ private struct SessionRow: View {
 
     private var statusColor: Color {
         switch session.status {
-        case .pending:    return Palette.textTertiary
-        case .running:    return Palette.accent
-        case .needsInput: return Palette.warning
-        case .completed:  return Palette.success
-        case .failed:     return Palette.danger
+        case .pending:           return Palette.textTertiary
+        case .running:           return Palette.accent
+        case .needsInput:        return Palette.textSecondary
+        case .awaitingResponse:  return Palette.warning
+        case .completed:         return Palette.success
+        case .failed:            return Palette.danger
         }
     }
 
@@ -414,18 +415,18 @@ private extension String {
 
 // MARK: - Notifications bell
 
-/// Bell icon with unread badge. Opens `NotificationsView` as a sheet.
-/// Lives in the sidebar header so it's always one click away
+/// Bell icon with unread badge. Opens the Notifications extension
+/// window. Lives in the sidebar header so it's always one click away
 /// regardless of current view.
 private struct NotificationsBell: View {
-    @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
     // Reading this observed property in the body re-renders the bell
     // whenever a new event arrives — we don't need to cache the count.
     private var unread: Int { EventBus.shared.unreadCount }
 
     var body: some View {
         Button {
-            appState.showNotifications = true
+            openWindow(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id))
         } label: {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: unread > 0 ? "bell.fill" : "bell")

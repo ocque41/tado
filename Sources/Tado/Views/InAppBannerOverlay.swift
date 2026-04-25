@@ -14,22 +14,28 @@ struct InAppBannerOverlay: View {
     @State private var visibleIDs: [UUID] = []
     @State private var dismissTasks: [UUID: Task<Void, Never>] = [:]
 
-    /// How long each banner stays up before auto-fading.
-    private let dismissAfter: TimeInterval = 5.0
+    /// Default fade-out for `.warning` / `.error` events — slightly
+    /// longer because the user usually wants a moment to read.
+    private let dismissAfter: TimeInterval = 3.5
+
+    /// Faster fade for `.info` / `.success` — these are
+    /// acknowledgements, not asks, and should not linger.
+    private let dismissAfterQuiet: TimeInterval = 2.0
 
     /// Max stack depth — above this, the oldest visible banner is
-    /// evicted. Keeps the overlay out of the way in event storms.
-    private let stackLimit = 3
+    /// evicted. Two is enough to show both the latest event and one
+    /// piece of context without dominating the canvas.
+    private let stackLimit = 2
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
+        VStack(alignment: .trailing, spacing: 5) {
             ForEach(eventsToShow) { event in
                 BannerCard(event: event, onDismiss: { dismiss(event.id) })
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .padding(.top, 12)
-        .padding(.trailing, 12)
+        .padding(.top, 8)
+        .padding(.trailing, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .allowsHitTesting(!visibleIDs.isEmpty)
         .onChange(of: EventBus.shared.recent.last?.id) { _, _ in
@@ -64,8 +70,15 @@ struct InAppBannerOverlay: View {
         }
 
         let id = latest.id
-        let task = Task { [dismissAfter] in
-            try? await Task.sleep(nanoseconds: UInt64(dismissAfter * 1_000_000_000))
+        let timeout: TimeInterval
+        switch latest.severity {
+        case .warning, .error:
+            timeout = dismissAfter
+        case .info, .success:
+            timeout = dismissAfterQuiet
+        }
+        let task = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             if !Task.isCancelled {
                 await MainActor.run { dismiss(id) }
             }
@@ -90,46 +103,49 @@ private struct BannerCard: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 2)
+        HStack(alignment: .center, spacing: 7) {
+            RoundedRectangle(cornerRadius: 1.5)
                 .fill(severityColor)
-                .frame(width: 3)
+                .frame(width: 2)
                 .frame(maxHeight: .infinity)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(event.title)
-                    .font(Typography.label)
+                    .font(Typography.monoCaption)
                     .foregroundStyle(Palette.textPrimary)
-                    .lineLimit(2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 if !event.body.isEmpty {
                     Text(event.body)
-                        .font(Typography.monoCaption)
+                        .font(Typography.monoMicro)
                         .foregroundStyle(Palette.textSecondary)
-                        .lineLimit(3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(Palette.textTertiary)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 12, height: 12)
             }
             .buttonStyle(.plain)
         }
-        .padding(10)
-        .frame(width: 340, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(width: 240, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 5)
                 .fill(Palette.surfaceElevated)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 5)
                 .strokeBorder(Palette.divider, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 3)
+        .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
     }
 
     private var severityColor: Color {

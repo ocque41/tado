@@ -171,6 +171,7 @@ final class TerminalManager {
         if let cwd { session.lastKnownCwd = cwd }
         session.agentName = agentName
         session.projectName = projectName
+        session.projectID = todo.projectID
         session.teamName = teamName
         session.teamID = teamID
         session.projectRoot = cwd

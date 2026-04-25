@@ -1,0 +1,34 @@
+{
+  "commitPolicy" : "shared",
+  "dispatch" : {
+
+  },
+  "dome" : {
+    "advancedWorkflowsEnabled" : true,
+    "agentRegistrationEnabled" : true,
+    "defaultKnowledgeKind" : "knowledge",
+    "includeGlobal" : true
+  },
+  "engine" : {
+    "default" : ""
+  },
+  "eternal" : {
+    "completionMarker" : "ETERNAL-DONE",
+    "loopKind" : "external",
+    "mode" : "mega",
+    "skipPermissions" : true,
+    "sprintEval" : "",
+    "sprintImprove" : ""
+  },
+  "notifications" : {
+    "eventRouting" : {
+
+    }
+  },
+  "project" : {
+    "name" : "tado"
+  },
+  "schemaVersion" : 1,
+  "updatedAt" : "2026-04-25T06:35:57Z",
+  "writer" : "tado-app"
+}

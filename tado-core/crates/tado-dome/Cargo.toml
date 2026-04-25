@@ -1,0 +1,17 @@
+[package]
+name = "tado-dome"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "CLI for registering and querying scoped Dome knowledge from Tado canvas agents."
+
+[[bin]]
+name = "tado-dome"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread"] }
+bt-core = { path = "../bt-core" }
+tado-settings = { path = "../tado-settings" }

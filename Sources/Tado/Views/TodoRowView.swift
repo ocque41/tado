@@ -115,7 +115,7 @@ struct TodoRowView: View {
     // MARK: - Status
 
     private enum TodoDisplayStatus {
-        case running, needsInput, completed, failed, stale
+        case running, idle, awaitingResponse, completed, failed, stale
     }
 
     private var todoStatus: TodoDisplayStatus {
@@ -123,7 +123,8 @@ struct TodoRowView: View {
             switch session.status {
             case .pending: return .stale
             case .running: return .running
-            case .needsInput: return .needsInput
+            case .needsInput: return .idle
+            case .awaitingResponse: return .awaitingResponse
             case .completed: return .completed
             case .failed: return .failed
             }
@@ -143,12 +144,20 @@ struct TodoRowView: View {
             ProgressView()
                 .controlSize(.small)
                 .frame(width: 14, height: 14)
-        case .needsInput:
+        case .idle:
+            // Calm dot — finished a turn, nothing blocking. Distinct
+            // from the warning-colored `awaitingResponse` indicator
+            // so the user can tell at a glance which tiles need their
+            // attention RIGHT NOW vs which are just waiting.
+            Circle()
+                .fill(Palette.textSecondary.opacity(0.7))
+                .frame(width: 10, height: 10)
+        case .awaitingResponse:
             Circle()
                 .fill(Palette.warning)
                 .frame(width: 10, height: 10)
                 .overlay(
-                    Text("!")
+                    Text("?")
                         .font(.system(size: 7, weight: .black, design: .monospaced))
                         .foregroundStyle(Palette.background)
                 )
@@ -175,7 +184,8 @@ struct TodoRowView: View {
     private var rowColor: Color {
         switch todoStatus {
         case .running: return .clear
-        case .needsInput: return Palette.warning.opacity(0.08)
+        case .idle: return .clear
+        case .awaitingResponse: return Palette.warning.opacity(0.08)
         case .completed: return Palette.success.opacity(0.08)
         case .failed: return Palette.danger.opacity(0.08)
         case .stale: return .clear

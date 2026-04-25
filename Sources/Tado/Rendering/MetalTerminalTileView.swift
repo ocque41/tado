@@ -179,8 +179,30 @@ struct MetalTerminalTileView: View {
             executable = cmd.executable
             args = cmd.args
         } else {
+            // C4: prepend a Dome-backed context preamble to every
+            // non-Eternal agent spawn. The preamble carries identity,
+            // project, team, and recent project notes so the agent
+            // wakes with the facts it would otherwise have to derive
+            // from env vars + tool calls. Silently passes through
+            // unchanged if Dome is offline or the context is empty
+            // (raw terminal with no project).
+            // TerminalSession carries the project id from the TodoItem,
+            // so Dome can inject recent project notes and a retrieval
+            // contract before the agent sees the user's prompt.
+            let preambleCtx = DomeContextPreamble.Context(
+                agentName: agentName,
+                projectName: session.projectName,
+                projectID: session.projectID,
+                projectRoot: session.projectRoot,
+                teamName: session.teamName,
+                teammates: session.teamAgents ?? []
+            )
+            let enrichedPrompt = DomeContextPreamble.prependedPrompt(
+                for: preambleCtx,
+                userPrompt: session.todoText
+            )
             let cmd = ProcessSpawner.command(
-                for: session.todoText,
+                for: enrichedPrompt,
                 engine: engine,
                 modeFlags: modeFlags,
                 effortFlags: effortFlags,
@@ -199,6 +221,7 @@ struct MetalTerminalTileView: View {
                 engine: engine,
                 ipcRoot: ipcRoot,
                 projectName: session.projectName,
+                projectID: session.projectID,
                 projectRoot: session.projectRoot,
                 teamName: session.teamName,
                 teamID: session.teamID,

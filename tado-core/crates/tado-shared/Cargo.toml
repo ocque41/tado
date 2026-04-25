@@ -1,0 +1,27 @@
+#
+# Tado workspace's shared primitives crate.
+#
+# Intended home for things the rest of the workspace would otherwise
+# reinvent per-crate:
+#   - common error type(s) + conversions
+#   - newtyped ID helpers (session ids, event ids, …)
+#   - shared FFI utilities (string marshalling, handle types,
+#     cbindgen include bridging)
+#
+# Workspace creation time: the crate is intentionally empty beyond a
+# placeholder preamble. As the Rust ports land (T2 tado-ipc, T3
+# tado-settings, T5 tado-extensions) the shared primitives migrate in
+# here one by one rather than being invented fresh per crate.
+#
+
+[package]
+name = "tado-shared"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared FFI, error, and id helpers for the Tado Cargo workspace."
+
+[lib]
+name = "tado_shared"
+
+[dependencies]

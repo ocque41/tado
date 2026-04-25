@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CTadoCore
 
 @Observable
 @MainActor
@@ -91,6 +92,17 @@ final class IPCBroker {
         try? FileManager.default.removeItem(at: sessionDir)
     }
 
+    /// Writes `registry.json` for the current session set. A1 slice 1:
+    /// Swift serializes to compact JSON; Rust re-emits in the
+    /// Swift-pretty byte format + atomic tmp+rename via
+    /// `tado_ipc_write_registry_json`. This means the whole
+    /// serialization contract lives in one Rust module so future
+    /// external consumers (future Rust CLI, Dome's Copy-to-Tado
+    /// extension, any non-Swift writer) share the same output.
+    ///
+    /// On FFI failure (parse / IO), falls back to the legacy Swift
+    /// writer so a bt-core rebuild mismatch never leaves the
+    /// registry stale — CLIs need a current file to resolve targets.
     func updateRegistry() {
         guard let manager = terminalManager else { return }
         let entries = manager.sessions.map { session in
@@ -106,6 +118,31 @@ final class IPCBroker {
                 teamID: session.teamID?.uuidString.lowercased()
             )
         }
+
+        let compactEncoder = JSONEncoder()
+        guard
+            let compactData = try? compactEncoder.encode(entries),
+            let compactJSON = String(data: compactData, encoding: .utf8)
+        else {
+            writeRegistryViaSwiftFallback(entries: entries)
+            return
+        }
+
+        let status = ipcRoot.path.withCString { rootCstr in
+            compactJSON.withCString { jsonCstr in
+                tado_ipc_write_registry_json(rootCstr, jsonCstr)
+            }
+        }
+        if status != 0 {
+            NSLog("tado: tado_ipc_write_registry_json failed with \(status); falling back to Swift writer")
+            writeRegistryViaSwiftFallback(entries: entries)
+        }
+    }
+
+    /// Pre-A1 serialization kept as a safety net. Byte-identical to
+    /// the Rust writer under the current Swift toolchain; the two
+    /// only diverge if Apple ever changes `JSONEncoder.prettyPrinted`.
+    private func writeRegistryViaSwiftFallback(entries: [IPCSessionEntry]) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(entries) {
@@ -237,6 +274,58 @@ final class IPCBroker {
         writeTadoTopics(to: binDir)
         writeTadoTeam(to: binDir)
         writeTadoDeploy(to: binDir)
+        writeTadoEvents(to: binDir)
+    }
+
+    /// A6 — Real-time `TadoEvent` stream CLI.
+    ///
+    /// Connects to the Unix-domain socket at
+    /// `${TADO_IPC_ROOT}/events.sock`, sends a single `SUBSCRIBE`
+    /// line, and pipes matching JSON events to stdout until the
+    /// user Ctrl-C's. Filters follow the same grammar as the Rust
+    /// side: `*`, `topic:<name>`, `session:<id>`, or a bare kind
+    /// prefix (`eternal`, `terminal`, `spawn`, …).
+    ///
+    /// Kept intentionally thin — the real protocol lives in
+    /// `tado_ipc::events_socket`; this script is just a shell-out
+    /// convenience so CI logs and ad-hoc debugging don't need a
+    /// Python heredoc each time.
+    private func writeTadoEvents(to binDir: URL) {
+        let script = """
+        #!/bin/bash
+        # Usage: tado-events [filter]
+        #   tado-events                    # all events (firehose)
+        #   tado-events 'session:abc-123'  # events scoped to a session
+        #   tado-events 'topic:planning'   # events on a pub/sub topic
+        #   tado-events 'eternal'          # any kind prefixed with 'eternal'
+
+        FILTER="${1:-*}"
+        IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
+        SOCK="$IPC_ROOT/events.sock"
+        if [ ! -S "$SOCK" ]; then
+          echo "tado-events: socket not found at $SOCK — is Tado running?" >&2
+          exit 1
+        fi
+
+        python3 - "$SOCK" "$FILTER" <<'PYEOF'
+        import socket, sys
+        sock_path, flt = sys.argv[1], sys.argv[2]
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(sock_path)
+        s.sendall(f"SUBSCRIBE {flt}\\n".encode())
+        f = s.makefile('r', encoding='utf-8', newline='\\n')
+        try:
+            for line in f:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        except (KeyboardInterrupt, BrokenPipeError):
+            pass
+        PYEOF
+        """
+
+        let url = binDir.appendingPathComponent("tado-events")
+        try? script.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
     private func writeTadoSend(to binDir: URL) {
@@ -397,7 +486,13 @@ final class IPCBroker {
         let script = """
         #!/bin/bash
         # Lists all peer sessions
-        # Usage: tado-list [--project <name>] [--team <name>]
+        # Usage: tado-list [--project <name>] [--team <name>] [--toon]
+        #
+        # Default output is a right-padded table aimed at humans:
+        # 146 column header + one row per session.
+        # --toon emits one record per line, space-separated, no header:
+        #   <grid> <status> <engine> <agent> <projectOrDash> <teamOrDash> <sessionID> <name>
+        # AXI-style compact format — ~40% fewer tokens for agents.
 
         IPC_ROOT="${TADO_IPC_ROOT:-/tmp/tado-ipc}"
         REGISTRY="$IPC_ROOT/registry.json"
@@ -409,28 +504,47 @@ final class IPCBroker {
 
         PROJ_FILTER=""
         TEAM_FILTER=""
+        TOON_MODE=""
         while [ $# -gt 0 ]; do
           case "$1" in
             --project) PROJ_FILTER="$2"; shift 2 ;;
             --team) TEAM_FILTER="$2"; shift 2 ;;
+            --toon) TOON_MODE="1"; shift ;;
             *) shift ;;
           esac
         done
 
-        python3 - "$REGISTRY" "$TADO_SESSION_ID" "$PROJ_FILTER" "$TEAM_FILTER" <<'PYEOF'
+        python3 - "$REGISTRY" "$TADO_SESSION_ID" "$PROJ_FILTER" "$TEAM_FILTER" "$TOON_MODE" <<'PYEOF'
         import json, sys
         with open(sys.argv[1]) as f:
             entries = json.load(f)
         self_id = sys.argv[2].lower() if len(sys.argv) > 2 and sys.argv[2] else ''
         proj_filter = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
         team_filter = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+        toon = bool(sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] else None)
         peers = [e for e in entries if e['sessionID'].lower() != self_id]
         if proj_filter:
             peers = [e for e in peers if (e.get('projectName') or '').lower() == proj_filter.lower()]
         if team_filter:
             peers = [e for e in peers if (e.get('teamName') or '').lower() == team_filter.lower()]
         if not peers:
-            print('No matching sessions.')
+            # Toon mode stays silent on empty — agent can detect via exit/stdout.
+            if not toon:
+                print('No matching sessions.')
+        elif toon:
+            # AXI compact form. Order: grid status engine agent project team sessionID name.
+            # Name goes last because it's the most variable-length field; trailing space is
+            # fine for `awk` / `cut -d ' '` consumers.
+            for e in peers:
+                grid = e.get('gridLabel') or '-'
+                status = e.get('status') or '-'
+                engine = e.get('engine') or '-'
+                agent = e.get('agentName') or '-'
+                proj = (e.get('projectName') or '-').replace(' ', '_')
+                team = (e.get('teamName') or '-').replace(' ', '_')
+                sid = e.get('sessionID') or '-'
+                name = (e.get('name') or '-').replace(' ', '_')
+                print(f'{grid} {status} {engine} {agent} {proj} {team} {sid} {name}')
         else:
             hdr = f'{"ID":<38} {"Engine":<8} {"Grid":<8} {"Status":<12} {"Project":<16} {"Team":<14} {"Agent":<14} Name'
             print(hdr)
