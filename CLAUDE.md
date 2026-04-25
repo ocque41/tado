@@ -5,13 +5,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-swift build          # Build the project
-swift run            # Build and run the app
-make dev             # Build Rust core (release) + run Swift app
-cargo test -p tado-ipc -p tado-settings   # Run Rust-side unit tests
+swift build                                  # Build the Swift app
+swift run                                    # Build and run
+make dev                                     # Build Rust core (release) + sync header + run Swift app
+make mcp                                     # Build dome-mcp + tado-mcp stdio bridges (Rust [[bin]]s)
+cargo test -p tado-ipc -p tado-settings      # Rust unit tests for IPC + settings crates
 ```
 
-The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+) plus a Cargo workspace under `tado-core/` (see Architecture for the split).
+The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+)
+plus a Cargo workspace under `tado-core/` with eight crates:
+`tado-terminal` (PTY + grid + VT parser + cbindgen FFI),
+`tado-shared` (cross-crate primitives),
+`tado-ipc` (IPC contract types + registry serialization),
+`tado-settings` (atomic JSON IO + 5-scope enum + path helpers),
+`bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
+`dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
+and `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge).
+Every member links into the same `libtado_core.a` Package.swift consumes.
 
 ## Conventions (foundation-v2 and beyond)
 
@@ -29,17 +39,49 @@ Tado is a macOS SwiftUI app that turns a todo list into a terminal multiplexer f
 
 ## Architecture
 
-**State flow:** `TadoApp` creates two `@Observable` singletons — `AppState` (UI state) and `TerminalManager` (session lifecycle) — injected via SwiftUI `.environment()`. `SwiftData` persists `TodoItem` and `AppSettings` models.
+**State flow:** `TadoApp` creates `@Observable` singletons — `AppState`
+(UI state) and `TerminalManager` (session lifecycle) — injected via
+SwiftUI `.environment()`. SwiftData persists `TodoItem`, `AppSettings`,
+`Project`, `Team`, `EternalRun`, `DispatchRun`, etc., as a rebuildable
+cache; the canonical state lives as JSON files on disk (see Persistence).
 
-**Two views, always alive:** `ContentView` keeps both `TodoListView` and `CanvasView` mounted simultaneously, toggling via opacity. This prevents terminal processes from being destroyed when switching views. `Ctrl+Tab` switches between them.
+**Two views, always alive:** `ContentView` keeps both `TodoListView` and
+`CanvasView` mounted simultaneously, toggling via opacity. This prevents
+terminal processes from being destroyed when switching views. `Ctrl+Tab`
+switches between them.
 
-**Todo submission flow:** User types text in `TodoListView` → `TodoItem` created (SwiftData) → `TerminalManager.spawnSession()` creates a `TerminalSession` → `TerminalNSViewRepresentable` bridges SwiftTerm's `LocalProcessTerminalView` into SwiftUI → `ProcessSpawner` builds the shell command (`/bin/zsh -l -c "claude 'todo text'"`) → process starts.
+**Todo submission flow:** User types text in `TodoListView` → `TodoItem`
+created (SwiftData) → `TerminalManager.spawnSession()` creates a
+`TerminalSession` → `MetalTerminalTileView` mounts the Metal tile →
+`ProcessSpawner` builds the shell command (`/bin/zsh -l -c "claude
+'todo text'"` with shell-escaped flags including `--model`/`--effort`)
+→ Rust `tado-terminal` spawns the PTY via `portable-pty`, parses VT
+sequences in `performer.rs`, and snapshots the cell grid for the
+renderer to draw.
 
-**Terminal activity detection:** A 1.5s repeating `Timer` in the `NSViewRepresentable` Coordinator monitors cursor position. If the cursor hasn't moved for 5 seconds, the session transitions to `.needsInput`, which triggers queue draining (queued follow-up prompts are sent automatically).
+**Metal renderer:** The terminal view is a Metal pipeline
+(`MetalTerminalRenderer` + `GlyphAtlas` + `Shaders.metal`). SwiftTerm
+was removed in v0.7.0; every tile uses the Rust+Metal stack. Wide-char
+support, color-emoji RGBA atlas, retina-aware text, ANSI palette
+theming (15 curated themes), live tile resize, scrollback clamp.
 
-**Forward mode:** Clicking the arrow button on a todo row sets `appState.forwardTargetTodoID`. The next text submission goes to that terminal's session via `enqueueOrSend()` instead of creating a new todo. One-shot: forwarding deactivates after one message.
+**Terminal activity detection:** A repeating `Timer` monitors cursor
+position. If the cursor hasn't moved for 5 seconds, the session
+transitions to `.needsInput`. If the bottom of the grid contains
+selector arrows (`❯`), `(y/n)` markers, or plan-approval prompts the
+session transitions to `.awaitingResponse` instead — higher urgency,
+fires `SystemNotifier` + sound by default.
 
-**Canvas layout:** `CanvasLayout` computes grid positions (660x440 tiles). Tiles are positioned absolutely in a `ZStack` with `scaleEffect` + `offset` for zoom/pan. `Shift+scroll` zooms; plain scroll pans (unless a terminal is focused, then it's terminal scrollback).
+**Forward mode:** Clicking the arrow button on a todo row sets
+`appState.forwardTargetTodoID`. The next text submission goes to that
+terminal's session via `enqueueOrSend()` instead of creating a new
+todo. One-shot: forwarding deactivates after one message.
+
+**Canvas layout:** `CanvasLayout` computes grid positions (660x440
+tiles). Tiles are positioned absolutely in a `ZStack` with
+`scaleEffect` + `offset` for zoom/pan. `Shift+scroll` zooms; plain
+scroll pans (unless a terminal is focused, then it's terminal
+scrollback).
 
 ## Tado A2A (Agent-to-Agent IPC)
 
@@ -82,57 +124,130 @@ tado-deploy "implement auth module" --agent backend  # Deploy a backend agent on
 
 **IPC internals:** File-based via `/tmp/tado-ipc/`. Each session has `inbox/`, `outbox/`, and `log` in its directory. Terminal output is flushed to the `log` file every 5 seconds. External messages go to `/tmp/tado-ipc/a2a-inbox/`. See `IPCBroker.swift` and `IPCMessage.swift`.
 
-## Persistence (settings / memory / events)
+## Persistence (settings / memory / events / Dome)
 
-All canonical state lives under `~/Library/Application Support/Tado/`:
+All canonical state lives under the **storage root**, by default
+`~/Library/Application Support/Tado/`. Since v0.9.0 the root is
+relocatable — `StorageLocationManager` reads
+`<default-root>/storage-location.json`, and Settings → Storage →
+Change Location… queues a move that runs pre-SwiftData on the next
+launch (tarball backup, full copy + verify, atomic flip, source
+prune):
 
 ```
-settings/global.json        user-global settings (scope 4)
-memory/user.md              user-level long-lived context
-memory/user.json            user-level cached facts
-events/current.ndjson       append-only event log (one JSON per line)
-events/archive/*.ndjson     rotated daily
+settings/global.json          user-global settings (scope 4)
+memory/user.md                user-level long-lived context
+memory/user.json              user-level cached facts
+events/current.ndjson         append-only event log (one JSON per line)
+events/archive/*.ndjson       rotated daily
 backups/tado-backup-*.tar.gz  auto-snapshot pre-migration + manual exports
-cache/                      SwiftData store (rebuildable, not canonical)
-version                     last-applied migration id
+cache/app-state.store         SwiftData store (rebuildable, not canonical)
+dome/                         Dome vault (.bt/, topics/, index.sqlite)
+storage-location.json         locator: activeRoot / pendingRoot / lastMoveError
+version                       last-applied migration id
 ```
 
 Per-project state lives under `<project>/.tado/`:
 
 ```
-config.json                 project-shared settings (commit by default)
-local.json                  project-local overrides (gitignored by default)
-memory/project.md           long-lived project context
-memory/notes/<ISO>-*.md     timestamped running notes
-.gitignore                  auto-maintained by Tado (honors commitPolicy)
-eternal/runs/<uuid>/        per-run state (existing)
-dispatch/runs/<uuid>/       per-run state (existing)
+config.json                   project-shared settings (commit by default)
+local.json                    project-local overrides (gitignored)
+memory/project.md             long-lived project context
+memory/notes/<ISO>-*.md       timestamped running notes
+.gitignore                    auto-maintained by Tado (honors commitPolicy)
+eternal/runs/<uuid>/          per-run state
+dispatch/runs/<uuid>/         per-run state
 ```
 
-**Scope hierarchy** (highest wins on merge): runtime > project-local > project-shared > user-global > built-in default.
+**Scope hierarchy** (highest wins on merge): runtime > project-local >
+project-shared > user-global > built-in default. Implemented in Swift
+(`ScopedConfig`) and mirrored in Rust (`tado-settings::Scope`) so
+non-Swift callers see the same precedence.
 
-**Canonical store is JSON files on disk**, atomically written via `AtomicStore` (flock + tmp + rename). SwiftData is a rebuildable cache fed by `AppSettingsSync` and `ProjectSettingsSync`. If the SwiftData store corrupts, `rm -rf cache/` and relaunch — it rebuilds from JSON.
+**Canonical store is JSON files on disk**, atomically written via
+`AtomicStore` (Swift) or the matching Rust `tado-settings::write_json`
+(temp + fsync + rename, with sidecar `.lock` flock). SwiftData is a
+rebuildable cache fed by `AppSettingsSync` and `ProjectSettingsSync`.
+If the SwiftData store corrupts, `rm -rf cache/` and relaunch — it
+rebuilds from JSON.
 
-**Event system** — every meaningful state transition (`terminal.completed`, `eternal.phaseCompleted`, `ipc.messageReceived`, user broadcasts) publishes a typed `TadoEvent` through `EventBus`. Deliverers subscribe: `SoundPlayer` (audio), `DockBadgeUpdater` (unread count), `SystemNotifier` (macOS banner), `InAppBannerOverlay` (transient pill), `EventPersister` (NDJSON log). Routing + mute + quiet hours are configured in `global.json → notifications`.
+**Dome second brain** — `bt-core` runs in-process inside the Tado
+`.app` (booted by `DomeExtension.onAppLaunch` via the FFI entry
+`tado_dome_start`). Vault is at `<storage-root>/dome/`, the Unix
+socket at `<vault>/.bt/bt-core.sock`. Schema is at version 21; new
+chunks use Qwen3-Embedding-0.6B (1024-dim) while legacy 384-dim
+`noop@1` rows continue to work. Every project auto-seeds a
+`project-<shortid>` topic; teams add `team-<sanitized-name>` notes;
+Eternal sprint+completion retros mirror as structured notes.
+Spawn-time agents wake with a markdown context preamble (identity +
+project + team + recent notes) wrapped in `<!-- tado:context:begin -->`
+markers.
+
+**Event system** — every meaningful state transition
+(`terminal.completed`, `eternal.phaseCompleted`, `ipc.messageReceived`,
+`dome.daemonStarted`, user broadcasts) publishes a typed `TadoEvent`
+through `EventBus`. Deliverers subscribe: `SoundPlayer` (audio),
+`DockBadgeUpdater` (unread count), `SystemNotifier` (macOS banner),
+`InAppBannerOverlay` (transient pill), `EventPersister` (NDJSON log),
+`EventsSocketBridge` (real-time fanout to subscribers on
+`/tmp/tado-ipc/events.sock`). Routing + mute + quiet hours are
+configured in `global.json → notifications`.
 
 **CLI** (alongside `tado-list` / `-send` / `-read` / `-deploy`):
 ```bash
 tado-config {get,set,list,path,export,import} [scope] [key] [value]
 tado-notify {send "<title>",tail}
 tado-memory {read,note,search,path} [scope]
+tado-events [filter]                 # subscribe to events.sock; filter = "*", "topic:foo", "session:<id>", or kind prefix
+tado-dome {register,query,…} …       # scoped Dome knowledge from canvas agents
+tado-list --toon                     # AXI-style compact output (~45% fewer tokens for agents)
 ```
 
-**MCP** (via tado-mcp server, registered into Claude Code at user scope): `tado_config_{get,set,list}`, `tado_memory_{read,append,search}`, `tado_notify`, `tado_events_query`.
+**MCP** — both bridges are Rust `[[bin]]`s now, auto-registered into
+Claude Code at user scope on first launch (silent fallback if
+`claude` CLI is missing). `tado-mcp` exposes:
+`tado_config_{get,set,list}`, `tado_memory_{read,append,search}`,
+`tado_notify`, `tado_events_query`, `tado_list`, `tado_send`,
+`tado_read`, `tado_broadcast`. `dome-mcp` exposes:
+`dome_search`, `dome_read`, `dome_note`, `dome_schedule`,
+`dome_graph_query`, `dome_context_resolve`, `dome_context_compact`,
+`dome_agent_status` — agents must use the latter four before making
+stale architecture or completion claims.
 
 ## Key Files
 
-- `ProcessSpawner.swift` — Builds the CLI command for the selected engine
-- `TerminalNSViewRepresentable.swift` — NSViewRepresentable bridge + activity monitoring Coordinator
-- `TerminalSession.swift` — Session model with status FSM and prompt queue
-- `CanvasLayout.swift` — Grid position math and tile dimensions
-- `IPCBroker.swift` — File-based IPC broker, a2a inbox watcher, CLI tool generation
-- `IPCMessage.swift` — IPC message model and registry types
-- `Persistence/AtomicStore.swift` — atomic write + flock helper (shared Swift / CLI / bash)
+**Spawning + sessions**
+- `Services/ProcessSpawner.swift` — builds the CLI command for the selected engine; shell-escapes flags
+- `Services/TerminalManager.swift` — session lifecycle, registry sync, idle detection
+- `Models/TerminalSession.swift` — session model + status FSM (`pending` / `running` / `needsInput` / `awaitingResponse` / `completed` / `failed`) + prompt queue
+
+**Renderer**
+- `Rendering/MetalTerminalView.swift` / `MetalTerminalTileView.swift` / `MetalTerminalRenderer.swift` — Metal pipeline
+- `Rendering/GlyphAtlas.swift` + `Shaders.metal` — glyph cache + shaders
+- `Rendering/FontMetrics.swift` — monospace font metrics via `NSFont.monospacedSystemFont`
+- `tado-core/crates/tado-terminal/src/{ffi,grid,performer,pty,session}.rs` — Rust PTY + VT parser + cell grid
+
+**Canvas + UI**
+- `Views/CanvasView.swift` + `CanvasLayout` — grid position math, zoom/pan, tile placement
+- `Views/SidebarView.swift` — projects, teams, sessions, notifications bell
+- `Views/SettingsView.swift` — picker grids, storage relocator, notifications routing
+
+**IPC + extensions**
+- `Services/IPCBroker.swift` — file-based broker, a2a inbox watcher, CLI tool generation
+- `Services/EventsSocketBridge.swift` — fans `EventBus` to `/tmp/tado-ipc/events.sock`
+- `Services/TadoMcpAutoRegister.swift` — auto-`claude mcp add tado` on launch
+- `Models/IPCMessage.swift` — IPC envelope + registry types
+- `tado-core/crates/tado-ipc/src/` — Rust mirror of IPC contract + registry serialization
+- `Extensions/AppExtensionProtocol.swift` + `ExtensionRegistry.swift` + `ExtensionsPageView.swift` — extension host
+- `Extensions/Notifications/NotificationsExtension.swift` + `NotificationsWindowView.swift` — notifications surface
+- `Extensions/Dome/DomeExtension.swift` + `DomeRpcClient.swift` + `Surfaces/*` — Dome surfaces (User Notes, Agent Notes, Calendar, Knowledge)
+- `Extensions/Dome/DomeScopeSelection.swift` — global vs project scope (with includeGlobal merge)
+- `Extensions/CrossRunBrowser/CrossRunBrowserExtension.swift` + `CrossRunBrowserView.swift` — global run timeline
+
+**Persistence + events**
+- `Persistence/StorageLocation.swift` — relocator (locator file + scheduled move + verify)
+- `Persistence/StorePaths.swift` — derived paths under the active storage root
+- `Persistence/AtomicStore.swift` — atomic write + flock (shared Swift / CLI / bash)
 - `Persistence/ScopedConfig.swift` — 5-scope config facade
 - `Persistence/FileWatcher.swift` — debounced DispatchSource wrapper
 - `Persistence/AppSettingsSync.swift` / `ProjectSettingsSync.swift` — JSON ↔ SwiftData bridges
@@ -140,10 +255,15 @@ tado-memory {read,note,search,path} [scope]
 - `Persistence/BackupManager.swift` — tarball snapshot + restore
 - `Events/EventBus.swift` + `Events/TadoEvent.swift` — pub/sub hub
 - `Events/EventPersister.swift` — NDJSON appender + daily rotation
-- `Events/Deliverers/*.swift` — SoundPlayer, DockBadgeUpdater, SystemNotifier
-- `Events/RunEventWatcher.swift` — diff state.json / phases/ to emit eternal/dispatch events
-- `Views/InAppBannerOverlay.swift` — transient banner stack
-- `Views/NotificationsView.swift` — full history view (sidebar bell opens this)
+- `Events/Deliverers/{SoundPlayer,DockBadgeUpdater,SystemNotifier}.swift`
+- `Events/RunEventWatcher.swift` — diffs `state.json` / `phases/*.json` to emit Eternal/Dispatch events; mirrors retros to Dome
+
+**Rust workspace**
+- `tado-core/crates/bt-core/src/{service.rs,db.rs,migrations.rs,notes/*}` — trusted-mutator daemon
+- `tado-core/crates/tado-terminal/src/{dome_ffi,sibling_ffi}.rs` — FFI bridge to Swift
+- `tado-core/crates/dome-mcp/src/main.rs` — stdio MCP bridge (8 tools)
+- `tado-core/crates/tado-mcp/src/main.rs` — stdio MCP bridge (12 tools)
+- `tado-core/crates/tado-dome/src/main.rs` — scoped-knowledge CLI for canvas agents
 
 ## Releasing ("release next version")
 
@@ -158,8 +278,10 @@ confirmation prompts — this is a documented release procedure.
    Identify every uncommitted source change, every untracked source
    file, and every relevant commit since the previous tag.
 3. **Verify the build**: `swift build` (Swift app) and
-   `cd tado-mcp && npm run build` (MCP server). Do not release if
-   either fails — fix first.
+   `make mcp` (`cargo build --release -p dome-mcp -p tado-mcp` — both
+   stdio bridges, both Rust). Do not release if either fails —
+   fix first. (The Node `tado-mcp/` tree is kept as reference but
+   unused; the bundled `.app` ships only the Rust binaries.)
 4. **Keep runtime artifacts out** — make sure `.tado/eternal/`,
    `.tado/dispatch/`, and `.tado/memory/notes/` are gitignored. Any
    new per-run runtime directory should be added to `.gitignore`
@@ -195,3 +317,85 @@ confirmation prompts — this is a documented release procedure.
 11. **Verify**: `gh release view vX.Y.Z` — confirm title is the bare
     version, body matches CHANGELOG, and the release is not marked
     as draft/prerelease.
+
+## Release history (one line per version)
+
+Most recent first. Full notes for each version live in `CHANGELOG.md`;
+this list is the at-a-glance "what changed at this version" reference
+that lets you orient before reading the full diff.
+
+- **v0.9.0** (2026-04-25) — *foundation-v2 bundle.* Cargo workspace
+  promoted to eight crates, in-process Dome second brain (bt-core
+  fused, 21 migrations, Qwen3-Embedding-0.6B replaces hash-noop),
+  extension host with Notifications + Dome + Cross-Run Browser,
+  real-time A2A via `/tmp/tado-ipc/events.sock` + `tado-events` CLI,
+  `tado-mcp` ported from Node to Rust (zero Node runtimes in the
+  bundled `.app`), scoped knowledge (global vs project + includeGlobal
+  merge), spawn-time context preamble, Eternal retros mirror to Dome,
+  relocatable storage root via `StorageLocationManager`,
+  Codex picker default → GPT-5.5. Bundles what was previewed in the
+  removed v0.10.0/v0.11.0/v0.12.0/v0.13.0 prereleases.
+- **v0.8.0** (2026-04-20) — *Persistence subsystem + event pipeline +
+  Eternal auto mode.* Canonical state moves to atomic JSON on disk
+  (SwiftData becomes a rebuildable cache); five-scope config
+  hierarchy with per-scope file watchers; typed `TadoEvent` bus with
+  pluggable deliverers (sound, dock badge, banner, NDJSON,
+  notifications history); migration runner with pre-apply tarball
+  backups; per-project concurrent Eternal/Dispatch runs; Eternal
+  Continuous mode switches to Claude Code's `--permission-mode auto`
+  with dual-layer config injection; per-phase model/effort; sidebar
+  redesign with project grouping and uptime-per-session.
+- **v0.7.0** (2026-04-18) — *Rust + Metal renderer.* SwiftTerm
+  removed; every tile renders through a Rust `tado-core` static lib
+  driving a Metal pipeline (glyph atlas, ANSI state machine, retina
+  awareness, color emoji, wide chars, 15 ANSI palette themes,
+  selection/copy, blinking cursor); Dispatch self-improvement loop
+  via per-phase retros; Projects redesign (card list, zone-based
+  detail view, Teams folded into Projects); design system refresh
+  (Plus Jakarta Sans, Ember theme, central `Palette`).
+- **v0.6.0** (2026-04-16) — *Dispatch Architect workflow + model
+  selection + theming.* New "Dispatch" button per project opens a
+  markdown brief modal; accepting spawns an architect that designs
+  a multi-phase plan, creates per-phase skills via `/skill-creator`,
+  writes JSON plan files to `.tado/dispatch/`, and auto-chains phase
+  handoffs via `tado-deploy`. Settings gain Claude/Codex model
+  pickers (flags pass through to every spawned process). 15 curated
+  per-tile color themes.
+- **v0.5.0** (2026-04-14) — *`tado-deploy` + multiline input.*
+  Agents can spawn new agent sessions on the canvas
+  (`tado-deploy "<prompt>" --agent <name>`); smart engine
+  resolution from agent definition path; SpawnRequest IPC; Cmd+Enter
+  submit so newlines work in the multiline input; bracketed-paste
+  for multi-line messages; todo rename / mark-done / trash via
+  context menu.
+- **v0.4.0** (2026-04-13) — *Node `tado-mcp` server + pub/sub topics
+  + team-aware IPC.* TypeScript MCP server exposing the A2A tools
+  to any MCP-compatible agent (auto-registered in `~/.claude.json`);
+  pub/sub via `tado-publish` / `tado-subscribe` / `tado-topics`;
+  broadcast filterable by `--project` / `--team`; rich
+  `TADO_*` env vars on every spawn; one-click bootstrap injecting
+  Tado A2A docs into a project's `CLAUDE.md` / `AGENTS.md`. (This
+  Node tree is now superseded by the v0.9.0 Rust port.)
+- **v0.3.0** (2026-04-12) — *Projects + Teams.* Todos organized under
+  a project (working directory + auto-discovered agents from
+  `.claude/agents/` and `.codex/agents/`); teams group agents within
+  a project; project detail view with teams/agents/todos tree; page
+  navigation bar replaces the old view-mode toggle; per-project
+  working directory inherited by spawned processes.
+- **v0.2.0** (2026-04-12) — *Done/Trash lists + tile manipulation +
+  initial A2A.* Cmd+D for done, Cmd+T for trash; resizable +
+  movable tiles via drag handles + title bar; first A2A surface
+  (`tado-read` command) for reading terminal output; Claude Code
+  permission mode + thinking effort settings; Codex approval mode
+  + reasoning effort; mode/effort flags forwarded to spawned
+  processes.
+- **v0.1.0** (2026-04-12) — *Tado v1: todo → terminal.* Todo-driven
+  terminal spawning with Claude Code + Codex engine support;
+  pannable/zoomable canvas with draggable tiles; prompt queueing
+  with auto-send on idle detection; basic IPC (`tado-send`,
+  `tado-recv`, `tado-list`); forward mode; SwiftData persistence;
+  sidebar with live status; engine + grid settings.
+
+**Historical tag**: `v1.0.0-rust-metal` is a squash tag from the
+original Rust+Metal rewrite (now superseded by the released versions
+above; kept for archaeology — no GitHub release exists).
