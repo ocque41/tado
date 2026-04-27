@@ -507,12 +507,11 @@ impl Grid {
         if w == 0 {
             return;
         }
-        // Wide glyph needs two cells. If only one cell remains on the
-        // current row, wrap to the next so the glyph never straddles
-        // the right edge.
-        if w == 2 && self.cursor_x + 1 >= self.cols {
-            self.newline();
-        } else if self.cursor_x >= self.cols {
+        // Wide glyph needs two cells, so wrap when only one cell
+        // remains on the current row to avoid straddling the right
+        // edge. Single-width glyphs only wrap once the cursor has
+        // walked past the last column.
+        if (w == 2 && self.cursor_x + 1 >= self.cols) || self.cursor_x >= self.cols {
             self.newline();
         }
 

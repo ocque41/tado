@@ -64,10 +64,22 @@ enum DomeExtension: AppExtension {
         }
 
         if status == 0 {
+            // Phase 5: seed the three default retrieval recipes at
+            // global scope on every launch. Idempotent — bumps any
+            // user-shipped project overrides on `last_verified_at`
+            // only, leaving the file-edited template_path alone.
+            if let raw = tado_dome_recipe_seed_defaults() {
+                tado_string_free(raw)
+            }
             let mcpPath = resolveMcpBinaryPath()
             let statusLinePath = installStatusLineScript(vaultPath: vaultURL.path)
             await MainActor.run {
                 EventBus.shared.publish(.domeDaemonStarted(vaultPath: vaultURL.path, mcpBinaryPath: mcpPath))
+                // Phase 4: start polling the code-index status FFIs
+                // and republish meaningful transitions through
+                // EventBus. One singleton bridge for the lifetime of
+                // the app.
+                CodeIndexEventBridge.shared.start()
             }
             if let statusLinePath {
                 registerStatusLineIfSafe(scriptPath: statusLinePath)

@@ -58,6 +58,22 @@ struct MetalTerminalView: NSViewRepresentable {
     /// two signals diverge during modal TUI dialogs where the cursor
     /// doesn't visibly move on each keystroke.
     var onUserInput: (() -> Void)? = nil
+    /// Mirrors `AppState.focusedTileTodoID == session.todoID` for this tile.
+    /// On a `false → true` transition the representable promotes the
+    /// MTKView to firstResponder, keeping the PTY's edit mode in lockstep
+    /// with the accent ring the user sees. Without this sync, anything
+    /// that sets the ring without going through `MTKView.mouseDown`
+    /// (programmatic focus, arrow-driven tile-nav, view re-mount on
+    /// visibility flip, an overlay swallowing the click) leaves arrows
+    /// routed to canvas tile-nav even though the user thinks the tile
+    /// owns the keyboard.
+    var isFocused: Bool = false
+
+    final class Coordinator {
+        var lastIsFocused: Bool = false
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> TerminalMTKView {
         let view = TerminalMTKView(session: session, cols: cols, rows: rows, metrics: metrics)
@@ -84,9 +100,21 @@ struct MetalTerminalView: NSViewRepresentable {
         nsView.onVisualBell = onVisualBell
         nsView.onBell = onBell
         nsView.onUserInput = onUserInput
+
+        // Only on the false → true transition. If we re-grabbed every
+        // update we'd fight any other view that legitimately owns
+        // firstResponder (e.g., a sheet's TextField) for as long as the
+        // tile stayed focused.
+        let prev = context.coordinator.lastIsFocused
+        if isFocused, !prev,
+           let window = nsView.window,
+           window.firstResponder !== nsView {
+            window.makeFirstResponder(nsView)
+        }
+        context.coordinator.lastIsFocused = isFocused
     }
 
-    static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: ()) {
+    static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: Coordinator) {
         nsView.stop()
     }
 }
@@ -405,20 +433,25 @@ final class TerminalMTKView: MTKView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command) {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "v":
-                paste(nil)
-                return true
-            case "c":
-                copy(nil)
-                return true
-            default:
-                return false
-            }
+        // performKeyEquivalent is broadcast to every view in the key
+        // window's hierarchy BEFORE AppKit dispatches keyDown to the
+        // firstResponder. Only handle real Cmd-shortcuts here (Cmd+C /
+        // Cmd+V) and return false otherwise so the event continues to
+        // the focused tile's keyDown via the normal responder chain.
+        // Returning true unconditionally for non-Cmd keys made the
+        // earliest-traversed MTKView swallow arrows / Esc / plain
+        // letters and write them to its own PTY — the wrong tile.
+        guard event.modifierFlags.contains(.command) else { return false }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "v":
+            paste(nil)
+            return true
+        case "c":
+            copy(nil)
+            return true
+        default:
+            return false
         }
-        keyDown(with: event)
-        return true
     }
 
     /// Copy the current selection to the general pasteboard. No-op when

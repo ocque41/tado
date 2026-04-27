@@ -26,9 +26,9 @@ struct CrossRunBrowserView: View {
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
+                .frame(minWidth: 120, idealWidth: 220, maxWidth: 320)
             content
-                .frame(minWidth: 520)
+                .frame(minWidth: 200)
         }
         .background(Palette.canvas)
         .navigationTitle("Cross-Run Browser")

@@ -240,4 +240,78 @@ extension TadoEvent {
             body: String(format: "Downloading bge-small-en-v1.5 — %.0f%%", progress * 100)
         )
     }
+
+    // ── Code indexing (Phase 4) ──────────────────────────────────
+
+    /// Initial full-rebuild of a project's code index started.
+    static func codeIndexStarted(projectID: String, projectName: String, filesTotal: Int) -> TadoEvent {
+        TadoEvent(
+            type: "code.index.started",
+            severity: .info,
+            source: .system,
+            title: "Indexing \(projectName)",
+            body: "Walking \(filesTotal) files for the code index"
+        )
+    }
+
+    /// Periodic progress tick. Emitted by Swift's poll loop, not the
+    /// Rust indexer, so we can throttle to `EventBus` cadence.
+    static func codeIndexProgress(projectID: String, projectName: String, filesDone: Int, filesTotal: Int, chunksDone: Int) -> TadoEvent {
+        let pct = filesTotal > 0 ? Int(Double(filesDone) / Double(filesTotal) * 100) : 0
+        return TadoEvent(
+            type: "code.index.progress",
+            severity: .info,
+            source: .system,
+            title: "Indexing \(projectName) — \(pct)%",
+            body: "\(filesDone) / \(filesTotal) files · \(chunksDone) chunks"
+        )
+    }
+
+    /// Full index completed. Body summarizes file/chunk counts.
+    static func codeIndexCompleted(projectID: String, projectName: String, filesIndexed: Int, chunksTotal: Int, durationSeconds: Double) -> TadoEvent {
+        TadoEvent(
+            type: "code.index.completed",
+            severity: .success,
+            source: .system,
+            title: "Indexed \(projectName)",
+            body: String(
+                format: "%d files · %d chunks · %.1fs",
+                filesIndexed, chunksTotal, durationSeconds
+            )
+        )
+    }
+
+    /// Indexer hit a fatal error — surfaces in the in-app banner so
+    /// the user can see why retrieval might miss expected hits.
+    static func codeIndexFailed(projectID: String, projectName: String, message: String) -> TadoEvent {
+        TadoEvent(
+            type: "code.index.failed",
+            severity: .error,
+            source: .system,
+            title: "Code index failed: \(projectName)",
+            body: message
+        )
+    }
+
+    /// File watcher started for a project.
+    static func codeWatchStarted(projectID: String, projectName: String) -> TadoEvent {
+        TadoEvent(
+            type: "code.watch.started",
+            severity: .info,
+            source: .system,
+            title: "Watching \(projectName)",
+            body: "Live re-indexing on save"
+        )
+    }
+
+    /// File watcher stopped (manual or via project unregister).
+    static func codeWatchStopped(projectID: String, projectName: String) -> TadoEvent {
+        TadoEvent(
+            type: "code.watch.stopped",
+            severity: .info,
+            source: .system,
+            title: "Stopped watching \(projectName)",
+            body: "Code index won't update on save until you re-watch"
+        )
+    }
 }

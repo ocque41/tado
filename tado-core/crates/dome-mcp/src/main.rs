@@ -170,8 +170,237 @@ async fn call_tool(client: &RpcClient, actor: &Actor, name: &str, args: Value) -
         "dome_context_resolve" => dome_context_resolve(client, actor, args).await,
         "dome_context_compact" => dome_context_compact(client, actor, args).await,
         "dome_agent_status" => dome_agent_status(client, args).await,
+        "dome_code_search" => dome_code_search(client, actor, args).await,
+        "dome_code_status" => dome_code_status(client, args).await,
+        "dome_code_watch" => dome_code_watch(client, args).await,
+        "dome_code_unwatch" => dome_code_unwatch(client, args).await,
+        "dome_code_watch_list" => dome_code_watch_list(client).await,
+        "dome_supersede" => dome_supersede(client, actor, args).await,
+        "dome_verify" => dome_verify(client, actor, args).await,
+        "dome_decay" => dome_decay(client, actor, args).await,
+        "dome_recipe_list" => dome_recipe_list(client, args).await,
+        "dome_recipe_apply" => dome_recipe_apply(client, actor, args).await,
         other => Err(anyhow!("unknown tool: {}", other)),
     }
+}
+
+// ── Phase 5 tools — retrieval recipes (governed answers) ──────────
+
+async fn dome_recipe_list(client: &RpcClient, args: Value) -> Result<Value> {
+    let mut body = json!({});
+    if let Some(scope) = args.get("scope") {
+        if !scope.is_null() {
+            body["scope"] = scope.clone();
+        }
+    }
+    if let Some(project_id) = args.get("project_id") {
+        if !project_id.is_null() {
+            body["project_id"] = project_id.clone();
+        }
+    }
+    client
+        .call("recipe.list", body)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+async fn dome_recipe_apply(client: &RpcClient, actor: &Actor, args: Value) -> Result<Value> {
+    let intent_key = args
+        .get("intent_key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_recipe_apply: missing required `intent_key` (string)"))?;
+    let mut body = json!({
+        "actor": actor,
+        "intent_key": intent_key,
+    });
+    if let Some(project_id) = args.get("project_id") {
+        if !project_id.is_null() {
+            body["project_id"] = project_id.clone();
+        }
+    }
+    client
+        .call("recipe.apply", body)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+// ── Phase 3 tools — supersede / verify / decay ────────────────────
+
+async fn dome_supersede(client: &RpcClient, actor: &Actor, args: Value) -> Result<Value> {
+    let old_id = args
+        .get("old_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_supersede: missing required `old_id` (string)"))?;
+    let new_id = args
+        .get("new_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_supersede: missing required `new_id` (string)"))?;
+    let reason = args.get("reason").cloned();
+    let mut body = json!({
+        "actor": actor,
+        "old_id": old_id,
+        "new_id": new_id,
+    });
+    if let Some(reason) = reason {
+        if !reason.is_null() {
+            body["reason"] = reason;
+        }
+    }
+    client
+        .call("node.supersede", body)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+async fn dome_verify(client: &RpcClient, actor: &Actor, args: Value) -> Result<Value> {
+    let node_id = args
+        .get("node_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_verify: missing required `node_id` (string)"))?;
+    let verdict = args
+        .get("verdict")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_verify: missing required `verdict` ('confirmed' | 'disputed')"))?;
+    let mut body = json!({
+        "actor": actor,
+        "node_id": node_id,
+        "verdict": verdict,
+    });
+    if let Some(reason) = args.get("reason") {
+        if !reason.is_null() {
+            body["reason"] = reason.clone();
+        }
+    }
+    if let Some(agent_id) = args.get("agent_id") {
+        if !agent_id.is_null() {
+            body["agent_id"] = agent_id.clone();
+        }
+    }
+    client
+        .call("node.verify", body)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+async fn dome_decay(client: &RpcClient, actor: &Actor, args: Value) -> Result<Value> {
+    let node_id = args
+        .get("node_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_decay: missing required `node_id` (string)"))?;
+    let mut body = json!({
+        "actor": actor,
+        "node_id": node_id,
+    });
+    if let Some(reason) = args.get("reason") {
+        if !reason.is_null() {
+            body["reason"] = reason.clone();
+        }
+    }
+    client
+        .call("node.decay", body)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+async fn dome_code_watch(client: &RpcClient, args: Value) -> Result<Value> {
+    let project_id = args
+        .get("project_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_code_watch: missing required `project_id` (string)"))?;
+    client
+        .call("code.watch.start", json!({ "project_id": project_id }))
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+async fn dome_code_unwatch(client: &RpcClient, args: Value) -> Result<Value> {
+    let project_id = args
+        .get("project_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_code_unwatch: missing required `project_id` (string)"))?;
+    client
+        .call("code.watch.stop", json!({ "project_id": project_id }))
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+async fn dome_code_watch_list(client: &RpcClient) -> Result<Value> {
+    client
+        .call("code.watch.list", json!({}))
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
+}
+
+// ── dome_code_search ─────────────────────────────────────────────
+//
+// Phase 2/3: hybrid retrieval over indexed `code_chunks`. Distinct
+// from `dome_search` (which targets notes/topics/retros) so agents
+// can scope a query to "the source tree" or "this project's code"
+// without their results getting mixed with markdown notes.
+
+async fn dome_code_search(client: &RpcClient, actor: &Actor, args: Value) -> Result<Value> {
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_code_search: missing required `query` (string)"))?;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(25)
+        .clamp(1, 200);
+
+    let mut body = json!({
+        "query": query,
+        "limit": limit,
+    });
+    if let Some(project_ids) = args.get("project_ids").cloned() {
+        if !project_ids.is_null() {
+            body["project_ids"] = project_ids;
+        }
+    }
+    if let Some(languages) = args.get("languages").cloned() {
+        if !languages.is_null() {
+            body["languages"] = languages;
+        }
+    }
+    if let Some(alpha) = args.get("alpha").cloned() {
+        if !alpha.is_null() {
+            body["alpha"] = alpha;
+        }
+    }
+    let event_project_ids = body.get("project_ids").cloned();
+    let event_languages = body.get("languages").cloned();
+
+    let result = client
+        .call("code.search", body)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))?;
+
+    record_context_event(
+        client,
+        actor,
+        "agent_used_context",
+        "dome_code_search",
+        json!({
+            "query": query,
+            "project_ids": event_project_ids,
+            "languages": event_languages,
+            "limit": limit,
+        }),
+    )
+    .await;
+    Ok(result)
+}
+
+async fn dome_code_status(client: &RpcClient, args: Value) -> Result<Value> {
+    let project_id = args
+        .get("project_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("dome_code_status: missing required `project_id` (string)"))?;
+    client
+        .call("code.index_status", json!({ "project_id": project_id }))
+        .await
+        .map_err(|e| anyhow!(e.to_string()))
 }
 
 // ── dome_search ──────────────────────────────────────────────────
@@ -195,11 +424,13 @@ async fn dome_search(client: &RpcClient, actor: &Actor, args: Value) -> Result<V
     let (knowledge_scope, project_id, _project_root, include_global) = scoped_defaults(&args);
 
     let mut body = json!({
+        "actor": actor,
         "q": query,
         "scope": scope.clone(),
         "limit": limit,
         "knowledge_scope": knowledge_scope,
         "include_global": include_global,
+        "tool": "dome_search",
     });
     if let Some(project_id) = project_id {
         body["project_id"] = json!(project_id);
@@ -802,6 +1033,133 @@ fn tool_definitions() -> Vec<Value> {
                 }
             }),
         ),
+        tool(
+            "dome_code_search",
+            "Hybrid (vector + lexical) retrieval over indexed source code chunks. Use when an agent needs to find function/class/method bodies semantically — \"where do we spawn the PTY\", \"render the glyph atlas\", \"store user preferences\". Distinct from `dome_search`, which targets notes/topics/retros.",
+            json!({
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": { "type": "string", "description": "Free-form natural language or identifier. Identifiers like `spawn_session` round-trip cleanly." },
+                    "project_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Restrict to one or more registered code projects. Omit to search every project."
+                    },
+                    "languages": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Restrict to languages, e.g. [\"rust\", \"swift\", \"typescript\"]. Match `language` column in code_chunks."
+                    },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum hits to return (default 25)." },
+                    "alpha": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "Vector weight in [0,1]; lexical weight is (1-alpha). Default 0.6." }
+                }
+            }),
+        ),
+        tool(
+            "dome_code_status",
+            "Read live progress of an in-flight code-index job for a project. Returns running flag, files_done/files_total, chunks_done, error string. Use to gate retrieval queries until the index is ready.",
+            json!({
+                "type": "object",
+                "required": ["project_id"],
+                "properties": {
+                    "project_id": { "type": "string", "description": "Tado project id (the `project_id` you registered with `code.project.register`)." }
+                }
+            }),
+        ),
+        tool(
+            "dome_code_watch",
+            "Start a file watcher for a registered project. The watcher debounces 500 ms and incrementally re-embeds changed files. Idempotent — a second call replaces any existing watcher for the same project.",
+            json!({
+                "type": "object",
+                "required": ["project_id"],
+                "properties": {
+                    "project_id": { "type": "string", "description": "Tado project id." }
+                }
+            }),
+        ),
+        tool(
+            "dome_code_unwatch",
+            "Stop the file watcher for a project. No-op if no watcher was running. Use when you want to pause incremental indexing without unregistering the project.",
+            json!({
+                "type": "object",
+                "required": ["project_id"],
+                "properties": {
+                    "project_id": { "type": "string", "description": "Tado project id." }
+                }
+            }),
+        ),
+        tool(
+            "dome_code_watch_list",
+            "List every project_id with an active file watcher. Returns `{ \"watching\": [\"id1\", \"id2\", ...] }`.",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool(
+            "dome_supersede",
+            "Mark `old_id` as superseded by `new_id`. Search demotes the old node via the supersede penalty (0.3×) so retired facts stay visible for audit but rank below their replacements. Use when writing a fact that replaces an earlier one — e.g. a new architecture decision overriding an old one. Both nodes must exist + be live.",
+            json!({
+                "type": "object",
+                "required": ["old_id", "new_id"],
+                "properties": {
+                    "old_id": { "type": "string", "description": "graph_nodes.node_id of the older / retired entity." },
+                    "new_id": { "type": "string", "description": "graph_nodes.node_id of the replacement entity." },
+                    "reason": { "type": "string", "description": "Optional one-line explanation of why this supersede was authored. Recorded as edge payload." }
+                }
+            }),
+        ),
+        tool(
+            "dome_verify",
+            "Confirm or dispute an entity. `confirmed` lifts confidence to max(current, 0.9); `disputed` floors it at min(current, 0.4). Either way an `agent_assertion` edge from the verifier to the node records provenance — multiple verifiers can converge.",
+            json!({
+                "type": "object",
+                "required": ["node_id", "verdict"],
+                "properties": {
+                    "node_id": { "type": "string", "description": "graph_nodes.node_id of the entity to verify." },
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["confirmed", "disputed"],
+                        "description": "'confirmed' when you've validated the claim; 'disputed' when you found counter-evidence."
+                    },
+                    "agent_id": { "type": "string", "description": "Optional override for the asserting actor id (defaults to `$TADO_AGENT_NAME`)." },
+                    "reason": { "type": "string", "description": "Optional one-line context — what evidence you saw or where the dispute came from." }
+                }
+            }),
+        ),
+        tool(
+            "dome_decay",
+            "Soft-archive an entity (sets `archived_at`). Search rerank demotes archived nodes via the supersede-penalty path. Reversible only by editing the row directly — use when you've verified a fact is no longer relevant rather than wrong.",
+            json!({
+                "type": "object",
+                "required": ["node_id"],
+                "properties": {
+                    "node_id": { "type": "string", "description": "graph_nodes.node_id of the entity to archive." },
+                    "reason": { "type": "string", "description": "Optional reason for the archive — recorded in audit log." }
+                }
+            }),
+        ),
+        tool(
+            "dome_recipe_list",
+            "List enabled retrieval recipes (intent-keyed retrieval policies) — Tado's analog of Knowledge Catalog 'verified queries'. Project-scoped recipes shadow global ones on shared `intent_key`.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string", "enum": ["global", "project"], "description": "Filter scope." },
+                    "project_id": { "type": "string", "description": "Project to scope to (default: caller's project)." }
+                }
+            }),
+        ),
+        tool(
+            "dome_recipe_apply",
+            "Apply a retrieval recipe and receive a governed answer: synthesised markdown plus the citation list and an explicit `missing_authority` flag for gaps. Use for high-stakes intents like `architecture-review`, `completion-claim`, `team-handoff`. The synthesis is deterministic (template-rendered) — no LLM in the loop.",
+            json!({
+                "type": "object",
+                "required": ["intent_key"],
+                "properties": {
+                    "intent_key": { "type": "string", "description": "Recipe intent key, e.g. `architecture-review`." },
+                    "project_id": { "type": "string", "description": "Project to scope to. Optional — defaults to caller's spawn-time project." }
+                }
+            }),
+        ),
     ]
 }
 
@@ -876,9 +1234,12 @@ mod tests {
     }
 
     #[test]
-    fn tool_definitions_expose_four_tools() {
+    fn tool_definitions_expose_full_inventory() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 8);
+        // 8 originals + Phase 3 (search, status) + Phase 4 (watch,
+        // unwatch, watch_list) + v0.10 Phase 3 lifecycle (supersede,
+        // verify, decay) + v0.10 Phase 5 recipes (list, apply) = 18.
+        assert_eq!(tools.len(), 18);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t.get("name").and_then(Value::as_str).unwrap())
@@ -891,5 +1252,15 @@ mod tests {
         assert!(names.contains(&"dome_context_resolve"));
         assert!(names.contains(&"dome_context_compact"));
         assert!(names.contains(&"dome_agent_status"));
+        assert!(names.contains(&"dome_code_search"));
+        assert!(names.contains(&"dome_code_status"));
+        assert!(names.contains(&"dome_code_watch"));
+        assert!(names.contains(&"dome_supersede"));
+        assert!(names.contains(&"dome_verify"));
+        assert!(names.contains(&"dome_decay"));
+        assert!(names.contains(&"dome_recipe_list"));
+        assert!(names.contains(&"dome_recipe_apply"));
+        assert!(names.contains(&"dome_code_unwatch"));
+        assert!(names.contains(&"dome_code_watch_list"));
     }
 }

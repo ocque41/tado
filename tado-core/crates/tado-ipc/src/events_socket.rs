@@ -218,10 +218,10 @@ async fn handle_connection(stream: UnixStream, mut rx: broadcast::Receiver<Strin
             event = rx.recv() => {
                 match event {
                     Ok(line) => {
-                        if matches_filter(&line, &filter) {
-                            if writer.write_all(line.as_bytes()).await.is_err() {
-                                return;
-                            }
+                        if matches_filter(&line, &filter)
+                            && writer.write_all(line.as_bytes()).await.is_err()
+                        {
+                            return;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {

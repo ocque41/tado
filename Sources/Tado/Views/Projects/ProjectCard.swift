@@ -22,6 +22,7 @@ struct ProjectCard: View {
     let onBootstrapTools: () -> Void
     let onBootstrapTeam: () -> Void
     let onBootstrapAutoMode: () -> Void
+    let onBootstrapKnowledge: () -> Void
     let onDispatch: () -> Void
     let onStart: () -> Void
     let onDelete: () -> Void
@@ -56,6 +57,7 @@ struct ProjectCard: View {
                     Text(statsLine)
                         .font(Typography.monoMicro)
                         .foregroundStyle(Palette.textSecondary)
+                    CodeIndexBadge(projectID: project.id.uuidString.lowercased())
                     Spacer()
                     actionsMenu
                 }
@@ -177,6 +179,9 @@ struct ProjectCard: View {
             .disabled(!hasTeams)
             Button(action: onBootstrapAutoMode) {
                 Label("Bootstrap Claude auto mode", systemImage: "lock.open.rotation")
+            }
+            Button(action: onBootstrapKnowledge) {
+                Label("Bootstrap knowledge layer", systemImage: "brain.head.profile")
             }
             Divider()
             Button(role: .destructive, action: onDelete) {

@@ -34,14 +34,35 @@
 //! String-returning shims return a heap-allocated `*mut c_char` on
 //! success (caller frees via `tado_string_free`) or a null pointer on
 //! failure.
+//!
+//! Safety contract (applies to every `unsafe extern "C" fn` in this module)
+//! ----------------------------------------------------------------------
+//! - Every `*const c_char` parameter must be either null or a pointer to
+//!   a NUL-terminated, valid UTF-8 string owned by the caller for the
+//!   duration of the call. Each function documents which of its pointer
+//!   args are nullable; the rest are required.
+//! - Returned `*mut c_char` values are heap-allocated by Rust and must
+//!   be freed exactly once via `tado_string_free`.
+//! - Calls are safe to make concurrently from any thread; the underlying
+//!   `CoreService` is `Sync`-internal.
+//!
+//! Because every function in this file shares this exact contract, the
+//! `clippy::missing_safety_doc` lint is suppressed module-wide — adding
+//! a `# Safety` section to each individual function would be 30+ copies
+//! of this paragraph.
+#![allow(clippy::missing_safety_doc)]
 
+use bt_core::notes::model_fetch::{self, FetchProgress};
+use bt_core::notes::qwen3_runtime::Qwen3Runtime;
+use bt_core::notes::{embeddings, Qwen3EmbeddingProvider};
 use bt_core::{Actor, CoreService};
 use serde_json::json;
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::os::raw::{c_char, c_int};
-use std::path::Path;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use tokio::runtime::{Builder, Runtime};
 
 /// Process-wide Tokio runtime hosting bt-core's RPC loop + scheduler
@@ -60,6 +81,27 @@ static DOME_SERVICE: OnceLock<CoreService> = OnceLock::new();
 /// `tado_dome_start` calls return 0 immediately without reopening the
 /// vault or rebinding the socket.
 static DOME_STARTED: OnceLock<()> = OnceLock::new();
+
+/// Vault root cached at start so model fetch + load can find the
+/// `<vault>/.bt/models/qwen3-embedding-0.6b/` directory after the
+/// daemon is running.
+static DOME_VAULT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Live progress for the Qwen3 model download. Created on first
+/// `tado_dome_model_fetch_start` call. Read via
+/// `tado_dome_model_status`.
+static MODEL_PROGRESS: OnceLock<Arc<FetchProgress>> = OnceLock::new();
+
+/// Worker-thread guard. `Some(true)` while a fetch is in progress;
+/// flipped back to `Some(false)` (or removed) when the thread exits
+/// so the user can retry after a transient failure.
+static MODEL_FETCH_RUNNING: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Surfaces the most recent runtime-load error to the UI. Cleared
+/// when a load succeeds. Read by `tado_dome_model_status` so the
+/// onboarding panel can show "model files complete but load failed —
+/// here's why" instead of looping silently.
+static MODEL_LOAD_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Boot Dome's in-process daemon against the given vault path.
 ///
@@ -120,8 +162,271 @@ pub unsafe extern "C" fn tado_dome_start(vault_cstr: *const c_char) -> c_int {
     // OnceLock set fails we're already initialized — return 0 anyway.
     let _ = DOME_RUNTIME.set(runtime);
     let _ = DOME_SERVICE.set(service);
+    let _ = DOME_VAULT.set(vault_path.clone());
     let _ = DOME_STARTED.set(());
+
+    // Best-effort eager load: if the user already has the complete
+    // model files (env override or a prior download), boot the
+    // embedding runtime before the first search/index call so
+    // retrieval is real-semantic from the very first query.
+    if let Some(model_dir) = model_fetch::resolve_model_dir(&vault_path) {
+        load_model_into_registry(&model_dir, &vault_path);
+    }
+    // If the model isn't loaded after the eager pass — files missing
+    // entirely, or partial download from a previous run — auto-kick
+    // the fetch so the user doesn't have to re-click "Download" each
+    // time they reopen the app. The fetch resumes from any partial
+    // bytes already on disk.
+    if !Qwen3EmbeddingProvider::default().is_runtime_loaded() {
+        spawn_model_fetch(&vault_path);
+    }
+
+    // Phase 4: reattach file watchers for every previously-enabled
+    // project. Survives app restarts so the user doesn't have to
+    // re-click "watch" on every launch. Best-effort; failures are
+    // logged inside `code_resume_watchers`.
+    if let Some(svc) = DOME_SERVICE.get() {
+        if let Err(err) = svc.code_resume_watchers() {
+            eprintln!("[dome] code_resume_watchers failed: {err}");
+        }
+    }
     0
+}
+
+fn load_model_into_registry(model_dir: &Path, vault: &Path) {
+    // BUG FIX: previously this read the dimension via `metadata()`,
+    // which returns the noop-fallback (384) when the runtime is not
+    // yet attached — i.e., always at this entry point. That truncated
+    // every Qwen3 forward pass to 384 dims and stamped it with full
+    // Qwen3 metadata, silently corrupting the index. Read the
+    // *desired target* dimension directly: env override if set, else
+    // the production default (1024).
+    let dimension = std::env::var("TADO_DOME_EMBEDDING_DIMENSION")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|d| d.clamp(32, embeddings::DEFAULT_EMBEDDING_DIMENSIONS))
+        .unwrap_or(embeddings::DEFAULT_EMBEDDING_DIMENSIONS);
+    match Qwen3Runtime::load(model_dir, dimension) {
+        Ok(rt) => {
+            let runtime_dim = rt.dimension();
+            embeddings::install_runtime(Arc::new(Mutex::new(rt)));
+            if let Ok(mut g) = MODEL_LOAD_ERROR.lock() {
+                *g = None;
+            }
+            // Sweep stale chunks: if a prior load wrote rows with the
+            // wrong dimension under the Qwen3 model_id, those rows
+            // are unsearchable (length mismatch crashes cosine) and
+            // poison the index. Delete them so the next bootstrap or
+            // reindex regenerates them at the correct dimension.
+            let cleaned = sweep_corrupt_qwen3_chunks(runtime_dim);
+            log_to_fetch(
+                vault,
+                model_dir,
+                &format!(
+                    "runtime attached: dim={} dir={} cleaned={}",
+                    dimension,
+                    model_dir.display(),
+                    cleaned
+                ),
+            );
+        }
+        Err(err) => {
+            let msg = format!("runtime load failed: {err}");
+            eprintln!("[dome] {msg}");
+            if let Ok(mut g) = MODEL_LOAD_ERROR.lock() {
+                *g = Some(msg.clone());
+            }
+            log_to_fetch(vault, model_dir, &format!("ERROR {msg}"));
+        }
+    }
+}
+
+fn sweep_corrupt_qwen3_chunks(target_dim: usize) -> u64 {
+    let Some(svc) = DOME_SERVICE.get() else {
+        return 0;
+    };
+    match svc.purge_corrupt_qwen3_chunks(target_dim) {
+        Ok(n) => n,
+        Err(err) => {
+            eprintln!("[dome] purge_corrupt_qwen3_chunks failed: {err}");
+            0
+        }
+    }
+}
+
+fn log_to_fetch(vault: &Path, model_dir: &Path, line: &str) {
+    let path = model_fetch::fetch_log_path(vault)
+        .unwrap_or_else(|_| model_dir.join("_fetch.log"));
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            writeln!(
+                f,
+                "{} {line}",
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            )
+        });
+}
+
+fn spawn_model_fetch(vault_path: &Path) {
+    // Don't spawn a second fetch on top of an active one.
+    if let Ok(mut running) = MODEL_FETCH_RUNNING.lock() {
+        if *running {
+            return;
+        }
+        *running = true;
+    } else {
+        return;
+    }
+    // Reset any sticky error from a previous attempt so the UI
+    // doesn't show a stale failure message during the new fetch.
+    if let Ok(mut g) = MODEL_LOAD_ERROR.lock() {
+        *g = None;
+    }
+    let progress = MODEL_PROGRESS
+        .get_or_init(FetchProgress::new)
+        .clone();
+    // Reset the FetchProgress's sticky error too — disk size is the
+    // truth, but the error string is stale across retries.
+    progress.record_error_clear();
+    let vault = vault_path.to_path_buf();
+    let _ = thread::Builder::new()
+        .name("dome-model-fetch".into())
+        .spawn(move || {
+            match model_fetch::fetch_all(&vault, &progress) {
+                Ok(model_dir) => {
+                    load_model_into_registry(&model_dir, &vault);
+                }
+                Err(err) => {
+                    eprintln!("[dome] model fetch failed: {err}");
+                    log_to_fetch(&vault, &vault, &format!("ERROR fetch: {err}"));
+                }
+            }
+            // Whether we succeeded or failed, the worker is done —
+            // unblock retries from the UI.
+            if let Ok(mut running) = MODEL_FETCH_RUNNING.lock() {
+                *running = false;
+            }
+        });
+}
+
+/// JSON status snapshot for the Dome onboarding view. Always returns a
+/// payload, never null — Swift uses the `ready` flag to decide whether
+/// to gate embed-dependent UI behind the download panel.
+///
+/// Byte counts come from on-disk file sizes, not from the in-memory
+/// progress object — that way a partially-downloaded model reported
+/// from a previous run shows up at its real percentage instead of
+/// resetting to 0% on every app restart.
+#[no_mangle]
+pub extern "C" fn tado_dome_model_status() -> *mut c_char {
+    let vault_present = DOME_VAULT.get().cloned();
+    let files_complete = vault_present
+        .as_ref()
+        .map(|p| model_fetch::is_complete(p))
+        .unwrap_or(false);
+
+    let snap = match (&vault_present, MODEL_PROGRESS.get()) {
+        (Some(vault), Some(p)) => p.snapshot(vault),
+        (Some(vault), None) => bt_core::notes::model_fetch::FetchProgress::default()
+            .snapshot(vault),
+        _ => bt_core::notes::model_fetch::FetchSnapshot {
+            total_bytes: 0,
+            downloaded_bytes: 0,
+            current_file: None,
+            completed: false,
+            error: None,
+        },
+    };
+
+    // We say `ready` when the runtime is actually attached. That's a
+    // strictly stronger guarantee than "files on disk" — a corrupt
+    // safetensors would let `is_complete` pass while load fails.
+    let ready = bt_core::notes::embeddings::Qwen3EmbeddingProvider::default().is_runtime_loaded();
+
+    // Surface either the fetch error or the load error, whichever is
+    // present (load errors are stickier — they happen after fetch
+    // completed). Loads after a successful fetch clear this slot.
+    let load_err = MODEL_LOAD_ERROR
+        .lock()
+        .ok()
+        .and_then(|g| g.clone());
+    let error = snap.error.clone().or(load_err);
+
+    let payload = json!({
+        "ready": ready,
+        "files_present": files_complete,
+        "downloaded_bytes": snap.downloaded_bytes,
+        "total_bytes": snap.total_bytes,
+        "current_file": snap.current_file,
+        "completed": snap.completed,
+        "error": error,
+    });
+    to_cstr(payload.to_string())
+}
+
+/// Kick off the model download in a background thread. Idempotent —
+/// repeated calls observe the same progress object. Returns 0 on
+/// successful spawn (or "already running"), 2 if the daemon hasn't
+/// been booted yet.
+///
+/// Resumable: if a previous run partially downloaded `model.safetensors`,
+/// this thread sends a `Range: bytes=<existing>-` header and appends
+/// rather than restarting from byte 0.
+#[no_mangle]
+pub extern "C" fn tado_dome_model_fetch_start() -> c_int {
+    let Some(vault) = DOME_VAULT.get().cloned() else {
+        return 2;
+    };
+
+    // If files are complete and the runtime is loaded, no-op.
+    if model_fetch::is_complete(&vault)
+        && Qwen3EmbeddingProvider::default().is_runtime_loaded()
+    {
+        return 0;
+    }
+
+    spawn_model_fetch(&vault);
+    0
+}
+
+/// Tell Dome to load the model from a user-supplied directory (the
+/// onboarding panel's "I have the file" path picker writes here when
+/// the user is offline or behind a proxy). Validates that all
+/// required files are present, then loads them. Returns 0 on success,
+/// 2 on missing daemon, 3 on invalid path / load failure.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_model_set_path(path_cstr: *const c_char) -> c_int {
+    let Some(vault) = DOME_VAULT.get().cloned() else {
+        return 2;
+    };
+    if path_cstr.is_null() {
+        return 3;
+    }
+    let Ok(path_str) = CStr::from_ptr(path_cstr).to_str() else {
+        return 3;
+    };
+    let dir = Path::new(path_str.trim());
+    if !dir.is_dir() {
+        return 3;
+    }
+    for name in ["config.json", "tokenizer.json", "model.safetensors"] {
+        if !dir.join(name).is_file() {
+            return 3;
+        }
+    }
+    // Persist the override so subsequent process launches skip the
+    // download too. We use the env var the runtime already reads.
+    std::env::set_var("TADO_DOME_EMBEDDING_MODEL_PATH", dir);
+    load_model_into_registry(dir, &vault);
+    if Qwen3EmbeddingProvider::default().is_runtime_loaded() {
+        0
+    } else {
+        3
+    }
 }
 
 /// Shut down the Dome daemon.
@@ -445,7 +750,7 @@ pub unsafe extern "C" fn tado_dome_notes_list(
         None
     } else {
         match CStr::from_ptr(topic_cstr).to_str() {
-            Ok(s) if s.is_empty() => None,
+            Ok("") => None,
             Ok(s) => Some(s),
             Err(_) => return std::ptr::null_mut(),
         }
@@ -476,7 +781,7 @@ pub unsafe extern "C" fn tado_dome_notes_list_scoped(
         None
     } else {
         match CStr::from_ptr(topic_cstr).to_str() {
-            Ok(s) if s.is_empty() => None,
+            Ok("") => None,
             Ok(s) => Some(s),
             Err(_) => return std::ptr::null_mut(),
         }
@@ -701,6 +1006,200 @@ pub extern "C" fn tado_dome_agent_status(limit: c_int) -> *mut c_char {
     }
 }
 
+/// Fetch recent `retrieval_log` rows for the Knowledge → System
+/// surface. Optional filters: `project_id_cstr` (null = all projects),
+/// `tool_cstr` (null = all tools, e.g. "dome_search"). Returns the
+/// JSON envelope `{ rows, n, consumption_rate, mean_latency_ms }`.
+/// Caller frees with `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_retrieval_log_recent(
+    limit: c_int,
+    project_id_cstr: *const c_char,
+    tool_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let limit = if limit > 0 { limit as usize } else { 100 };
+    match service.retrieval_log_recent(
+        limit,
+        optional_cstr(project_id_cstr),
+        optional_cstr(tool_cstr),
+    ) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Phase 3 — supersede `old_id` with `new_id`. UI-side actor. Returns
+/// the JSON envelope `{ old_id, new_id, reason }` on success, null on
+/// error. Caller frees with `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_node_supersede(
+    old_id_cstr: *const c_char,
+    new_id_cstr: *const c_char,
+    reason_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(old_id) = optional_cstr(old_id_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let Some(new_id) = optional_cstr(new_id_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let actor = bt_core::Actor::CliUser;
+    match service.note_supersede(&actor, old_id, new_id, optional_cstr(reason_cstr)) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Phase 3 — confirm or dispute a graph_node. `verdict` must be
+/// `'confirmed'` or `'disputed'`. Caller frees with `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_node_verify(
+    node_id_cstr: *const c_char,
+    verdict_cstr: *const c_char,
+    agent_id_cstr: *const c_char,
+    reason_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(node_id) = optional_cstr(node_id_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let Some(verdict) = optional_cstr(verdict_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let actor = bt_core::Actor::CliUser;
+    match service.note_verify(
+        &actor,
+        node_id,
+        verdict,
+        optional_cstr(agent_id_cstr),
+        optional_cstr(reason_cstr),
+    ) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Phase 3 — soft-archive a graph_node. Caller frees with
+/// `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_node_decay(
+    node_id_cstr: *const c_char,
+    reason_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(node_id) = optional_cstr(node_id_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let actor = bt_core::Actor::CliUser;
+    match service.node_decay(&actor, node_id, optional_cstr(reason_cstr)) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Phase 5 — seed the three default retrieval recipes
+/// (architecture-review, completion-claim, team-handoff) at global
+/// scope. Idempotent — re-running upserts the latest baked
+/// templates without disturbing user-edited project overrides.
+/// Returns the count of recipes seeded as a JSON int, or null on
+/// daemon failure. Caller frees with `tado_string_free`.
+#[no_mangle]
+pub extern "C" fn tado_dome_recipe_seed_defaults() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.recipe_seed_defaults() {
+        Ok(n) => to_cstr(serde_json::json!({ "seeded": n }).to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
+/// to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
+/// `build(for:)` once the Swift composer adopts the deterministic
+/// relative-time formatter. JSON request body shape:
+///
+/// ```json
+/// {
+///   "agent_name":   "backend",
+///   "project_name": "Tado",
+///   "project_id":   "11111111-…",
+///   "project_root": "/Users/miguel/Documents/tado",
+///   "team_name":    "core",
+///   "teammates":    ["frontend"]
+/// }
+/// ```
+///
+/// Returns the rendered preamble as a heap-allocated UTF-8 string, or
+/// null when there's nothing to render. Caller frees with
+/// `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_compose_spawn_preamble(
+    json_args_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(json_str) = optional_cstr(json_args_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let value: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let teammates = value
+        .get("teammates")
+        .and_then(serde_json::Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let rendered = service.spawn_pack_get_or_build(
+        value.get("agent_name").and_then(serde_json::Value::as_str),
+        value.get("project_name").and_then(serde_json::Value::as_str),
+        value.get("project_id").and_then(serde_json::Value::as_str),
+        value.get("project_root").and_then(serde_json::Value::as_str),
+        value.get("team_name").and_then(serde_json::Value::as_str),
+        teammates,
+    );
+    match rendered {
+        Ok(Some(s)) => to_cstr(s),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// Phase 3 — read enrichment queue depth for the Knowledge → System
+/// backfill chip. Returns `{ queued, running, done, failed }` JSON.
+#[no_mangle]
+pub extern "C" fn tado_dome_enrichment_queue_depth() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let conn = match service.open_conn_for_ffi() {
+        Ok(c) => c,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match bt_core::enrichment::queue_depth(&conn) {
+        Ok(depth) => match serde_json::to_string(&depth) {
+            Ok(s) => to_cstr(s),
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Fetch scoped Claude-agent operational status for Knowledge → System.
 #[no_mangle]
 pub unsafe extern "C" fn tado_dome_agent_status_scoped(
@@ -718,6 +1217,66 @@ pub unsafe extern "C" fn tado_dome_agent_status_scoped(
         optional_cstr(knowledge_scope_cstr),
         optional_cstr(project_id_cstr),
         Some(include_global),
+    ) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Resolve the latest context pack for a brand/session/doc tuple.
+/// Wraps `service.context_resolve(...)`. Returns the JSON envelope
+/// bt-core produces, or null on daemon-down / failure. Caller frees
+/// with `tado_string_free`.
+///
+/// All pointers are optional. At least one of `brand_cstr` or
+/// `session_id_cstr`/`doc_id_cstr` will typically be set; passing all
+/// nil returns whatever pack the brand-default lookup finds.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_context_resolve(
+    brand_cstr: *const c_char,
+    session_id_cstr: *const c_char,
+    doc_id_cstr: *const c_char,
+    mode_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.context_resolve(
+        optional_cstr(brand_cstr),
+        optional_cstr(session_id_cstr),
+        optional_cstr(doc_id_cstr),
+        optional_cstr(mode_cstr),
+    ) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Compact a brand/session/doc context pack via
+/// `service.context_compact(...)`. Caller passes `force=true` to
+/// rebuild even if the source hash hasn't changed. Returns the
+/// produced manifest JSON or null on failure. Caller frees with
+/// `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_context_compact(
+    brand_cstr: *const c_char,
+    session_id_cstr: *const c_char,
+    doc_id_cstr: *const c_char,
+    force: bool,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(brand) = optional_cstr(brand_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.context_compact(
+        &actor,
+        brand,
+        optional_cstr(session_id_cstr),
+        optional_cstr(doc_id_cstr),
+        force,
     ) {
         Ok(value) => to_cstr(value.to_string()),
         Err(_) => std::ptr::null_mut(),
@@ -775,6 +1334,370 @@ pub unsafe extern "C" fn tado_dome_install_status_line_script(
         }
         .to_string(),
     )
+}
+
+/// Trigger `vault.reindex` — re-runs every doc through the live
+/// embedder, upgrading legacy `noop@1` chunks to the current Qwen3
+/// model. Long-running (30-60s on 1000 notes); Swift dispatches via
+/// `Task.detached` to keep the UI responsive.
+///
+/// Returns `{"ok": true}` on success or null on failure. Caller frees
+/// via `tado_string_free`.
+#[no_mangle]
+pub extern "C" fn tado_dome_vault_reindex() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.reindex() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Snapshot of `note_chunks` rows grouped by embedding model. Used by
+/// the Knowledge → Agent System "Embeddings" panel to show how many
+/// chunks are still on legacy embeddings.
+///
+/// Returns JSON `{"model_counts": { "<id>@<version>": <count>, ... },
+/// "total": <count>}` or null on failure.
+#[no_mangle]
+pub extern "C" fn tado_dome_vault_embedding_stats() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.vault_embedding_stats() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Recursively ingest a directory as Dome notes. One note per
+/// eligible file, capped at 5000 (`capped: true` in the result if hit).
+///
+/// Returns JSON `{"created": N, "skipped": M, "capped": <bool>}` or
+/// null on failure.
+///
+/// # Safety
+/// `path_cstr` must be a NUL-terminated UTF-8 string. The optional
+/// pointers (`topic`, `project_id`, `project_root`) may be null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_vault_ingest_path(
+    path_cstr: *const c_char,
+    topic_cstr: *const c_char,
+    owner_scope_cstr: *const c_char,
+    project_id_cstr: *const c_char,
+    project_root_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if path_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(path_str) = CStr::from_ptr(path_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let owner_scope = optional_cstr(owner_scope_cstr).unwrap_or("global");
+    let topic = optional_cstr(topic_cstr);
+    let project_id = optional_cstr(project_id_cstr);
+    let project_root = optional_cstr(project_root_cstr).map(Path::new);
+    let actor = swift_ui_actor();
+
+    match service.vault_ingest_path(
+        &actor,
+        Path::new(path_str),
+        topic,
+        owner_scope,
+        project_id,
+        project_root,
+    ) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Live snapshot of legacy `vault_ingest_path` progress. Caller frees
+/// the returned C string with `tado_string_free`. Always returns a
+/// JSON object — null only if the daemon hasn't booted.
+///
+/// JSON shape: `{ running, created, skipped, total, canceled }`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_vault_ingest_progress() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    to_cstr(service.vault_ingest_progress().to_string())
+}
+
+/// Request that the in-flight ingest stop at the next file boundary.
+/// Returns 1 if an ingest was running, 0 otherwise. Idempotent.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_vault_ingest_cancel() -> c_int {
+    let Some(service) = DOME_SERVICE.get() else {
+        return 0;
+    };
+    if service.vault_ingest_cancel() {
+        1
+    } else {
+        0
+    }
+}
+
+// ── Phase 2: code-indexing FFI ───────────────────────────────────
+//
+// These shims surface the `code.*` RPCs to Swift without the
+// Unix-socket round-trip the MCP path uses. Long-running calls
+// (`code.index_project` walks tens of thousands of files) MUST be
+// invoked from a Swift `Task.detached` — they block the calling
+// thread until the index finishes.
+
+/// Register a project for code indexing. Idempotent.
+///
+/// Returns JSON `{ ok, project_id, name, root_path, enabled }` or
+/// null on failure. Caller frees with `tado_string_free`.
+///
+/// # Safety
+/// All pointers must be NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_register_project(
+    project_id_cstr: *const c_char,
+    name_cstr: *const c_char,
+    root_path_cstr: *const c_char,
+    enabled: bool,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if project_id_cstr.is_null() || name_cstr.is_null() || root_path_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(project_id) = CStr::from_ptr(project_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(name) = CStr::from_ptr(name_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(root_path) = CStr::from_ptr(root_path_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_register_project(project_id, name, root_path, enabled) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Unregister a project from code indexing. With `purge=true`,
+/// deletes every chunk row for the project too.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_unregister_project(
+    project_id_cstr: *const c_char,
+    purge: bool,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if project_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(project_id) = CStr::from_ptr(project_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_unregister_project(project_id, purge) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// List every registered code project plus per-project file/chunk
+/// counts. Used by Settings → Code Indexing.
+#[no_mangle]
+pub extern "C" fn tado_dome_code_list_projects() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_list_projects() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Run a full code index. Blocks for the duration of the walk +
+/// embed (minutes for a multi-thousand-file project). Swift MUST
+/// invoke from `Task.detached`.
+///
+/// Returns the `IndexResult` JSON on success or null on failure.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_index_project(
+    project_id_cstr: *const c_char,
+    full_rebuild: bool,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if project_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(project_id) = CStr::from_ptr(project_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_index_project(project_id, full_rebuild) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(err) => {
+            eprintln!("[dome] code_index_project failed: {err}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Start a file watcher for a registered project. Idempotent — a
+/// second call replaces the existing watcher for the same project.
+/// The watcher debounces 500 ms and incrementally re-embeds changed
+/// files via the same `replace_chunks_for_file` path the full
+/// indexer uses.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_watch_start(
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if project_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(project_id) = CStr::from_ptr(project_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_watch_start(project_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(err) => {
+            eprintln!("[dome] code_watch_start failed: {err}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Stop the file watcher for a project. No-op if no watcher was
+/// running. Returns `{ ok, project_id, watching: false, had_watcher }`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_watch_stop(
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if project_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(project_id) = CStr::from_ptr(project_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_watch_stop(project_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// List every project_id with an active watcher.
+#[no_mangle]
+pub extern "C" fn tado_dome_code_watch_list() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_watch_list() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Reattach watchers for every `enabled=1` project. Called on app
+/// boot from `tado_dome_start` and on `AppSettings.codeIndexingEnabled`
+/// flipping back to `true` from Swift. Idempotent — projects that
+/// already have a watcher are skipped.
+#[no_mangle]
+pub extern "C" fn tado_dome_code_watch_resume_all() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_resume_watchers() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(err) => {
+            eprintln!("[dome] watch_resume_all failed: {err}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Stop every active watcher in one call. Used when the per-user
+/// kill switch flips off or before vault relocation.
+#[no_mangle]
+pub extern "C" fn tado_dome_code_watch_stop_all() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let stopped = service.code_watchers_stop_all_handle();
+    to_cstr(serde_json::json!({ "ok": true, "stopped": stopped }).to_string())
+}
+
+/// Hybrid search across the indexed code chunks.
+///
+/// Accepts a JSON envelope so the FFI signature stays stable as we
+/// add more knobs (project filter, language filter, alpha):
+///
+/// ```json
+/// {
+///   "query": "where do we spawn the PTY",
+///   "project_ids": ["tado"],
+///   "languages": ["rust", "swift"],
+///   "limit": 25,
+///   "alpha": 0.6
+/// }
+/// ```
+///
+/// Returns the bt-core `code.search` payload as JSON, or null on
+/// failure. Caller frees with `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_search(query_json_cstr: *const c_char) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if query_json_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(json_str) = CStr::from_ptr(query_json_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let value: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match service.handle_rpc("code.search", value) {
+        Ok(result) => to_cstr(result.to_string()),
+        Err(err) => {
+            eprintln!("[dome] code_search failed: {err}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Read the live progress snapshot for an in-flight index. Cheap;
+/// safe to poll from the main thread every 250 ms.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_code_index_status(
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if project_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(project_id) = CStr::from_ptr(project_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.code_index_status(project_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 fn shell_escape(value: &str) -> String {

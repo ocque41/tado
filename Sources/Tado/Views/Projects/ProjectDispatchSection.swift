@@ -24,8 +24,11 @@ struct ProjectDispatchSection: View {
     }
 
     private var activeRuns: [DispatchRun] {
-        projectRuns.filter { $0.state == "drafted" || $0.state == "planning"
-                             || $0.state == "ready" || $0.state == "dispatching" }
+        projectRuns.filter {
+            $0.state == "drafted" || $0.state == "planning"
+            || $0.state == "awaitingReview" || $0.state == "ready"
+            || $0.state == "dispatching"
+        }
     }
 
     private var archivedRuns: [DispatchRun] {
@@ -223,21 +226,23 @@ struct ProjectDispatchSection: View {
 
     private func statePillStyle(state: String) -> (String, Color) {
         switch state {
-        case "drafted":     return ("DRAFT",       Palette.textSecondary)
-        case "planning":    return ("PLANNING",    Palette.accent)
-        case "ready":       return ("READY",       Palette.success)
-        case "dispatching": return ("DISPATCHING", Palette.accent)
-        case "completed":   return ("COMPLETED",   Palette.success)
-        default:            return (state.uppercased(), Palette.textSecondary)
+        case "drafted":         return ("DRAFT",       Palette.textSecondary)
+        case "planning":        return ("PLANNING",    Palette.accent)
+        case "awaitingReview":  return ("REVIEW",      Palette.warning)
+        case "ready":           return ("READY",       Palette.success)
+        case "dispatching":     return ("DISPATCHING", Palette.accent)
+        case "completed":       return ("COMPLETED",   Palette.success)
+        default:                return (state.uppercased(), Palette.textSecondary)
         }
     }
 
     private func borderColor(for state: String) -> Color {
         switch state {
-        case "dispatching": return Palette.accent.opacity(0.5)
-        case "planning":    return Palette.accent.opacity(0.3)
-        case "ready":       return Palette.success.opacity(0.5)
-        default:            return Palette.divider
+        case "dispatching":     return Palette.accent.opacity(0.5)
+        case "planning":        return Palette.accent.opacity(0.3)
+        case "awaitingReview":  return Palette.warning.opacity(0.6)
+        case "ready":           return Palette.success.opacity(0.5)
+        default:                return Palette.divider
         }
     }
 
@@ -258,6 +263,11 @@ struct ProjectDispatchSection: View {
                 }
                 smallButton("Edit", tint: Palette.textSecondary) {
                     appState.dispatchModalRunID = run.id
+                }
+            case "awaitingReview":
+                smallButton("Review", tint: Palette.warning) {
+                    appState.craftedReviewKind = .dispatch
+                    appState.craftedReviewRunID = run.id
                 }
             case "ready":
                 smallButton("Edit", tint: Palette.textSecondary) {
@@ -329,13 +339,20 @@ struct ProjectDispatchSection: View {
 
     // MARK: - State reconciliation
 
-    /// If the architect has written plan.json while `run.state` is still
-    /// "planning", promote the display state to "ready" without mutating
-    /// SwiftData on every render. The user's Start action is the only
-    /// thing that flips state to "dispatching".
+    /// Promote the display state when the architect has finished. The
+    /// authoritative on-disk signal is `crafted.md` AND `plan.json` both
+    /// existing; missing either means the architect is mid-write or
+    /// crashed. The user's Accept action in the review modal is the only
+    /// thing that flips state to "dispatching" by spawning phase 1.
+    ///
+    /// This is display-only: `run.state` stays at "planning" until the
+    /// user accepts. That means restarting Tado on an unaccepted plan
+    /// re-shows the Review button, which is exactly what we want.
     private func effectiveState(for run: DispatchRun) -> String {
-        if run.state == "planning" && DispatchPlanService.planExistsOnDisk(run) {
-            return "ready"
+        if run.state == "planning"
+            && DispatchPlanService.planExistsOnDisk(run)
+            && DispatchPlanService.craftedExistsOnDisk(run) {
+            return "awaitingReview"
         }
         return run.state
     }

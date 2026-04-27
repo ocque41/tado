@@ -55,6 +55,9 @@ tokio = { version = "1.47", features = ["rt-multi-thread"] }
 # Used inline by the FFI re-export shims for stable C-string handling.
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
+# Used by the Dome FFI's runtime-load logger to stamp the fetch.log
+# entries with ISO timestamps when the model attaches or fails.
+chrono = "0.4"
 
 [build-dependencies]
 cbindgen = "0.28"

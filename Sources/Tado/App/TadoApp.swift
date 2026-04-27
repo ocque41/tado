@@ -7,6 +7,14 @@ struct TadoApp: App {
     @State private var appState = AppState()
     @State private var terminalManager = TerminalManager()
     @State private var ipcBrokerInitialized = false
+    // One zoom-state per WindowGroup. Lifted to the App so the View
+    // menu's commands can target the main window's zoom directly;
+    // each instance is observed inside the per-window root view it
+    // gets handed to.
+    @State private var mainZoom = WindowZoomState()
+    @State private var notificationsZoom = WindowZoomState()
+    @State private var domeZoom = WindowZoomState()
+    @State private var crossRunBrowserZoom = WindowZoomState()
 
     // Owning a single ModelContainer (instead of letting the scene
     // modifier create one implicitly) lets migrations and
@@ -59,6 +67,20 @@ struct TadoApp: App {
         MainActor.assumeIsolated {
             MigrationRunner.run(context: ModelContext(container))
             ScopedConfig.shared.bootstrap()
+            // Phase 4 — keep `DomeContextPreamble._contextPacksV2Override`
+            // synced with the live `global.json` value. Bootstrap reads
+            // the flag once; the `addOnChange` hook propagates Settings
+            // UI toggles mid-session without an app restart.
+            DomeContextPreamble._contextPacksV2Override.set(
+                ScopedConfig.shared.get().dome.contextPacksV2
+            )
+            ScopedConfig.shared.addOnChange { scope in
+                if case .global = scope {
+                    DomeContextPreamble._contextPacksV2Override.set(
+                        ScopedConfig.shared.get().dome.contextPacksV2
+                    )
+                }
+            }
         }
         let sync = AppSettingsSync(container: container)
         self.settingsSync = sync
@@ -104,32 +126,12 @@ struct TadoApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(appState)
-                .environment(terminalManager)
-                // Pin the whole window tree to dark mode. Without this
-                // SwiftUI's adaptive system colors (sidebar, form bg,
-                // sheet chrome) sample the host's appearance — if macOS
-                // is in light mode the sidebar would paint near-white
-                // on top of our neutral #1A1A1A. Pinning dark scheme
-                // ensures every child (including `.sheet()` presentations,
-                // which spawn their own windows) reads from the same
-                // darker system table.
-                .preferredColorScheme(.dark)
-                .onAppear {
-                    if !ipcBrokerInitialized {
-                        terminalManager.ipcBroker = IPCBroker(terminalManager: terminalManager)
-                        ipcBrokerInitialized = true
-                    }
-                    NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
-                    DispatchQueue.main.async {
-                        if let window = NSApp.windows.first {
-                            window.makeKeyAndOrderFront(nil)
-                            window.orderFrontRegardless()
-                        }
-                    }
-                }
+            MainWindowRoot(
+                appState: appState,
+                terminalManager: terminalManager,
+                zoomState: mainZoom,
+                ipcBrokerInitialized: $ipcBrokerInitialized
+            )
         }
         .modelContainer(modelContainer)
         .commands {
@@ -162,6 +164,30 @@ struct TadoApp: App {
                 }
                 .keyboardShortcut("t", modifiers: .command)
             }
+            CommandMenu("View") {
+                // Menu fallback for app-zoom on the main window. The
+                // Cmd-shortcut here is the same as the in-window
+                // NSEvent monitor handles, so on non-canvas pages the
+                // monitor consumes it before this fires; on the canvas
+                // page the canvas's own keyMonitor consumes it for
+                // tile-only zoom — which means the keyboard equivalent
+                // never reaches this menu item, but a mouse click still
+                // works to app-zoom while the canvas is visible.
+                Button("Zoom In") {
+                    withAnimation(.easeOut(duration: 0.06)) { mainZoom.zoomIn() }
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Zoom Out") {
+                    withAnimation(.easeOut(duration: 0.06)) { mainZoom.zoomOut() }
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Actual Size") {
+                    withAnimation(.easeOut(duration: 0.06)) { mainZoom.reset() }
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
         }
 
         // Extension windows — one WindowGroup per registered extension.
@@ -169,38 +195,112 @@ struct TadoApp: App {
         // scene is wired explicitly. Adding an entry to
         // ExtensionRegistry.all requires a matching block here.
         WindowGroup(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id)) {
-            NotificationsExtension.makeView()
-                .environment(appState)
-                .preferredColorScheme(.dark)
-                .frame(
-                    minWidth: NotificationsExtension.manifest.defaultWindowSize.width,
-                    minHeight: NotificationsExtension.manifest.defaultWindowSize.height
-                )
+            NotificationsWindowRoot(appState: appState, zoomState: notificationsZoom)
         }
         .windowResizability(NotificationsExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
         WindowGroup(id: ExtensionWindowID.string(for: DomeExtension.manifest.id)) {
-            DomeExtension.makeView()
-                .environment(appState)
-                .preferredColorScheme(.dark)
-                .frame(
-                    minWidth: DomeExtension.manifest.defaultWindowSize.width,
-                    minHeight: DomeExtension.manifest.defaultWindowSize.height
-                )
+            DomeWindowRoot(appState: appState, zoomState: domeZoom)
         }
         .modelContainer(modelContainer)
         .windowResizability(DomeExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
         WindowGroup(id: ExtensionWindowID.string(for: CrossRunBrowserExtension.manifest.id)) {
-            CrossRunBrowserExtension.makeView()
-                .environment(appState)
-                .preferredColorScheme(.dark)
-                .frame(
-                    minWidth: CrossRunBrowserExtension.manifest.defaultWindowSize.width,
-                    minHeight: CrossRunBrowserExtension.manifest.defaultWindowSize.height
-                )
+            CrossRunBrowserWindowRoot(appState: appState, zoomState: crossRunBrowserZoom)
         }
         .modelContainer(modelContainer)
         .windowResizability(CrossRunBrowserExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
+    }
+}
+
+// MARK: - Per-window root views
+//
+// Each WindowGroup hands its content off to a small wrapper struct that
+// owns the per-window zoom plumbing. SwiftUI's WindowGroup builder
+// closure can't declare @State directly, so the wrappers exist purely to
+// receive the lifted zoom-state and apply `.windowZoom(...)`. They also
+// pin the per-window minimum frame size, lowered from each extension's
+// `defaultWindowSize` to a much smaller floor so corner-drag-resize can
+// shrink each window aggressively — content reflows via the
+// browser-style scaler at any size between the floor and the screen.
+
+struct MainWindowRoot: View {
+    let appState: AppState
+    let terminalManager: TerminalManager
+    let zoomState: WindowZoomState
+    @Binding var ipcBrokerInitialized: Bool
+
+    var body: some View {
+        ContentView()
+            .environment(appState)
+            .environment(terminalManager)
+            // Pin the whole window tree to dark mode. Without this
+            // SwiftUI's adaptive system colors (sidebar, form bg,
+            // sheet chrome) sample the host's appearance — if macOS
+            // is in light mode the sidebar would paint near-white
+            // on top of our neutral #1A1A1A. Pinning dark scheme
+            // ensures every child (including `.sheet()` presentations,
+            // which spawn their own windows) reads from the same
+            // darker system table.
+            .preferredColorScheme(.dark)
+            .frame(minWidth: 280, minHeight: 200)
+            // Defer Cmd+/-/0 to the canvas's own keyMonitor while the
+            // canvas page is visible so tile-only zoom keeps working
+            // there; on every other page (Projects, Todos, Extensions)
+            // the predicate is true and Cmd+/-/0 app-zooms the window.
+            .windowZoom(zoomState, shouldIntercept: { appState.currentView != .canvas })
+            .onAppear {
+                if !ipcBrokerInitialized {
+                    terminalManager.ipcBroker = IPCBroker(terminalManager: terminalManager)
+                    ipcBrokerInitialized = true
+                }
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+                DispatchQueue.main.async {
+                    if let window = NSApp.windows.first {
+                        window.makeKeyAndOrderFront(nil)
+                        window.orderFrontRegardless()
+                    }
+                }
+            }
+    }
+}
+
+struct NotificationsWindowRoot: View {
+    let appState: AppState
+    let zoomState: WindowZoomState
+
+    var body: some View {
+        NotificationsExtension.makeView()
+            .environment(appState)
+            .preferredColorScheme(.dark)
+            .frame(minWidth: 240, minHeight: 180)
+            .windowZoom(zoomState)
+    }
+}
+
+struct DomeWindowRoot: View {
+    let appState: AppState
+    let zoomState: WindowZoomState
+
+    var body: some View {
+        DomeExtension.makeView()
+            .environment(appState)
+            .preferredColorScheme(.dark)
+            .frame(minWidth: 240, minHeight: 180)
+            .windowZoom(zoomState)
+    }
+}
+
+struct CrossRunBrowserWindowRoot: View {
+    let appState: AppState
+    let zoomState: WindowZoomState
+
+    var body: some View {
+        CrossRunBrowserExtension.makeView()
+            .environment(appState)
+            .preferredColorScheme(.dark)
+            .frame(minWidth: 240, minHeight: 180)
+            .windowZoom(zoomState)
     }
 }

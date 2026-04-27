@@ -1,7 +1,7 @@
 use crate::error::BtError;
 use rusqlite::{Connection, OptionalExtension};
 
-pub const LATEST_SCHEMA_VERSION: i32 = 21;
+pub const LATEST_SCHEMA_VERSION: i32 = 24;
 
 /// Apply SQLite schema migrations.
 ///
@@ -140,11 +140,29 @@ pub fn migrate(conn: &Connection) -> Result<i32, BtError> {
         v = 21;
     }
 
+    if v < 22 {
+        migration_22(conn)?;
+        set_user_version(conn, 22)?;
+        v = 22;
+    }
+
+    if v < 23 {
+        migration_23(conn)?;
+        set_user_version(conn, 23)?;
+        v = 23;
+    }
+
+    if v < 24 {
+        migration_24(conn)?;
+        set_user_version(conn, 24)?;
+        v = 24;
+    }
+
     Ok(v)
 }
 
 fn set_user_version(conn: &Connection, v: i32) -> Result<(), BtError> {
-    conn.pragma_update(None, "user_version", &v)?;
+    conn.pragma_update(None, "user_version", v)?;
     Ok(())
 }
 
@@ -1864,19 +1882,364 @@ fn migration_21(conn: &Connection) -> Result<(), BtError> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Migration 22 — codebase indexing tables.
+///
+/// Adds the four tables that back Phase 2's project source-code
+/// indexer: `code_projects` (one row per indexed project),
+/// `code_files` (one row per source file the indexer touched, keyed by
+/// `(project_id, repo_path)`), `code_chunks` (one row per AST/window
+/// chunk with its embedding BLOB), and `code_index_jobs` (durable job
+/// queue so a full rebuild that the user kicked off survives an app
+/// restart). Also creates `fts_code` for the FTS5 lexical lane in
+/// hybrid retrieval and `code_chunks_vec` (a `vec0` virtual table)
+/// when sqlite-vec is loaded — Phase 3 wires the dual-write.
+///
+/// Why a separate `code_chunks` table instead of extending
+/// `note_chunks`: code is two orders of magnitude more rows, has a
+/// different unique key (file-path + chunk_index, not doc_id +
+/// scope + chunk_index), and needs project-scoped queries that would
+/// pollute every note query if mixed in.
+fn migration_22(conn: &Connection) -> Result<(), BtError> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS code_projects (
+            project_id              TEXT PRIMARY KEY,
+            name                    TEXT NOT NULL,
+            root_path               TEXT NOT NULL,
+            enabled                 INTEGER NOT NULL DEFAULT 1,
+            last_full_index_at      TEXT,
+            embedding_model_id      TEXT,
+            embedding_model_version TEXT,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+        );
 
-    #[test]
-    fn migration_adds_scoped_dome_doc_metadata() {
-        let conn = Connection::open_in_memory().unwrap();
-        let version = migrate(&conn).unwrap();
-        assert_eq!(version, LATEST_SCHEMA_VERSION);
-        for column in ["owner_scope", "project_id", "project_root", "knowledge_kind"] {
-            assert!(table_has_column(&conn, "docs", column).unwrap(), "missing {column}");
-        }
+        CREATE TABLE IF NOT EXISTS code_files (
+            project_id      TEXT NOT NULL,
+            repo_path       TEXT NOT NULL,
+            language        TEXT NOT NULL,
+            content_sha256  TEXT NOT NULL,
+            file_mtime_ns   INTEGER NOT NULL,
+            byte_size       INTEGER NOT NULL,
+            line_count      INTEGER NOT NULL,
+            last_indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (project_id, repo_path),
+            FOREIGN KEY (project_id) REFERENCES code_projects(project_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS code_chunks (
+            project_id              TEXT NOT NULL,
+            repo_path               TEXT NOT NULL,
+            chunk_index             INTEGER NOT NULL,
+            text                    TEXT NOT NULL,
+            language                TEXT NOT NULL,
+            node_kind               TEXT,
+            qualified_name          TEXT,
+            start_line              INTEGER NOT NULL,
+            end_line                INTEGER NOT NULL,
+            byte_start              INTEGER NOT NULL,
+            byte_end                INTEGER NOT NULL,
+            content_sha256          TEXT NOT NULL,
+            embedding               BLOB NOT NULL,
+            embedding_quant         TEXT NOT NULL DEFAULT 'i8',
+            embedding_model_id      TEXT NOT NULL,
+            embedding_model_version TEXT NOT NULL,
+            embedding_dimension     INTEGER NOT NULL,
+            embedding_pooling       TEXT NOT NULL,
+            embedding_instruction   TEXT NOT NULL,
+            embedding_source_hash   TEXT NOT NULL,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (project_id, repo_path, chunk_index),
+            FOREIGN KEY (project_id, repo_path)
+                REFERENCES code_files(project_id, repo_path)
+                ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS code_index_jobs (
+            job_id        TEXT PRIMARY KEY,
+            project_id    TEXT NOT NULL,
+            kind          TEXT NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'queued',
+            queued_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            started_at    TEXT,
+            finished_at   TEXT,
+            files_total   INTEGER,
+            files_done    INTEGER NOT NULL DEFAULT 0,
+            chunks_done   INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            FOREIGN KEY (project_id) REFERENCES code_projects(project_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_code_chunks_project_path
+            ON code_chunks(project_id, repo_path);
+        CREATE INDEX IF NOT EXISTS idx_code_chunks_lang
+            ON code_chunks(language);
+        CREATE INDEX IF NOT EXISTS idx_code_chunks_model
+            ON code_chunks(embedding_model_id, embedding_model_version);
+        CREATE INDEX IF NOT EXISTS idx_code_files_sha
+            ON code_files(content_sha256);
+        CREATE INDEX IF NOT EXISTS idx_code_index_jobs_status
+            ON code_index_jobs(status, queued_at);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS fts_code USING fts5(
+            project_id UNINDEXED,
+            repo_path UNINDEXED,
+            language UNINDEXED,
+            text,
+            tokenize='unicode61'
+        );
+        "#,
+    )?;
+
+    Ok(())
+}
+
+/// Migration 23 — Knowledge Catalog foundation.
+///
+/// Adds the lifecycle + provenance + measurement layer that turns the
+/// Dome vault from a flat note store into a queryable knowledge
+/// catalog. Purely additive: every new column has a constant default
+/// and every new table uses `IF NOT EXISTS`.
+///
+/// Three groups of changes:
+///
+/// 1. **`graph_nodes` lifecycle columns** — confidence, supersede
+///    chain, soft-delete, dedup hash, last-referenced timestamp,
+///    entity version. Lets entities outlive their first write — they
+///    can be confirmed, disputed, archived, or replaced without losing
+///    history.
+///
+/// 2. **`graph_edges` provenance columns** — source signal (which
+///    enricher claimed this edge), per-signal confidence, evidence id
+///    pointing back to the originating doc/run/event. Multiple
+///    signals can claim the same conceptual edge; aggregation happens
+///    at query time.
+///
+/// 3. **Three new tables** —
+///    - `retrieval_log` records every search/graph/recipe call so we
+///      can replay queries against future Dome state and measure
+///      regression. Every `dome_search` writes one row.
+///    - `pending_enrichment` is the queue Phase 3's tokio workers
+///      drain (extractor → linker → deduper → decayer). Backfill
+///      enqueues here, doesn't run inline.
+///    - `retrieval_recipes` is the registry of intent-keyed retrieval
+///      policies (Tado's analog of Knowledge Catalog "verified
+///      queries"). Phase 5 ships the templates; this migration just
+///      reserves the table so writers don't race the schema.
+fn migration_23(conn: &Connection) -> Result<(), BtError> {
+    // graph_nodes lifecycle columns.
+    if !table_has_column(conn, "graph_nodes", "confidence")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7;
+            "#,
+        )?;
     }
+    if !table_has_column(conn, "graph_nodes", "superseded_by")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN superseded_by TEXT;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_nodes", "supersedes")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN supersedes TEXT;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_nodes", "expires_at")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN expires_at TEXT;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_nodes", "archived_at")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN archived_at TEXT;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_nodes", "content_hash")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN content_hash TEXT;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_nodes", "last_referenced_at")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN last_referenced_at TEXT;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_nodes", "entity_version")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_nodes
+                ADD COLUMN entity_version INTEGER NOT NULL DEFAULT 1;
+            "#,
+        )?;
+    }
+
+    // graph_edges provenance columns.
+    if !table_has_column(conn, "graph_edges", "source_signal")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_edges
+                ADD COLUMN source_signal TEXT NOT NULL DEFAULT 'manual';
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_edges", "signal_confidence")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_edges
+                ADD COLUMN signal_confidence REAL NOT NULL DEFAULT 0.7;
+            "#,
+        )?;
+    }
+    if !table_has_column(conn, "graph_edges", "evidence_id")? {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE graph_edges
+                ADD COLUMN evidence_id TEXT;
+            "#,
+        )?;
+    }
+
+    // Indexes + new tables in one batch.
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_superseded_by
+            ON graph_nodes(superseded_by);
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_archived_at
+            ON graph_nodes(archived_at);
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_content_hash
+            ON graph_nodes(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_expires_at
+            ON graph_nodes(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_graph_nodes_last_referenced_at
+            ON graph_nodes(last_referenced_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_source_signal
+            ON graph_edges(source_signal);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_evidence_id
+            ON graph_edges(evidence_id);
+
+        -- retrieval_log: one row per dome_search / dome_graph_query /
+        -- dome_context_resolve / dome_recipe_apply call. Append-only;
+        -- pruned by `dome-eval prune` once it ships.
+        CREATE TABLE IF NOT EXISTS retrieval_log (
+            log_id              TEXT PRIMARY KEY,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            actor_kind          TEXT NOT NULL,
+            actor_id            TEXT,
+            project_id          TEXT,
+            knowledge_scope     TEXT NOT NULL,
+            tool                TEXT NOT NULL,
+            query               TEXT,
+            result_ids_json     TEXT NOT NULL DEFAULT '[]',
+            result_scopes_json  TEXT NOT NULL DEFAULT '[]',
+            latency_ms          INTEGER NOT NULL DEFAULT 0,
+            pack_id             TEXT,
+            was_consumed        INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_retrieval_log_created_at
+            ON retrieval_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_retrieval_log_actor
+            ON retrieval_log(actor_kind, actor_id);
+        CREATE INDEX IF NOT EXISTS idx_retrieval_log_project
+            ON retrieval_log(project_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_retrieval_log_tool
+            ON retrieval_log(tool, created_at DESC);
+
+        -- pending_enrichment: durable queue drained by Phase 3
+        -- enrichment workers. Mirrors `code_index_jobs` shape so
+        -- crash recovery is identical.
+        CREATE TABLE IF NOT EXISTS pending_enrichment (
+            job_id           TEXT PRIMARY KEY,
+            target_kind      TEXT NOT NULL,
+            target_id        TEXT NOT NULL,
+            enrichment_kind  TEXT NOT NULL,
+            project_id       TEXT,
+            enqueued_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            started_at       TEXT,
+            finished_at      TEXT,
+            status           TEXT NOT NULL DEFAULT 'queued',
+            attempts         INTEGER NOT NULL DEFAULT 0,
+            last_error       TEXT,
+            payload_json     TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_enrichment_status_queue
+            ON pending_enrichment(status, enrichment_kind, enqueued_at);
+        CREATE INDEX IF NOT EXISTS idx_pending_enrichment_target
+            ON pending_enrichment(target_kind, target_id);
+
+        -- retrieval_recipes: registry of intent-keyed retrieval
+        -- policies (Tado's analog of Knowledge Catalog "verified
+        -- queries"). Phase 5 fills this; Phase 1 just reserves the
+        -- shape.
+        CREATE TABLE IF NOT EXISTS retrieval_recipes (
+            recipe_id              TEXT PRIMARY KEY,
+            intent_key             TEXT NOT NULL,
+            scope                  TEXT NOT NULL DEFAULT 'project',
+            project_id             TEXT,
+            title                  TEXT NOT NULL,
+            description            TEXT NOT NULL DEFAULT '',
+            template_path          TEXT NOT NULL,
+            retrieval_policy_json  TEXT NOT NULL DEFAULT '{}',
+            enabled                INTEGER NOT NULL DEFAULT 1,
+            last_verified_at       TEXT,
+            created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_retrieval_recipes_intent_scope_project
+            ON retrieval_recipes(intent_key, scope, COALESCE(project_id, ''));
+        CREATE INDEX IF NOT EXISTS idx_retrieval_recipes_enabled
+            ON retrieval_recipes(enabled, intent_key);
+        "#,
+    )?;
+
+    Ok(())
+}
+
+/// Migration 24 — Knowledge Catalog activation marker (Phase 5).
+///
+/// No DDL of its own. Stamps `pragma user_version = 24` so callers
+/// that need the "v0.10 stack is fully wired" state — recipes
+/// table populated, enrichment workers booted, spawn-pack engine
+/// available — can probe a single sentinel. Future migrations can
+/// add hard requirements gated on `>= 24`; for now it's a
+/// no-op that pins the schema version.
+fn migration_24(conn: &Connection) -> Result<(), BtError> {
+    // Idempotent stamp: write a row to a tiny activation log so
+    // downstream tooling (like dome-eval) can audit when the
+    // upgrade landed without parsing pragma values.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS schema_activation_log (
+            schema_version INTEGER PRIMARY KEY,
+            activated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT OR IGNORE INTO schema_activation_log (schema_version)
+            VALUES (24);
+        "#,
+    )?;
+    Ok(())
 }
 
 fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, BtError> {
@@ -1899,4 +2262,175 @@ fn table_exists(conn: &Connection, table: &str) -> Result<bool, BtError> {
         conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1")?;
     let found: Option<String> = stmt.query_row([table], |row| row.get(0)).optional()?;
     Ok(found.is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_adds_scoped_dome_doc_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        let version = migrate(&conn).unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+        for column in ["owner_scope", "project_id", "project_root", "knowledge_kind"] {
+            assert!(table_has_column(&conn, "docs", column).unwrap(), "missing {column}");
+        }
+    }
+
+    #[test]
+    fn migration_22_creates_code_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        let version = migrate(&conn).unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+        for table in ["code_projects", "code_files", "code_chunks", "code_index_jobs", "fts_code"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists >= 1, "missing table {table}");
+        }
+        for column in [
+            "embedding",
+            "embedding_quant",
+            "embedding_model_id",
+            "embedding_model_version",
+            "embedding_dimension",
+            "embedding_pooling",
+            "embedding_instruction",
+            "embedding_source_hash",
+        ] {
+            assert!(
+                table_has_column(&conn, "code_chunks", column).unwrap(),
+                "code_chunks missing column {column}"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_23_adds_lifecycle_columns_and_log_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        let version = migrate(&conn).unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+
+        // graph_nodes lifecycle columns
+        for column in [
+            "confidence",
+            "superseded_by",
+            "supersedes",
+            "expires_at",
+            "archived_at",
+            "content_hash",
+            "last_referenced_at",
+            "entity_version",
+        ] {
+            assert!(
+                table_has_column(&conn, "graph_nodes", column).unwrap(),
+                "graph_nodes missing column {column}"
+            );
+        }
+
+        // graph_edges provenance columns
+        for column in ["source_signal", "signal_confidence", "evidence_id"] {
+            assert!(
+                table_has_column(&conn, "graph_edges", column).unwrap(),
+                "graph_edges missing column {column}"
+            );
+        }
+
+        // New tables
+        for table in ["retrieval_log", "pending_enrichment", "retrieval_recipes"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "missing table {table}");
+        }
+
+        // retrieval_log INSERT round-trip.
+        conn.execute(
+            r#"INSERT INTO retrieval_log (
+                log_id, actor_kind, knowledge_scope, tool,
+                query, result_ids_json, result_scopes_json, latency_ms
+            ) VALUES (?1, 'agent', 'project', 'dome_search', ?2, '["a","b"]', '["project","global"]', 12)"#,
+            ["log-test-1", "hello world"],
+        )
+        .unwrap();
+        let cnt: i64 = conn
+            .query_row("SELECT count(*) FROM retrieval_log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cnt, 1, "retrieval_log insert failed");
+
+        // pending_enrichment INSERT round-trip.
+        conn.execute(
+            r#"INSERT INTO pending_enrichment (
+                job_id, target_kind, target_id, enrichment_kind, project_id
+            ) VALUES (?1, 'doc', ?2, 'extract', NULL)"#,
+            ["job-test-1", "doc-1"],
+        )
+        .unwrap();
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pending_enrichment WHERE status='queued'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cnt, 1, "pending_enrichment default status not 'queued'");
+
+        // retrieval_recipes uniqueness on (intent_key, scope, project_id) with NULL project.
+        conn.execute(
+            r#"INSERT INTO retrieval_recipes (
+                recipe_id, intent_key, scope, project_id, title, template_path
+            ) VALUES (?1, 'architecture-review', 'global', NULL, 'Architecture review', '.tado/verified-prompts/arch.md')"#,
+            ["rec-test-1"],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            r#"INSERT INTO retrieval_recipes (
+                recipe_id, intent_key, scope, project_id, title, template_path
+            ) VALUES (?1, 'architecture-review', 'global', NULL, 'dup', '.tado/verified-prompts/arch.md')"#,
+            ["rec-test-2"],
+        );
+        assert!(dup.is_err(), "duplicate intent_key/scope/project_id should be rejected");
+
+        // Re-running migrate is idempotent (no duplicate-column errors).
+        let version_again = migrate(&conn).unwrap();
+        assert_eq!(version_again, LATEST_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_24_stamps_activation_log() {
+        let conn = Connection::open_in_memory().unwrap();
+        let version = migrate(&conn).unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+        assert!(version >= 24, "schema must reach v24 for Phase 5");
+
+        let activated_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM schema_activation_log WHERE schema_version = 24",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(activated_count, 1, "v24 activation row missing");
+
+        // Idempotent re-run keeps row count at 1 (INSERT OR IGNORE).
+        let version_again = migrate(&conn).unwrap();
+        assert_eq!(version_again, LATEST_SCHEMA_VERSION);
+        let still_one: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM schema_activation_log WHERE schema_version = 24",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_one, 1);
+    }
 }

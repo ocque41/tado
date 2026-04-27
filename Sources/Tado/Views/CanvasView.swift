@@ -306,6 +306,18 @@ struct CanvasView: View {
                 } else if let mtk = self.metalTileUnderCursor(for: event),
                           let session = self.sessionForMTKView(mtk) {
                     self.appState.focusedTileTodoID = session.todoID
+                    // Sync firstResponder explicitly. The MTKView's own
+                    // mouseDown also calls makeFirstResponder(self), but a
+                    // SwiftUI overlay above the cell area (resize handles,
+                    // focus border, future tile chrome) can swallow the
+                    // click before AppKit dispatches mouseDown to the
+                    // MTKView — leaving the accent ring lit while
+                    // firstResponder stays on contentView, which routes
+                    // arrows to tile-nav instead of the picker the user
+                    // sees.
+                    if window.firstResponder !== mtk {
+                        window.makeFirstResponder(mtk)
+                    }
                 }
             }
             return event // always pass clicks through

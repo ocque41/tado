@@ -1,4 +1,42 @@
 import Foundation
+import CTadoCore
+
+/// Phase 4 — deterministic relative-time formatter used by the
+/// spawn-time preamble. Mirrors `bt_core::context::relative::format_relative_ago`
+/// byte-for-byte so the Swift composer's output is identical to the
+/// Rust pack engine's. Replaces the locale-sensitive
+/// `RelativeDateTimeFormatter` we shipped in v0.10.
+enum DomeRelativeTime {
+    /// Match the Rust algorithm exactly:
+    ///   <60 s → "just now"
+    ///   <60 m → "{n}m ago"  (60 →"1m ago", 45·60 → "45m ago")
+    ///   <24 h → "{n}h ago"
+    ///   <7 d  → "{n}d ago"
+    ///   <30 d → "{n}w ago"
+    ///   <365 d→ "{n}mo ago"
+    ///   else  → "{n}y ago"
+    /// Future timestamps render with `in {…}` instead of `… ago`.
+    static func formatAgo(_ ts: Date, now: Date = Date()) -> String {
+        let secs = Int64(now.timeIntervalSince(ts).rounded(.toNearestOrEven))
+        let abs = secs < 0 ? -secs : secs
+        let body = bucket(absSecs: abs)
+        if secs >= 0 {
+            return body == "just now" ? "just now" : "\(body) ago"
+        } else {
+            return body == "just now" ? "in a moment" : "in \(body)"
+        }
+    }
+
+    private static func bucket(absSecs: Int64) -> String {
+        if absSecs < 60 { return "just now" }
+        if absSecs < 3_600 { return "\(absSecs / 60)m" }
+        if absSecs < 86_400 { return "\(absSecs / 3_600)h" }
+        if absSecs < 604_800 { return "\(absSecs / 86_400)d" }
+        if absSecs < 2_592_000 { return "\(absSecs / 604_800)w" }
+        if absSecs < 31_536_000 { return "\(absSecs / 2_592_000)mo" }
+        return "\(absSecs / 31_536_000)y"
+    }
+}
 
 /// C4 — Composable spawn-time context preamble.
 ///
@@ -46,7 +84,70 @@ enum DomeContextPreamble {
     /// Compose a context preamble. Returns nil when there's nothing
     /// useful to say (no project, no team, no agent — i.e. a raw
     /// terminal spawn unrelated to any Tado structure).
+    ///
+    /// Phase 4 dual-path: when the global setting
+    /// `dome.contextPacksV2` is `true`, delegates to the Rust pack
+    /// engine via `tado_dome_compose_spawn_preamble` (cached, with
+    /// supersede invalidation). Otherwise falls through to the v0.10
+    /// Swift composer below. Both render byte-identical output —
+    /// the integration test in `tests/byte_equivalence/` exercises
+    /// the contract on every release.
     static func build(for ctx: Context) -> String? {
+        if useContextPacksV2() {
+            if let rustPreamble = composeViaRust(ctx) {
+                return rustPreamble
+            }
+            // Fall through if Rust returned nil (daemon offline,
+            // empty context, etc.); v0.10 path produces nil for the
+            // same conditions.
+        }
+        return composeViaSwift(ctx)
+    }
+
+    /// Read the v0.13 feature flag. Honors two paths so it works from
+    /// any actor context:
+    /// 1. `TADO_DOME_CONTEXT_PACKS_V2=1` env var — set by the
+    ///    spawn-site so the flag is readable without main-actor hops.
+    /// 2. Static cache populated at app launch by
+    ///    `DomeExtension.onAppLaunch` reading `global.json`.
+    /// Returns `false` until either is positively set.
+    private static func useContextPacksV2() -> Bool {
+        if let env = ProcessInfo.processInfo.environment["TADO_DOME_CONTEXT_PACKS_V2"],
+           env == "1" || env.lowercased() == "true" {
+            return true
+        }
+        return _contextPacksV2Override.value
+    }
+
+    /// Cached override populated by callers running on the main actor
+    /// (DomeExtension on launch, Settings UI on toggle). Reads here
+    /// are lock-free.
+    static let _contextPacksV2Override = AtomicBool(initial: false)
+}
+
+/// Tiny wrapper around `OSAllocatedUnfairLock` over a `Bool` so any
+/// thread can read/write the spawn-pack feature flag without
+/// main-actor coordination.
+final class AtomicBool: @unchecked Sendable {
+    private var inner: Bool
+    private let lock = NSLock()
+    init(initial: Bool) { self.inner = initial }
+    var value: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return inner
+    }
+    func set(_ next: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        inner = next
+    }
+}
+
+// Re-open DomeContextPreamble to keep the file structure clean.
+extension DomeContextPreamble {
+
+    /// Pure Swift composer (v0.10 path). Kept verbatim so dark-launch
+    /// flips are reversible without a release.
+    static func composeViaSwift(_ ctx: Context) -> String? {
         var fragments: [String] = []
 
         if let identity = identityFragment(ctx) { fragments.append(identity) }
@@ -71,6 +172,42 @@ enum DomeContextPreamble {
         // the close tag disappears but the content is still partially
         // visible. In practice we never hit this with today's fragments.
         return String(wrapped.prefix(maxCharacters))
+    }
+
+    /// Phase 4 — delegate to bt-core's `tado_dome_compose_spawn_preamble`.
+    /// Returns nil when the daemon isn't running or has nothing to
+    /// render. Wraps the FFI call so callers don't need C-string
+    /// lifetimes.
+    ///
+    /// JSON-encoding failures and FFI returning nil are surfaced via
+    /// stderr (visible in Console.app under the Tado bundle); the
+    /// caller falls through to the v0.10 Swift composer so spawns
+    /// never lose their preamble — diagnostic, not blocking.
+    private static func composeViaRust(_ ctx: Context) -> String? {
+        var payload: [String: Any] = [:]
+        if let agent = ctx.agentName, !agent.isEmpty { payload["agent_name"] = agent }
+        if let project = ctx.projectName, !project.isEmpty { payload["project_name"] = project }
+        if let id = ctx.projectID { payload["project_id"] = id.uuidString }
+        if let root = ctx.projectRoot { payload["project_root"] = root }
+        if let team = ctx.teamName, !team.isEmpty { payload["team_name"] = team }
+        if !ctx.teammates.isEmpty { payload["teammates"] = ctx.teammates }
+        guard let json = try? JSONSerialization.data(withJSONObject: payload, options: []),
+              let jsonStr = String(data: json, encoding: .utf8) else {
+            FileHandle.standardError.write(Data(
+                "tado: composeViaRust JSON encode failed; falling back to Swift composer\n".utf8
+            ))
+            return nil
+        }
+        return jsonStr.withCString { jsonC in
+            guard let raw = tado_dome_compose_spawn_preamble(jsonC) else {
+                // Daemon offline OR Rust returned None (empty-context
+                // case). Either way, the Swift fallback handles the
+                // same edge gracefully.
+                return nil
+            }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
     }
 
     // MARK: - Fragments
@@ -121,10 +258,11 @@ enum DomeContextPreamble {
             return nil
         }
         let ordered = notes.sorted { $0.sortTimestamp > $1.sortTimestamp }.prefix(5)
+        let now = Date()
         let bullets = ordered.map { note -> String in
             let ts = note.updatedAt ?? note.createdAt
             if let ts {
-                let rel = Self.rel.localizedString(for: ts, relativeTo: Date())
+                let rel = DomeRelativeTime.formatAgo(ts, now: now)
                 return "  - `\(note.title)` (\(rel))"
             } else {
                 return "  - `\(note.title)`"
@@ -149,11 +287,9 @@ enum DomeContextPreamble {
         return lines.joined(separator: "\n")
     }
 
-    private static let rel: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
+    // (Phase 4 retired the locale-sensitive RelativeDateTimeFormatter;
+    // recent-notes timestamps now flow through `DomeRelativeTime.formatAgo`
+    // so the Rust pack engine can render byte-identical output.)
 
     // MARK: - Convenience
 

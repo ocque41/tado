@@ -36,7 +36,11 @@ struct GlobalSettings: Codable, Equatable {
 
     struct ClaudeSettings: Codable, Equatable {
         var mode: String = "askPermissions"
-        var effort: String = "high"
+        // `auto` means "do not pass --effort"; Claude Code picks the
+        // model-appropriate default. See `ClaudeEffort` in AppState.swift
+        // for why this is the default — Tado has no source of truth for
+        // per-model effort caps and shouldn't pretend otherwise.
+        var effort: String = "auto"
         var model: String = "claude-opus-4-7"
         var noFlicker: Bool = false
         var mouseEnabled: Bool = true
@@ -45,7 +49,9 @@ struct GlobalSettings: Codable, Equatable {
 
     struct CodexSettings: Codable, Equatable {
         var mode: String = "defaultPermissions"
-        var effort: String = "high"
+        // Same rationale as `ClaudeSettings.effort`: `auto` omits the
+        // `-c model_reasoning_effort=` flag and Codex picks its default.
+        var effort: String = "auto"
         var model: String = "gpt-5.5"
         var alternateScreen: Bool = false
     }
@@ -66,6 +72,14 @@ struct GlobalSettings: Codable, Equatable {
         var includeGlobalInProject: Bool = true
         var defaultKnowledgeKind: String = "knowledge"
         var agentRegistrationEnabled: Bool = true
+        /// Phase 4 (v0.13.0) — dark-launch toggle for the Rust spawn
+        /// preamble composer. `false` keeps the v0.10 Swift composer
+        /// in the hot path; `true` delegates to bt-core's
+        /// `tado_dome_compose_spawn_preamble`. Both produce
+        /// byte-identical output for the same input — the flag exists
+        /// so we can flip the default per release without touching
+        /// agents that have memorised the marker contract.
+        var contextPacksV2: Bool = false
     }
 
     struct Channels: Codable, Equatable {

@@ -249,10 +249,14 @@ enum ProcessSpawner {
               "TodoWrite"
               "Task"
               "mcp__*"
+              "mcp__tado__*"
+              "mcp__dome__*"
               "Edit(./.git/**)"
               "Write(./.git/**)"
               "Edit(./.claude/**)"
               "Write(./.claude/**)"
+              "Edit(./.tado/**)"
+              "Write(./.tado/**)"
               "Edit(./.vscode/**)"
               "Write(./.vscode/**)"
               "Edit(./.idea/**)"
@@ -260,10 +264,17 @@ enum ProcessSpawner {
               "Edit(./.husky/**)"
               "Write(./.husky/**)"
 
-            The `.git/**`, `.claude/**`, `.vscode/**`, `.idea/**`,
-            `.husky/**` patterns are the critical ones — they replace
-            bypass mode's hard-coded exception list with explicit
-            allow rules.
+            The `.git/**`, `.claude/**`, `.tado/**`, `.vscode/**`,
+            `.idea/**`, `.husky/**` patterns are the critical ones —
+            they replace bypass mode's hard-coded exception list with
+            explicit allow rules. `.tado/**` is the per-project state
+            directory (eternal/dispatch run JSON, project memory) that
+            v0.9.0 agents routinely write to.
+
+            `mcp__tado__*` and `mcp__dome__*` are explicitly listed
+            (in addition to the wildcard `mcp__*`) so a future user
+            who narrows their wildcard doesn't accidentally lock the
+            Tado-shipped MCP tools out of auto-approval.
 
         1c. Ensure `autoMode.environment` is an array and contains
             these natural-language trust descriptors (append any that
@@ -273,8 +284,9 @@ enum ProcessSpawner {
 
               "Organization: local developer machine. Primary use: software development driven by the Tado macOS app, which spawns long-lived `claude` sessions as terminal tiles."
               "Trusted source control: this project's git remote (typically GitHub / GitLab over HTTPS or SSH). Pushing to the project's own origin is routine, not exfiltration."
-              "Trusted local filesystem: the project root and everything under it — including `.git`, `.claude`, `.vscode`, `.idea`, `.husky`, `node_modules`, `.venv`, and `.build`. Tado agents routinely edit these as part of normal workflow."
-              "Trusted MCP servers: any tool matching `mcp__*`. The user wires MCP servers explicitly in `~/.claude/settings.json`; anything exposed there is trusted."
+              "Trusted local filesystem: the project root and everything under it — including `.git`, `.claude`, `.tado`, `.vscode`, `.idea`, `.husky`, `node_modules`, `.venv`, and `.build`. Tado agents routinely edit these as part of normal workflow. The `.tado/` directory holds Eternal/Dispatch run state, project memory, and per-project notes — write access is required."
+              "Trusted MCP servers: any tool matching `mcp__*`. The user wires MCP servers explicitly in `~/.claude/settings.json`. Specifically, `mcp__tado__*` (Tado A2A + config + memory + events) and `mcp__dome__*` (Dome second-brain knowledge graph) are first-party tools shipped with Tado itself — their writes target the user's own vault and IPC sockets, never external services."
+              "Trusted Tado IPC: `tado-list`, `tado-read`, `tado-send`, `tado-deploy`, `tado-events`, `tado-config`, `tado-memory`, `tado-notify`, `tado-dome`. These are local CLIs at `~/.local/bin/` that talk to the running Tado app via Unix sockets and atomic JSON files — they never reach the network."
               "Trusted package managers and build tools: npm, pnpm, yarn, bun, pip, uv, cargo, swift, brew, gem, go. Package install, update, audit, and build operations are routine."
               "Additional context: Tado's Eternal feature runs unattended for hours or days. Err on the side of autonomy for reversible, in-scope operations. Bash commands like `rm -rf <path-under-project>` are legitimate cleanup within the project; Bash commands that reach outside the project root (into `/usr`, `/System`, user home outside the project) are NOT routine and should still be gated."
 
@@ -335,60 +347,108 @@ enum ProcessSpawner {
     }
 
     /// Generate the prompt for a bootstrap agent that injects A2A CLI docs into a target project.
+    /// Refreshed for v0.9.0: now mentions `tado-events` (real-time bus), the Rust MCP bridges,
+    /// and the broadcast pub/sub surface. Older bootstraps wrote a v0.4.0-shaped section that
+    /// only knew about file-based IPC; agents reading those stale docs missed half the surface.
     static func bootstrapPrompt(targetPath: String) -> String {
         """
-        Read the 'Tado A2A' section from ./CLAUDE.md and the 'Tado A2A', \
-        'Contacting Other Agents', 'Deploying Agents', 'Responding to Agent Requests (Mandatory)', \
-        and 'Message Origin Rules' sections from ./AGENTS.md in this directory. \
-        Then inject that documentation into the project at \(targetPath).
+        You are bootstrapping the Tado A2A (Agent-to-Agent) tooling docs into the project at \
+        \(targetPath). After this runs, every Claude Code or Codex agent that wakes up inside \
+        this project will know how to talk to its sibling terminals on the Tado canvas.
 
-        Steps:
-        1. Check \(targetPath)/CLAUDE.md \u{2014} if it exists and already has a '## Tado A2A' section, \
-        skip it. Otherwise append the Tado A2A section to the end of the file. \
-        If the file doesn't exist, create it with a '# CLAUDE.md' header first.
-        2. Check \(targetPath)/AGENTS.md \u{2014} same logic: if it exists and already has '## Tado A2A', \
-        skip. Otherwise append the Tado A2A section, the Contacting Other Agents section, \
-        the Deploying Agents section, the Responding to Agent Requests section, \
-        and the Message Origin Rules section. \
-        If the file doesn't exist, create it with a '# AGENTS.md' header first.
+        ═══════════════════════════════════════════════════════════
+        SOURCE — what to inject
+        ═══════════════════════════════════════════════════════════
+        Read these sections from the Tado repo's docs (your current cwd is the Tado repo):
+          * From ./CLAUDE.md  : '## Tado A2A (Agent-to-Agent IPC)'
+          * From ./AGENTS.md  : '## Tado A2A', '## Contacting Other Agents',
+                                '## Team Coordination', '## Deploying Agents',
+                                '## Responding to Agent Requests (Mandatory)',
+                                '## Message Origin Rules'
 
-        Preserve all existing content in both files. Only append new sections. \
-        Include tado-list, tado-read, tado-send, tado-deploy usage, target resolution rules, and examples.
+        ═══════════════════════════════════════════════════════════
+        TARGET — where it lands
+        ═══════════════════════════════════════════════════════════
+        1. \(targetPath)/CLAUDE.md \u{2014} if it has a '## Tado A2A' section already, REPLACE \
+        it with the fresh copy (older bootstraps may have written v0.4.0-shaped docs that don't \
+        mention `tado-events` or the Rust MCP bridges). If the file doesn't exist, create it \
+        with a '# CLAUDE.md' header.
+        2. \(targetPath)/AGENTS.md \u{2014} same logic for each of the six sections listed above. \
+        Replace stale copies; append fresh ones; create the file with a '# AGENTS.md' header if \
+        absent.
 
-        Critical rules to include:
-        - Agents must always identify themselves and tell the recipient how to respond back.
-        - When an agent receives a request from another agent, it MUST deliver the requested \
-        information back via tado-send. This is mandatory, not optional. The requesting agent \
-        is waiting. Do not just print the answer locally \u{2014} send it back.
+        Preserve every other section in both files. Only the listed Tado-A2A sections are \
+        in scope.
 
-        Include a full '## Deploying Agents' section with this exact documentation:
+        ═══════════════════════════════════════════════════════════
+        REQUIRED CONTENT (v0.9.0 shape)
+        ═══════════════════════════════════════════════════════════
 
-        tado-deploy is a Tado IPC command (NOT a built-in subagent tool) that creates a new \
-        terminal tile on the Tado canvas. It deploys a completely separate agent session.
+        **AXI-compact convention** (key for token efficiency \u{2014} use it everywhere):
+        Every Tado read CLI accepts `--toon`: one record per line, space-separated, no \
+        header, ~40\u{2013}45% fewer tokens than the default JSON shape. Use `--toon` by \
+        default for `tado-list`, `tado-events`, `tado-dome query`, `tado-dome code-search`, \
+        `tado-dome watch-list`, etc. Drop the flag only when you need a JSON field that's \
+        not in the compact form.
 
-        Syntax:
-        tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+        **Core CLI tools** (installed at `~/.local/bin/`):
+          tado-list [--toon]                        \u{2014} active sessions (UUID, engine, grid, status, name)
+          tado-read <target> [--tail N] [--follow] [--raw]
+          tado-send <target> <message>
+          tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+          tado-events [filter] [--toon]             \u{2014} real-time event stream from /tmp/tado-ipc/events.sock
+          tado-config {get,set,list,path,export,import} [scope] [key] [value]
+          tado-notify {send "<title>", tail}
+          tado-memory {read,note,search,path} [scope]
+          tado-dome {register,query,read,code-search,...} [--toon]
+                                                    \u{2014} scoped Dome knowledge from canvas agents
 
-        Flags:
-        --agent <name>    Agent definition from .claude/agents/<name>.md or .codex/agents/<name>.md
-        --team <name>     Assign the deployed agent to a team
-        --project <name>  Assign to a project
-        --engine          Use claude or codex (default: inherited from caller)
-        --cwd <path>      Working directory (default: inherited from caller)
+        **Target resolution** (priority order, same for `tado-read` and `tado-send`):
+          1. Exact UUID
+          2. Grid coordinates: `1,1` or `1:1` or `[1,1]`
+          3. Name substring match
 
-        Defaults are inherited from the calling session's environment variables (TADO_TEAM_NAME, \
-        TADO_PROJECT_NAME, TADO_ENGINE, TADO_PROJECT_ROOT). You only need --agent and the prompt.
+        **Real-time event bus** (NEW in v0.9.0): `tado-events "*"` subscribes to every event \
+        on the local socket; filter forms include `topic:<name>`, `session:<uuid>`, or any \
+        kind prefix (e.g. `terminal.`). Use this instead of polling `tado-list` when you need \
+        to react to teammate activity \u{2014} the socket is fed by Tado's in-process EventBus, \
+        so you see `terminal.completed`, `eternal.phaseCompleted`, `ipc.messageReceived`, and \
+        user broadcasts within milliseconds.
 
-        Examples:
-        tado-deploy "implement the auth module" --agent backend
-        tado-deploy "write unit tests for the API" --agent backend --team core
-        tado-deploy "design the landing page" --agent frontend
+        **MCP bridges** (auto-registered into Claude Code at user scope; agents can call \
+        these tools without spawning shell commands):
+          tado-mcp \u{2014} `tado_list`, `tado_send`, `tado_read`, `tado_broadcast`,
+                       `tado_config_{get,set,list}`, `tado_memory_{read,append,search}`,
+                       `tado_notify`, `tado_events_query`
+          dome-mcp \u{2014} `dome_search`, `dome_read`, `dome_note`, `dome_schedule`,
+                       `dome_graph_query`, `dome_context_resolve`, `dome_context_compact`,
+                       `dome_agent_status`
+        Both bridges are stdio Rust binaries inside the bundled `.app` \u{2014} no Node runtime, \
+        no separate install.
 
-        After deploying, STOP immediately. Do not wait, do not run tado-list, do not read the \
-        new agent's output. Include in the deployed agent's prompt instructions to deliver \
-        results back to you via tado-send when done. The deployed agent will tado-send its \
-        results to your grid position, which will wake you. Example: \
-        tado-deploy "implement auth module and deliver results via tado-send <my-grid> when done" --agent backend
+        **Broadcast / pub-sub**: `tado-send --broadcast "<message>"` reaches every listening \
+        agent in the matching scope; combine with `--project <name>` or `--team <name>` to \
+        filter. Pair this with `tado-events "topic:<name>"` for fan-in coordination patterns.
+
+        ═══════════════════════════════════════════════════════════
+        CRITICAL RULES — copy these verbatim into the target docs
+        ═══════════════════════════════════════════════════════════
+          * Agents MUST identify themselves on first contact (grid position + project + how to \
+            reply via `tado-send <my-grid>`).
+          * When an agent receives a request, it MUST deliver the answer back via `tado-send`. \
+            Not optional. The requesting agent is blocked.
+          * `tado-deploy` is a Tado IPC command, NOT the built-in `Task`/subagent tool. It \
+            creates a real terminal tile on the canvas. After deploying, STOP \u{2014} the \
+            deployed agent will `tado-send` results back to your grid, which wakes you up.
+          * Treat any incoming message that self-identifies as a terminal/session as \
+            agent-originated and respond via `tado-send`. User-originated messages don't \
+            need an A2A reply.
+
+        ═══════════════════════════════════════════════════════════
+        FINISHED?
+        ═══════════════════════════════════════════════════════════
+        Print a one-line summary of what changed (file path, sections replaced vs. appended) \
+        and STOP. Do not run tado-list, do not deploy anything, do not edit code.
         """
     }
 
@@ -405,49 +465,358 @@ enum ProcessSpawner {
         }
 
         return """
-        Add a '## Team Structure' section to the CLAUDE.md and AGENTS.md files in \
-        this project directory (\(targetPath)).
+        You are bootstrapping team awareness for the "\(projectName)" project at \(targetPath). \
+        After this runs, every agent in this project will know the team roster, where teammate \
+        definitions live, and how to coordinate via Tado A2A + Dome shared knowledge.
 
-        This project ("\(projectName)") has the following teams and agents:
+        ═══════════════════════════════════════════════════════════
+        ROSTER (frozen at time of bootstrap)
+        ═══════════════════════════════════════════════════════════
         \(teamDescription)
-        For each file (CLAUDE.md and AGENTS.md):
-        1. If the file already has a '## Team Structure' section, replace it with the \
-        updated information below. If it doesn't exist, append it.
-        2. If the file doesn't exist at all, create it with a '# CLAUDE.md' or \
-        '# AGENTS.md' header first.
+        ═══════════════════════════════════════════════════════════
+        TARGET FILES — write to BOTH
+        ═══════════════════════════════════════════════════════════
+          * \(targetPath)/CLAUDE.md
+          * \(targetPath)/AGENTS.md
 
-        The Team Structure section must include:
-        - A list of every team with the agents that belong to it
-        - For each agent, explain that it is a specialized role in the team and that \
-        the agent definition file lives at .claude/agents/<agent-id>.md or .codex/agents/<agent-id>.md
-        - A clear instruction that when an agent is working as part of a team, it should:
-          a) Know who its teammates are and what they do (read their agent definition files \
-          at .claude/agents/<name>.md to understand each teammate's role)
-          b) Use tado-list to find teammates that are currently running
-          c) When contacting a teammate, identify yourself by role and team, explain what \
-          you need, and tell them how to respond back via tado-send
-          d) When a teammate asks you for something, you MUST deliver the requested \
-          information back to them via tado-send. This is mandatory. The requesting \
-          agent is waiting for your response. Do not just work on it silently \u{2014} \
-          send the actual result back.
-          e) Use tado-deploy to bring a teammate online when you need specialized help. \
-          tado-deploy is a Tado IPC command (NOT your built-in subagent tool) that creates \
-          a new terminal tile on the Tado canvas. Syntax: \
-          tado-deploy "<prompt>" --agent <name> [--team <name>] [--project <name>] \
-          [--engine claude|codex] [--cwd <path>]. Defaults (team, project, engine, cwd) \
-          are inherited from your session. You typically only need --agent and the prompt.
-        - An example communication workflow: "I'm the 'frontend' agent on team 'core' in \
-        the \(projectName) project. I need the API types you generated. Reply with: \
-        tado-send 1,1 '<types>'" \u{2014} the recipient MUST respond with the actual types \
-        via tado-send.
-        - An example deploy workflow: the frontend agent at [1,1] needs database schema work, so it runs: \
-        tado-deploy "design the database schema for user auth. When done, deliver results via tado-send 1,1" --agent backend \
-        A new agent tile appears on the Tado canvas and begins working immediately. \
-        STOP after deploying. The deployed agent will deliver results back via tado-send, which wakes you.
+        For each file: if a '## Team Structure' section already exists, REPLACE it with the \
+        fresh content below (older bootstraps wrote a v0.4.0-shaped section that didn't \
+        mention real-time events or Dome team topics). If absent, append. If the file itself \
+        is missing, create it with a '# CLAUDE.md' or '# AGENTS.md' header first. \
+        Preserve every other section.
 
-        Preserve all existing content in both files. Only add or replace the Team Structure section.
+        ═══════════════════════════════════════════════════════════
+        REQUIRED CONTENT — '## Team Structure' (v0.9.0 shape)
+        ═══════════════════════════════════════════════════════════
+
+        **1. Roster** \u{2014} list every team with its agents. For each agent, link the \
+        definition file at `.claude/agents/<agent-id>.md` (or `.codex/agents/<agent-id>.md`).
+
+        **2. Knowing your teammates** \u{2014} every agent should:
+          a) Read teammate definition files to understand each role.
+          b) Run `tado-list` to see which teammates are currently running.
+          c) Subscribe to `tado-events "team:<your-team>"` if the work is reactive \u{2014} \
+             new in v0.9.0, this fans `terminal.completed` and `ipc.messageReceived` events \
+             from sibling tiles in real time so you don't have to poll.
+          d) Search shared team knowledge with `tado-dome query --topic team-<sanitized-name>` \
+             or via the `dome_search` MCP tool \u{2014} every team auto-seeds a Dome topic at \
+             registration that captures retros, decisions, and shared notes.
+
+        **3. Contacting a teammate** \u{2014} every first contact MUST include:
+          * Who you are (grid + project + role)
+          * What you need
+          * How to reply (`tado-send <your-grid> "<response>"`)
+
+        **4. Responding to a teammate request** (MANDATORY \u{2014} not optional):
+          * Read the request, produce the actual deliverable, send it back via `tado-send`.
+          * Don't just work silently. Don't just acknowledge. The teammate is BLOCKED until \
+            you deliver.
+
+        **5. Bringing a teammate online with `tado-deploy`**:
+          * `tado-deploy` is a Tado IPC command (NOT your built-in `Task` / subagent tool). \
+            It spawns a real terminal tile on the canvas.
+          * Syntax: `tado-deploy "<prompt>" --agent <name> [--team <name>] [--project <name>] \
+            [--engine claude|codex] [--cwd <path>]`
+          * Defaults (team, project, engine, cwd) inherit from your `TADO_*` env vars; usually \
+            you only need `--agent` and the prompt.
+          * Always include `tado-send <my-grid> "<result>"` instructions in the deployed \
+            agent's prompt. After deploying, STOP \u{2014} the deployed agent will wake you \
+            when it sends results back.
+
+        **6. Persistent team memory** (v0.9.0):
+          * Append durable team decisions and retros via `tado-dome register --topic team-<name> --note "..."` \
+            (or the `dome_note` MCP tool). Anything you write is searchable by every \
+            current and future teammate via `dome_search` and shows up in their spawn-time \
+            context preamble.
+
+        ═══════════════════════════════════════════════════════════
+        EXAMPLES (copy verbatim into the docs)
+        ═══════════════════════════════════════════════════════════
+
+        Communication \u{2014}
+          "I'm the 'frontend' agent on team 'core' in the \(projectName) project (grid [1,1]). \
+          I need the API types you generated. Reply with: tado-send 1,1 '<types>'"
+        The recipient MUST then run: `tado-send 1,1 "Here are the types: ..."` with the \
+        actual content.
+
+        Delegation \u{2014}
+          # frontend at [1,1] needs schema work
+          tado-deploy "design the database schema for user auth. When done, deliver results \
+          via tado-send 1,1" --agent backend
+          # STOP. The backend agent will tado-send results, which wakes you.
+
+        Reactive coordination \u{2014}
+          tado-events "team:core" &
+          # now your terminal sees every team-scoped event in real time
+
+        ═══════════════════════════════════════════════════════════
+        FINISHED?
+        ═══════════════════════════════════════════════════════════
+        Print which sections were replaced vs. appended in each file, then STOP.
         """
     }
+
+    /// Generate the prompt for a bootstrap agent that injects Tado's knowledge-layer docs
+    /// (Dome second brain + spawn-time context preamble + the dome-mcp / tado-mcp tool
+    /// surfaces) into the project's `CLAUDE.md` and `AGENTS.md`.
+    ///
+    /// New in v0.9.0: every Tado-spawned agent already wakes with a context preamble
+    /// drawn from Dome, but the agent has no idea it exists or how to *extend* the vault
+    /// (`tado-dome register`, `dome_note`, `dome_search`) until it reads docs that say so.
+    /// This bootstrap closes that gap — it's the third leg next to "A2A tools" and
+    /// "team awareness".
+    static func bootstrapKnowledgePrompt(
+        projectName: String,
+        projectRoot: String
+    ) -> String {
+        """
+        You are bootstrapping Tado's knowledge-layer docs into the "\(projectName)" project at \
+        \(projectRoot). After this runs, every agent that wakes up here will know the second \
+        brain (Dome) exists, what's already in it, and how to read + extend it without \
+        burning tokens on prose-shaped output.
+
+        ═══════════════════════════════════════════════════════════
+        WHY THIS MATTERS
+        ═══════════════════════════════════════════════════════════
+        Tado's "Bootstrap A2A tools" teaches an agent how to TALK to siblings. \
+        "Bootstrap team awareness" teaches it WHO its siblings are. \
+        This bootstrap teaches it what it KNOWS \u{2014} the persistent vault that survives \
+        across runs, accumulates project history, and is automatically searched + injected \
+        into every spawn's prompt.
+
+        Without this section in the project's docs, agents wake up, see the Dome context \
+        preamble in their prompt, and treat it as ambient noise instead of a queryable, \
+        writable, MEASURED knowledge base. They re-derive context every run, never write \
+        retros, never use compact AXI flags, and burn tokens reading prose-shaped JSON \
+        when one-line records would do.
+
+        ═══════════════════════════════════════════════════════════
+        TARGET FILES
+        ═══════════════════════════════════════════════════════════
+          * \(projectRoot)/CLAUDE.md
+          * \(projectRoot)/AGENTS.md
+
+        For each file: if a '## Knowledge & Memory' section already exists, REPLACE it with \
+        the fresh content below (older copies may pre-date v0.10.0's measurable retrieval \
+        + AXI-compact convention + lifecycle primitives). If absent, append. If the file \
+        itself is missing, create it with a '# CLAUDE.md' or '# AGENTS.md' header first. \
+        Preserve every other section.
+
+        ═══════════════════════════════════════════════════════════
+        REQUIRED CONTENT — '## Knowledge & Memory' (v0.10.0 shape)
+        ═══════════════════════════════════════════════════════════
+
+        **TL;DR — second-brain contract in five lines**
+          * Read with `--toon` (AXI compact); write structured retros, not freeform dumps.
+          * Every `dome_search` is logged to `retrieval_log` for measurable evaluation.
+          * Every `agent_used_context` event bumps the consumed node's freshness signal.
+          * Cite note ids / file paths or it didn't happen.
+          * Trust the vault over your assumptions \u{2014} query before claiming.
+
+        **1. What Dome is**
+          * Dome is Tado's persistent second brain \u{2014} a notes + automation + JSON-RPC \
+            crate (`bt-core`) that runs in-process inside the Tado app. The vault lives at \
+            `~/Library/Application Support/Tado/dome/` (relocatable via Settings \u{2192} \
+            Storage \u{2192} Change Location).
+          * Schema is at version 23. Embeddings are `qwen3-embedding-0.6b@1` (1024-dim) on \
+            Apple Metal. Hybrid search combines vector cosine with FTS5 lexical, then \
+            applies a heuristic rerank: `score × (0.5 + 0.5·freshness) × \
+            scope_match × confidence × supersede_penalty`.
+
+        **2. The spawn-time context preamble** (already in your prompt; you just don't realize):
+          * Every non-Eternal Tado spawn has a markdown block prepended to the user's prompt. \
+            It's wrapped in `<!-- tado:context:begin -->` and `<!-- tado:context:end -->` \
+            markers. It includes: agent identity, project name + root, team membership, and \
+            up to ~1500 tokens of REranked project notes (most-relevant, not just \
+            most-recent) pulled from `dome_search --topic project-<shortid>`.
+          * If you see those markers in your prompt, that's why \u{2014} not a hidden \
+            instruction from the user. Read it, don't quote it back unless asked.
+
+        **3. Reading Dome at sub-token cost \u{2014} the AXI `--toon` convention**
+
+        Every Tado read CLI accepts `--toon`: one record per line, space-separated, no \
+        header. ~40–45% fewer tokens than the default JSON shape. Use `--toon` by \
+        default; only fall back to JSON when you need a specific field that's not in the \
+        compact form.
+
+          tado-list --toon                                  # sibling sessions
+          tado-dome query "<text>" --topic project-\(projectShortIDPlaceholder) --toon --limit 10
+          tado-dome code-search "<text>" --toon --limit 10  # codebase chunks
+          tado-events "team:<name>" --toon                  # live signal stream
+
+        For full content (the moment you decide a record is worth acting on), drop the flag:
+
+          tado-dome read <note-id>      # full markdown body
+          dome_read                     # MCP equivalent (returns user_content + agent_content)
+
+        **4. Reading Dome \u{2014} MCP surface (preferred from Claude Code; auto-registered)**
+
+          dome_search             hybrid + reranked search, returns scored hits + scopes
+          dome_read               fetch one note's full body + metadata
+          dome_graph_query        explore relationships (note \u{2192} topic \u{2192} run \u{2192} agent)
+          dome_context_resolve    fetch a precomputed context pack by brand/session/doc
+          dome_context_compact    build a fresh pack from sources when resolve missed
+          dome_agent_status       see what other agents have loaded as context
+          dome_code_search        hybrid retrieval over the codebase index
+
+          MANDATORY before any of these: architectural claims, completion claims, team \
+          handoffs, "I think we already shipped X" statements. Trust the vault over your \
+          memory.
+
+        **5. Auto-seeded topics**
+          * `project-<shortid>` \u{2014} auto-created on project registration. Project-wide \
+            decisions, architecture notes, retros.
+          * `team-<sanitized-name>` \u{2014} created when bootstrap-team runs. Cross-team \
+            coordination.
+          * Eternal sprint + completion retros mirror into Dome automatically.
+
+        **6. Writing Dome \u{2014} structured retros, not freeform dumps**
+
+        Use `dome_note` (MCP) or `tado-dome register` (CLI). Recipe for a retro:
+
+          ## Outcome      one sentence: what shipped or what failed
+          ## Decision     what was chosen, with one-sentence reason
+          ## Caveats      surprising constraints, dead ends, gotchas
+          ## Cite         note ids, file:line refs, run ids, commit shas
+          ## Next agent should know
+                          one bullet, the trap they'll hit if they redo this
+
+        Write fact, not narrative. NO secrets, credentials, in-flight chatter, or \
+        speculation. The vault is SQLite + chunked markdown on disk; everything is \
+        retrievable + indexed.
+
+        **7. Measurable retrieval (NEW in v0.10.0)**
+
+        Every `dome_search` / `dome_recipe_apply` call writes one row to `retrieval_log`: \
+        query, ranked results, scopes, latency, pack_id. When you (or another agent) \
+        consume a context pack via `dome_context_resolve`, an `agent_used_context` event \
+        fires and:
+
+          * the consumed `graph_node`'s `last_referenced_at` bumps to now (it ranks \
+            higher in the next preamble);
+          * the matching `retrieval_log` row flips `was_consumed = 1` (this is implicit \
+            relevance feedback the upcoming `dome-eval` CLI replays).
+
+        Implication: your queries shape the next agent's preamble. Be specific \u{2014} \
+        one targeted query per intent beats five shotgun ones.
+
+        **8. Lifecycle primitives + governed answers (v0.10.0 stack)**
+
+        `graph_nodes` now carry: `confidence`, `superseded_by`, `supersedes`, `expires_at`, \
+        `archived_at`, `content_hash`, `last_referenced_at`, `entity_version`. \
+        `graph_edges` carry: `source_signal`, `signal_confidence`, `evidence_id`.
+
+        Three lifecycle MCP tools (Phase 3):
+
+          dome_supersede --old_id <id> --new_id <id> [--reason "..."]
+                         # Demotes the old node 0.3× via the supersede penalty.
+          dome_verify --node_id <id> --verdict confirmed|disputed
+                      # Lifts confidence ≥ 0.9 (confirmed) or ≤ 0.4 (disputed).
+          dome_decay --node_id <id> [--reason "..."]
+                     # Soft-archives a stale node. Hard delete is reversed-only.
+
+        Two recipe MCP tools (Phase 5 — governed answers):
+
+          dome_recipe_list [--scope global|project] [--project_id ...]
+                           # List enabled retrieval recipes.
+          dome_recipe_apply --intent_key <key> [--project_id ...]
+                            # Returns synthesized markdown + citations + missing-authority
+                            # gaps. No LLM in the loop — deterministic template render.
+
+        Three baseline recipes ship with every Tado install:
+
+          - **architecture-review** — use before making architecture decisions.
+            Surfaces prior decisions, outstanding intents, recent retros.
+          - **completion-claim** — use before claiming a feature is shipped.
+            Surfaces outcomes, retros, decisions backing the claim.
+          - **team-handoff** — use before delegating to or accepting work from
+            a teammate. Surfaces team-scoped decisions + recent retros.
+
+        Always prefer `dome_recipe_apply` over hand-crafted `dome_search` queries \
+        for these high-stakes intents — the recipe encodes the right scope, kinds, \
+        freshness window, and minimum-confidence threshold for the question.
+
+        **9. Scoped knowledge**
+          * `--scope global` — cross-project conventions ("Tado IPC conventions", \
+            "Anthropic API caching patterns").
+          * `--scope project` (default) — this codebase only; lives in \
+            `project-<shortid>`.
+          * `merged` reads include both — the spawn preamble uses merged when the \
+            user toggles "include global with project".
+
+        **10. Real-time signals + project-local memory**
+          * `tado-events "*"` streams every Tado event from `/tmp/tado-ipc/events.sock`. \
+            Filters: `topic:<name>`, `session:<uuid>`, kind prefix (`terminal.`, \
+            `eternal.`, `dispatch.`).
+          * `tado_events_query` MCP tool answers historical queries from \
+            `~/Library/Application Support/Tado/events/current.ndjson`.
+          * `<project>/.tado/memory/{project.md, notes/<ISO>-*.md}` — plain markdown \
+            mirror of project-scoped Dome content, human-readable. CLI: `tado-memory \
+            {read,note,search,path}`. MCP: `tado_memory_*`.
+
+        ═══════════════════════════════════════════════════════════
+        RECIPES — copy verbatim into the docs
+        ═══════════════════════════════════════════════════════════
+
+        ① Search before re-deriving (compact form by default) —
+          tado-dome query "framework upgrade decision" \\
+                          --topic project-\(projectShortIDPlaceholder) --toon --limit 10
+
+        ② Read full body when you've picked a hit —
+          tado-dome read <note-id>
+          # MCP equivalent: dome_read with note_id
+
+        ③ Persist a retro after finishing a task —
+          dome_note --topic project-\(projectShortIDPlaceholder) \\
+                    --title "Auth refactor — 2026-04-26 retro" \\
+                    --body "$(cat <<'EOF'
+          ## Outcome
+          Replaced session-token storage with HttpOnly cookies.
+
+          ## Decision
+          Cookies over JWTs because legal flagged token-in-localStorage as non-compliant.
+
+          ## Caveats
+          Safari 16 strips Domain= on the redirect; pin Domain explicitly.
+
+          ## Cite
+          - Sources/Auth/Session.swift:42
+          - run-id: 7f3e1a9c
+
+          ## Next agent should know
+          Don't \"fix\" the explicit Domain= attribute. Safari needs it.
+          EOF
+          )"
+
+        ④ Register cross-project conventions globally —
+          tado-dome register --scope global --topic tado-ipc-conventions \\
+                             --note "All A2A messages must self-identify on first contact ..."
+
+        ⑤ Stream live team activity —
+          tado-events "team:core" --toon | head -20
+
+        ⑥ Quick \"who's been reading what\" snapshot —
+          dome_agent_status --limit 20
+          # Combine with tado-list --toon to map back to grid positions.
+
+        ═══════════════════════════════════════════════════════════
+        FINISHED?
+        ═══════════════════════════════════════════════════════════
+        Print which sections were replaced vs. appended in each file. List the topics this \
+        project has Dome notes in (run `tado-dome query "" --topic project-\(projectShortIDPlaceholder) --toon --limit 1`). \
+        Then STOP. Do NOT start writing notes yourself — that's for the user (and \
+        future agents on real tasks) to do as work happens.
+        """
+    }
+
+    /// Placeholder used inside the knowledge-bootstrap prompt where we want the
+    /// running agent to substitute the real project short-id at execution time.
+    /// We don't have it at prompt-construction time (the project's UUID hasn't
+    /// been deterministically expanded into the 8-char short form here), and
+    /// hard-coding a fake one would mislead the agent. Keeping it as a literal
+    /// `<shortid>` placeholder keeps the example readable and the agent will
+    /// resolve via `tado-list` or env vars.
+    private static let projectShortIDPlaceholder = "<shortid>"
 
     // MARK: - Dispatch Architect
 
@@ -777,16 +1146,65 @@ enum ProcessSpawner {
         .tado/dispatch/runs/\(runID.uuidString)/plan.json. Do not create MEMORY.md if absent.
 
         ═══════════════════════════════════════════════════════════
-        STEP 9 — FINISH AND STOP
+        STEP 9 — WRITE crafted.md FOR HUMAN REVIEW
         ═══════════════════════════════════════════════════════════
-        Print a concise human-readable summary:
+        Write a human-reviewable plan summary to \(runDir)/crafted.md (this is what \
+        the user opens in Tado's Plan Review modal — keep it scannable, not exhaustive). \
+        Use this EXACT section structure so the modal's left-side index renders cleanly:
+
+        ```
+        # Dispatch — \(projectName)
+
+        ## Brief
+        <2–4 sentence restatement of the user's request, in your own words, as you \
+        understood it. Surface anything that was ambiguous and how you resolved it.>
+
+        ## Plan summary
+        - Total phases: <N>
+        - Skills authored: dispatch-<projectslug>-\(runID.uuidString.prefix(8))-phase-1 … phase-N
+        - Agents assigned: <list of agent names used>
+        - Estimated total wall-clock: <rough order-of-magnitude>
+
+        ## Phase 1: <title>
+        - **Skill:** <skill name>
+        - **Agent:** <agent name>
+        - **Engine:** <claude|codex>
+        - **Goal:** <one sentence>
+        - **Outputs:** <files / artifacts / state changes this phase produces>
+
+        ## Phase 2: <title>
+        … (one section per phase, in execution order) …
+
+        ## Risks & assumptions
+        - <bulleted list — anything that could derail the chain, dependencies on \
+          external state, things you assumed without being able to verify>
+
+        ## Acceptance criteria
+        - <bulleted list — what "this dispatch is done" looks like, the signals the \
+          user can check after the last phase completes>
+        ```
+
+        Rules:
+          - Sections in `## ` form become sidebar entries in Tado's review modal. Do not \
+            invent new top-level sections — keep to the schema above.
+          - Use sub-headings (`### `) freely inside Phase sections if you need to call \
+            out implementation notes; they render but do not appear in the sidebar.
+          - Prose. Not JSON. Not a literal copy of plan.json. The user is reading this \
+            to decide whether to approve the plan, not to debug it.
+          - Inline backticks for paths and identifiers. Fenced code blocks for any \
+            literal commands or schemas you reference.
+
+        ═══════════════════════════════════════════════════════════
+        STEP 9b — FINISH AND STOP
+        ═══════════════════════════════════════════════════════════
+        Print a concise human-readable summary in your terminal:
           - Total phases
           - Each phase's order, title, skill, agent, engine
-          - Absolute path to plan.json
-          - The exact command the user's Start button will run (for transparency)
+          - Absolute path to plan.json AND crafted.md
+          - The exact command the user's Accept button will run (for transparency)
 
-        Then STOP. Do NOT launch phase 1. Do NOT tado-deploy. Do NOT tado-send. The user will \
-        review your plan on the canvas, then click Start to kick off phase 1.
+        Then STOP. Do NOT launch phase 1. Do NOT tado-deploy. Do NOT tado-send. The user \
+        opens Tado's Plan Review modal next; once they click Accept, phase 1 spawns.
 
         ═══════════════════════════════════════════════════════════
         STEP 10 — WHEN YOU WAKE (retrospective + self-improvement)
@@ -1338,8 +1756,9 @@ enum ProcessSpawner {
           - tado-deploy anything
           - tado-send anything
           - loop or retry
-        The user will review crafted.md on the Eternal section of the project \
-        detail page and click Start (worker spawns) or Redo (re-runs you).
+        Once crafted.md lands on disk, Tado flips the run to REVIEW state and \
+        the user opens the Plan Review modal. They click Accept (worker spawns) \
+        or Re-plan (you respawn with their feedback in user-brief.md).
 
         ═══════════════════════════════════════════════════════════
         MANDATORY RULES YOU MUST INCLUDE IN crafted.md's "Hard rules"

@@ -30,6 +30,14 @@ final class RunEventWatcher {
     // exactly once per real transition.
     private var eternalWatchers: [UUID: (FileWatcher, EternalState)] = [:]
     private var dispatchWatchers: [UUID: (FileWatcher, [String: String])] = [:]
+    /// One-shot watchers per run that fire when `crafted.md` lands —
+    /// the architect's "I'm done" signal. The Eternal state.json watcher
+    /// is no help here because state.json is written by the worker,
+    /// which doesn't spawn until the user accepts the review. Keyed by
+    /// (kind, runID) so we never miss a transition; entries are torn
+    /// down after the first fire so we can't double-publish.
+    private var craftedWatchers: [String: FileWatcher] = [:]
+    private var announcedReviews: Set<String> = []
 
     init(container: ModelContainer) {
         self.container = container
@@ -58,6 +66,116 @@ final class RunEventWatcher {
     private func attachWatchersToAllRuns() {
         attachEternal()
         attachDispatch()
+        attachCraftedWatchers()
+    }
+
+    /// Attach per-run watchers that wait for `crafted.md` to land. Eternal
+    /// runs in `planning` watch the run dir; Dispatch runs in `planning`
+    /// watch the run dir. On first sight of `crafted.md` we publish a
+    /// `<kind>.awaitingReview` event, then tear the watcher down — the
+    /// modal's open/accept flow takes over from there.
+    private func attachCraftedWatchers() {
+        let eternalDescriptor = FetchDescriptor<EternalRun>()
+        let eternalRuns = (try? context.fetch(eternalDescriptor)) ?? []
+        for run in eternalRuns where run.state == "planning" || run.state == "awaitingReview" {
+            let key = "eternal:\(run.id.uuidString)"
+            if announcedReviews.contains(key) { continue }
+            if EternalService.craftedExistsOnDisk(run) {
+                publishAwaitingReview(kind: .eternal, run: run)
+                announcedReviews.insert(key)
+                continue
+            }
+            if craftedWatchers[key] != nil { continue }
+            let dir = EternalService.eternalRoot(run)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let runID = run.id
+            let watcher = FileWatcher(url: dir) { [weak self] in
+                Task { @MainActor in self?.checkEternalCrafted(runID: runID) }
+            }
+            craftedWatchers[key] = watcher
+        }
+
+        let dispatchDescriptor = FetchDescriptor<DispatchRun>()
+        let dispatchRuns = (try? context.fetch(dispatchDescriptor)) ?? []
+        for run in dispatchRuns where run.state == "planning" || run.state == "awaitingReview" {
+            let key = "dispatch:\(run.id.uuidString)"
+            if announcedReviews.contains(key) { continue }
+            if DispatchPlanService.craftedExistsOnDisk(run) {
+                publishAwaitingReview(kind: .dispatch, run: run)
+                announcedReviews.insert(key)
+                continue
+            }
+            if craftedWatchers[key] != nil { continue }
+            let dir = DispatchPlanService.dispatchRoot(run)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let runID = run.id
+            let watcher = FileWatcher(url: dir) { [weak self] in
+                Task { @MainActor in self?.checkDispatchCrafted(runID: runID) }
+            }
+            craftedWatchers[key] = watcher
+        }
+    }
+
+    private func checkEternalCrafted(runID: UUID) {
+        let descriptor = FetchDescriptor<EternalRun>()
+        guard let runs = try? context.fetch(descriptor),
+              let run = runs.first(where: { $0.id == runID }) else { return }
+        guard EternalService.craftedExistsOnDisk(run) else { return }
+        let key = "eternal:\(runID.uuidString)"
+        guard !announcedReviews.contains(key) else { return }
+        announcedReviews.insert(key)
+        publishAwaitingReview(kind: .eternal, run: run)
+        craftedWatchers[key]?.cancel()
+        craftedWatchers.removeValue(forKey: key)
+    }
+
+    private func checkDispatchCrafted(runID: UUID) {
+        let descriptor = FetchDescriptor<DispatchRun>()
+        guard let runs = try? context.fetch(descriptor),
+              let run = runs.first(where: { $0.id == runID }) else { return }
+        guard DispatchPlanService.craftedExistsOnDisk(run) else { return }
+        let key = "dispatch:\(runID.uuidString)"
+        guard !announcedReviews.contains(key) else { return }
+        announcedReviews.insert(key)
+        publishAwaitingReview(kind: .dispatch, run: run)
+        craftedWatchers[key]?.cancel()
+        craftedWatchers.removeValue(forKey: key)
+    }
+
+    private func publishAwaitingReview(kind: CraftedReviewKind, run: EternalRun) {
+        let runLabel = shortID(run.id)
+        EventBus.shared.publish(
+            TadoEvent(
+                type: "eternal.awaitingReview",
+                severity: .warning,
+                source: .init(
+                    kind: "eternal",
+                    projectID: run.project?.id,
+                    projectName: run.project?.name,
+                    runID: run.id
+                ),
+                title: "Eternal plan ready for review (\(runLabel))",
+                body: "Architect finished crafting the brief. Open Tado to accept or re-plan."
+            )
+        )
+    }
+
+    private func publishAwaitingReview(kind: CraftedReviewKind, run: DispatchRun) {
+        let runLabel = shortID(run.id)
+        EventBus.shared.publish(
+            TadoEvent(
+                type: "dispatch.awaitingReview",
+                severity: .warning,
+                source: .init(
+                    kind: "dispatch",
+                    projectID: run.project?.id,
+                    projectName: run.project?.name,
+                    runID: run.id
+                ),
+                title: "Dispatch plan ready for review (\(runLabel))",
+                body: "Architect finished planning the phases. Open Tado to accept or re-plan."
+            )
+        )
     }
 
     private func attachEternal() {
@@ -148,11 +266,24 @@ final class RunEventWatcher {
                 )
             )
             // C5: mirror the sprint retro into Dome so future
-            // architects can dome_search it (see
-            // eternalArchitectPrompt STEP 0.5).
+            // architects can dome_search it. v0.10 Phase 3 lands a
+            // structured retro alongside the legacy line — the
+            // deterministic extractor lifts each "## …" section into
+            // its own typed graph_node + provenance edge, and the
+            // deduper chains repeat retros via supersede.
             if let project = run.project {
                 let retroLine = "Sprint \(newState.sprints) complete (run \(runLabel)). Metric: \(metric). Iterations so far: \(newState.iterations). Last progress: \(newState.lastProgressNote ?? "—")"
                 DomeProjectMemory.appendOverview(for: project, line: retroLine)
+                DomeProjectMemory.appendStructuredRetro(
+                    for: project,
+                    runID: run.id,
+                    kind: "eternal-sprint",
+                    outcome: "Sprint \(newState.sprints) complete (run \(runLabel)). Iterations so far: \(newState.iterations).",
+                    decision: nil,
+                    caveats: nil,
+                    cites: ["metric: \(metric)"],
+                    nextAgentNote: newState.lastProgressNote
+                )
             }
         }
 
@@ -174,9 +305,24 @@ final class RunEventWatcher {
                     )
                 )
                 // C5: write a structured completion retro to Dome.
+                // Phase 3 ships a typed-section retro alongside the
+                // legacy line so the extractor can lift Outcome /
+                // Decision / Caveats into separate `graph_nodes`.
                 if let project = run.project {
                     let retroLine = "Eternal run \(runLabel) COMPLETED. Mode: \(newState.mode). Final sprints: \(newState.sprints). Iterations: \(newState.iterations). Final metric: \(newState.lastMetric?.display ?? "—"). Last note: \(newState.lastProgressNote ?? "—")"
                     DomeProjectMemory.appendOverview(for: project, line: retroLine)
+                    DomeProjectMemory.appendStructuredRetro(
+                        for: project,
+                        runID: run.id,
+                        kind: "eternal-completion",
+                        outcome: "Run \(runLabel) completed in mode \(newState.mode). Final: \(newState.sprints) sprints, \(newState.iterations) iterations.",
+                        decision: nil,
+                        caveats: nil,
+                        cites: [
+                            "metric: \(newState.lastMetric?.display ?? "—")"
+                        ],
+                        nextAgentNote: newState.lastProgressNote
+                    )
                 }
             case "stopped":
                 EventBus.shared.publish(
@@ -253,6 +399,23 @@ final class RunEventWatcher {
                     body: "\(newStatuses.count) phases complete."
                 )
             )
+            // Phase 3 — structured retro. The deterministic extractor
+            // lifts each section into its own typed graph_node so a
+            // future agent's `dome_search` can find "what dispatch
+            // landed for project X" without scraping freeform prose.
+            if let project = run.project {
+                let phaseList = newStatuses.keys.sorted().joined(separator: ", ")
+                DomeProjectMemory.appendStructuredRetro(
+                    for: project,
+                    runID: run.id,
+                    kind: "dispatch-completion",
+                    outcome: "Dispatch run \(runLabel) completed with \(newStatuses.count) phases.",
+                    decision: nil,
+                    caveats: nil,
+                    cites: ["phases: \(phaseList)"],
+                    nextAgentNote: nil
+                )
+            }
         }
     }
 

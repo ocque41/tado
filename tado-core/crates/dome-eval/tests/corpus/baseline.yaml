@@ -1,0 +1,523 @@
+name: "tado-baseline-v0.10"
+description: |
+  Hand-labeled baseline corpus for the v0.10.0 retrieval-rerank scaffold.
+
+  Three intent buckets that match what canvas agents actually ask:
+    - architecture-review  — "did we already decide on X?"
+    - completion-claim     — "is Y already shipped / verified?"
+    - team-handoff         — "who owns Z, what's the current state?"
+
+  The fixture is sized for CI determinism (30 docs, 30 cases): NoopEmbedder
+  is hash-based, so vector hits are noise; the corpus exercises the
+  lexical (FTS5 'porter unicode61') + heuristic-rerank path. Bodies are
+  written so the relevant terms appear directly — production fts_notes
+  indexes `content` only, not titles; making bodies the sole matching
+  signal mirrors that constraint exactly. Real-model retrieval is
+  exercised by bt-core's code_index_e2e tests, not here.
+
+project_id: "11111111-2222-3333-4444-555555555555"
+
+# alpha=0 → lexical-only convex combine. Suppresses NoopEmbedder noise
+# in CI; the real-model regression gate lives in bt-core's e2e tests.
+alpha: 0.0
+
+# Calibrated against the measured v0.10 baseline:
+#   P@5=0.193   P@10=0.097   R@10=0.967   nDCG@10=0.967
+# Each case has exactly 1 relevant doc so P@5 ceiling is 0.20, P@10 is
+# 0.10. Thresholds are set ~5-10% below the measured baseline so a real
+# rerank regression in later phases trips this immediately, but normal
+# scoring noise doesn't false-fail.
+thresholds:
+  min_precision_at_5: 0.18     # ≥ 90% of queries hit top-5
+  min_precision_at_10: 0.09    # ≥ 90% of queries hit top-10
+  min_recall_at_10: 0.90       # ≥ 90% recall
+  min_ndcg_at_10: 0.90         # rank-aware quality floor
+
+# ──────────────────────────────────────────────────────────────────────
+# DOCS — 30 fixtures grouped by topic. Bodies repeat the matching terms
+# directly so FTS5 has the hooks it needs without inflating doc length.
+# ──────────────────────────────────────────────────────────────────────
+docs:
+  # ---- Architecture decisions (project-scoped) -----------------------
+  - id: "doc-arch-auth-cookies"
+    topic: "project-11111111"
+    title: "Decision: HttpOnly cookies replace JWT in auth"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-22T10:00:00Z"
+    body: |
+      Auth cookies decision. We replace JWT bearer tokens with HttpOnly
+      Secure cookies for the auth subsystem. Driver: legal flagged
+      token-in-localStorage as non-compliant with the new
+      session-storage policy. Authentication now uses HttpOnly Secure
+      cookies. JWT replaced HttpOnly Secure session storage. References:
+      Sources/Auth/Session.swift:42 and run-id 7f3e1a9c.
+
+  - id: "doc-arch-storage-relocator"
+    topic: "project-11111111"
+    title: "Decision: storage root is relocatable via locator file"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-18T14:00:00Z"
+    body: |
+      Storage root locator decision. The storage root is now relocatable
+      via a locator file. Storage moves run pre-SwiftData on next
+      launch via a tarball backup plus atomic flip — relocatable vault
+      with tarball backup atomic flip. StorageLocationManager owns the
+      locator JSON. Why: the previous in-process move raced SwiftData's
+      autosave and corrupted two betas.
+
+  - id: "doc-arch-eventbus-routing"
+    topic: "project-11111111"
+    title: "Decision: EventBus routing is pluggable (deliverers)"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-15T09:30:00Z"
+    body: |
+      EventBus deliverers are pluggable. EventBus uses pluggable
+      deliverers (SoundPlayer, DockBadgeUpdater, SystemNotifier,
+      EventPersister, EventsSocketBridge). Adding a new reaction means
+      adding one Deliverer struct, not editing EventBus. Trade-off:
+      per-event allocation cost, accepted.
+
+  - id: "doc-arch-rust-first"
+    topic: "project-11111111"
+    title: "Decision: Rust-first for new non-UI logic"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-12T16:00:00Z"
+    body: |
+      Rust-first decision. All new non-UI logic is Rust-first: persistence,
+      IPC, settings merging, and scheduling lands in tado-core/ Rust
+      crates. Swift is for views, NSView bridges, AppKit glue. New
+      non-UI logic is Rust; views remain Swift. Bt-core is the
+      trusted-mutator daemon for the vault.
+
+  - id: "doc-arch-extension-protocol"
+    topic: "project-11111111"
+    title: "Decision: extensions register at compile time"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-10T08:00:00Z"
+    body: |
+      Extension protocol compile-time registration. The AppExtension
+      protocol plus ExtensionRegistry.all plus the matching WindowGroup
+      id in TadoApp.body. No dynamic loading for v0. Notifications,
+      Dome, CrossRunBrowser ship as compile-time WindowGroup
+      extensions. Rationale: compile-time wiring keeps the bundled .app
+      self-contained.
+
+  - id: "doc-arch-dispatch-skill-creator"
+    topic: "project-11111111"
+    title: "Decision: dispatch architect uses tado-dispatch-skill-creator"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-05T11:00:00Z"
+    body: |
+      Dispatch architect skill-creator delegation. Per-phase skill
+      creation is delegated to the dedicated tado-dispatch-skill-creator
+      skill, never the upstream /skill-creator. Rationale: upstream's
+      eval-loop bloats context and corrupts later phases of long plans.
+      The dispatch architect always delegates.
+
+  # ---- Completion claims --------------------------------------------
+  - id: "doc-done-eternal-auto"
+    topic: "project-11111111"
+    title: "Outcome: Eternal auto mode shipped in v0.8.0"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-20T19:00:00Z"
+    body: |
+      Eternal auto mode is shipped. Eternal Continuous mode now uses
+      Claude Code's --permission-mode auto with dual-layer config
+      injection. Per-phase model and effort knobs. Continuous
+      permission-mode auto dual-layer config. Sidebar redesign with
+      project grouping landed in the same release.
+
+  - id: "doc-done-rust-metal"
+    topic: "project-11111111"
+    title: "Outcome: Rust + Metal renderer replaces SwiftTerm"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-18T17:00:00Z"
+    body: |
+      Rust Metal renderer is shipped, SwiftTerm removed. Every tile
+      renders through tado-core static lib plus a Metal pipeline:
+      glyph atlas, ANSI state machine, retina, color emoji, wide chars,
+      15 ANSI palette themes, selection/copy, blinking cursor.
+      Glyph atlas Metal pipeline ANSI. SwiftTerm dependency removed.
+
+  - id: "doc-done-codebase-index"
+    topic: "project-11111111"
+    title: "Outcome: codebase indexing live in v0.10.0"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-25T10:00:00Z"
+    body: |
+      Codebase indexing is shipped tree-sitter. Tree-sitter AST chunks
+      for Swift, Rust, TS, Python with i8-quantized embeddings.
+      dome_code_search is wired end-to-end. File watcher live on every
+      save. Five new MCP tools shipped.
+
+  - id: "doc-done-mcp-rust-port"
+    topic: "project-11111111"
+    title: "Outcome: tado-mcp ported from Node to Rust"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-23T13:00:00Z"
+    body: |
+      tado-mcp Node Rust port complete. tado-mcp is now a Rust [[bin]]
+      inside the bundled .app. Zero Node runtime ships in the bundled
+      .app. Surface: 12 tools matching the prior Node implementation
+      byte-for-byte.
+
+  - id: "doc-done-extension-host"
+    topic: "project-11111111"
+    title: "Outcome: extension host with three shipped extensions"
+    owner_scope: "project"
+    knowledge_kind: "decision"
+    updated_at: "2026-04-22T08:00:00Z"
+    body: |
+      Extension host shipped with Notifications, Dome, CrossRunBrowser.
+      ExtensionRegistry.all enumerates them; TadoApp.body mounts the
+      matching WindowGroup. Onboarding overlay added to the extension
+      host shell.
+
+  # ---- Team handoff / ownership --------------------------------------
+  - id: "doc-team-renderer-owner"
+    topic: "team-renderer"
+    title: "Team: renderer team owns Metal pipeline"
+    owner_scope: "project"
+    knowledge_kind: "system"
+    updated_at: "2026-04-21T12:00:00Z"
+    body: |
+      Renderer team owns the Metal pipeline. The renderer team owns
+      Sources/Tado/Rendering/* plus the tado-terminal crate's
+      grid/perform/pty modules. Lead: agent `glyph-warden`.
+      Cross-team handoffs go through tado-send to grid 1,2.
+
+  - id: "doc-team-persistence-owner"
+    topic: "team-persistence"
+    title: "Team: persistence team owns vault + atomic IO"
+    owner_scope: "project"
+    knowledge_kind: "system"
+    updated_at: "2026-04-20T09:30:00Z"
+    body: |
+      Persistence team owns vault and atomic IO. Persistence team owns
+      Sources/Tado/Persistence/*, tado-settings, and bt-core/db. Lead:
+      agent `vault-shepherd`. Anything that writes JSON-on-disk goes
+      through AtomicStore review by this team first.
+
+  - id: "doc-team-ipc-owner"
+    topic: "team-ipc"
+    title: "Team: ipc team owns A2A surface"
+    owner_scope: "project"
+    knowledge_kind: "system"
+    updated_at: "2026-04-19T10:00:00Z"
+    body: |
+      IPC team owns the A2A surface. IPC team owns
+      Sources/Tado/Services/IPCBroker.swift, EventsSocketBridge, and
+      the tado-mcp / dome-mcp bridges. Lead: agent `wire-keeper`.
+      Coordination: tado-events "team:ipc" --toon.
+
+  - id: "doc-team-runtime-owner"
+    topic: "team-runtime"
+    title: "Team: runtime team owns scheduler + automations"
+    owner_scope: "project"
+    knowledge_kind: "system"
+    updated_at: "2026-04-17T15:00:00Z"
+    body: |
+      Runtime team owns scheduler and automations. Runtime team owns
+      bt-core's scheduler tick plus the automation table plus
+      RunEventWatcher. Lead: agent `pulse-tender`. Eternal/Dispatch run
+      coordination is on this team's plate.
+
+  - id: "doc-team-eval-owner"
+    topic: "team-eval"
+    title: "Team: eval team owns dome-eval + corpus"
+    owner_scope: "project"
+    knowledge_kind: "system"
+    updated_at: "2026-04-25T11:00:00Z"
+    body: |
+      Eval team owns dome-eval and the corpus. Eval team owns the
+      dome-eval Rust [[bin]] plus the hand-labeled corpus under
+      tado-core/crates/dome-eval/tests/corpus/. Lead: agent
+      `metric-warden`. Reviews every retrieval-rerank PR.
+
+  # ---- Knowledge / Dome conventions (global) -------------------------
+  - id: "doc-conv-axi-toon"
+    topic: "tado-conventions"
+    title: "Convention: --toon for token-efficient bulk reads"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-04-25T08:00:00Z"
+    body: |
+      AXI toon convention compact CLI. Every Tado read CLI accepts
+      --toon: one record per line, space-separated, no header. ~40-45%
+      fewer tokens than JSON. Use --toon by default for tado-list,
+      tado-events, tado-dome query, tado-dome code-search.
+
+  - id: "doc-conv-dome-write-barrier"
+    topic: "tado-conventions"
+    title: "Convention: Dome write barrier between user.md and agent.md"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-04-22T09:00:00Z"
+    body: |
+      Dome write barrier between user and agent. bt-core enforces a
+      write barrier: UI writes go to user.md only, agents write
+      agent.md via MCP. Crossing the write barrier requires an explicit
+      token capability. Don't bypass; deeply tested.
+
+  - id: "doc-conv-no-watchdogs"
+    topic: "tado-conventions"
+    title: "Convention: no watchdogs / no dispatch safety systems"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-04-20T12:00:00Z"
+    body: |
+      No watchdogs auto-retry dispatch are forbidden. Do not propose
+      watchdogs, auto-retry, or timeouts for the dispatch chain.
+      Failures bubble up and stay visible. Adding safety systems hides
+      regressions and costs us debug fidelity.
+
+  - id: "doc-conv-rfc3339-timestamps"
+    topic: "tado-conventions"
+    title: "Convention: timestamps are RFC3339 in Z"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-04-15T10:00:00Z"
+    body: |
+      Timestamps RFC3339 UTC. All on-disk timestamps are RFC3339 with
+      explicit Z (UTC). SQLite's datetime('now') native form is parsed
+      as a fallback for legacy rows. Never write naive local-time
+      strings.
+
+  - id: "doc-conv-write-explicit-paths"
+    topic: "tado-conventions"
+    title: "Convention: stage commits by explicit path"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-04-12T14:00:00Z"
+    body: |
+      Git add explicit path no -A. Never run git add -A. Stage paths
+      explicitly. Why: avoids accidentally committing secrets, runtime
+      state under .tado/eternal/ or .tado/dispatch/, or large generated
+      artifacts.
+
+  - id: "doc-conv-bootstrap-knowledge"
+    topic: "tado-conventions"
+    title: "Convention: re-run Bootstrap knowledge layer per release"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-04-25T09:30:00Z"
+    body: |
+      Bootstrap knowledge layer re-run per release. Existing projects
+      re-run Bootstrap knowledge layer when a Tado release ships new
+      agent contracts. The prompt is rewritten in ProcessSpawner.swift
+      each release; older bootstraps go stale.
+
+  # ---- Distractor docs (semantically near, not relevant) -------------
+  - id: "doc-distractor-cookie-banner"
+    topic: "marketing"
+    title: "Cookie banner copy review"
+    owner_scope: "project"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-03-01T10:00:00Z"
+    body: |
+      Marketing review of the cookie banner copy for the public site.
+      Wording change suggestions for GDPR consent box. Note: this is
+      about the marketing site, not the auth subsystem cookies.
+
+  - id: "doc-distractor-jwt-history"
+    topic: "history"
+    title: "Historical: why we tried JWT in 2024"
+    owner_scope: "project"
+    knowledge_kind: "knowledge"
+    updated_at: "2025-09-15T10:00:00Z"
+    body: |
+      Historical note. Back in 2024 we adopted JWT bearer tokens
+      because they were the AWS Cognito recommendation. That decision
+      was reversed in 2026 — see the auth cookie decision note instead.
+
+  - id: "doc-distractor-old-storage"
+    topic: "history"
+    title: "Historical: pre-relocator vault layout"
+    owner_scope: "project"
+    knowledge_kind: "knowledge"
+    updated_at: "2025-12-01T10:00:00Z"
+    body: |
+      Pre-v0.9.0 vault layout: storage was hard-coded to
+      ~/Library/Application Support/Tado/. The relocator landed in
+      v0.9.0; this note is retained for historical archeology.
+
+  - id: "doc-distractor-old-eternal"
+    topic: "history"
+    title: "Historical: pre-auto-mode Eternal"
+    owner_scope: "project"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-01-10T10:00:00Z"
+    body: |
+      Before v0.8.0, Eternal Continuous required users to approve every
+      tool call. The v0.8.0 release introduced auto mode with dual-layer
+      config injection.
+
+  - id: "doc-distractor-render-perf"
+    topic: "perf"
+    title: "Render perf notes from v0.5"
+    owner_scope: "project"
+    knowledge_kind: "knowledge"
+    updated_at: "2026-02-15T10:00:00Z"
+    body: |
+      Pre-Metal renderer perf notes. SwiftTerm-era benchmarks. Replaced
+      by Metal renderer in v0.7.0 — kept for archeology only.
+
+  - id: "doc-distractor-team-old-renderer"
+    topic: "team-old-renderer"
+    title: "Old team: SwiftTerm wrappers"
+    owner_scope: "project"
+    knowledge_kind: "system"
+    updated_at: "2025-11-01T10:00:00Z"
+    body: |
+      Pre-Metal renderer team. Owned the SwiftTerm wrappers. Disbanded
+      after the renderer rewrite; their work is now under the renderer
+      team.
+
+  - id: "doc-distractor-bt-core-name"
+    topic: "history"
+    title: "Why the crate is named bt-core"
+    owner_scope: "global"
+    knowledge_kind: "knowledge"
+    updated_at: "2025-10-15T10:00:00Z"
+    body: |
+      The bt-core crate was migrated from Dome's own workspace into
+      Tado's during foundation-v2. The bt- prefix is preserved
+      intentionally — renaming would cost a wide mechanical refactor
+      with zero user benefit.
+
+# ──────────────────────────────────────────────────────────────────────
+# CASES — 30 labeled queries across the three intent buckets.
+# ──────────────────────────────────────────────────────────────────────
+cases:
+  # ---- Architecture queries ------------------------------------------
+  - id: "arch-auth-cookies"
+    query: "auth cookies decision"
+    relevant_doc_ids: ["doc-arch-auth-cookies"]
+
+  - id: "arch-jwt-replacement"
+    query: "JWT replaced HttpOnly Secure session"
+    relevant_doc_ids: ["doc-arch-auth-cookies"]
+
+  - id: "arch-storage-locator"
+    query: "storage root locator"
+    relevant_doc_ids: ["doc-arch-storage-relocator"]
+
+  - id: "arch-relocatable-vault"
+    query: "relocatable vault tarball backup atomic flip"
+    relevant_doc_ids: ["doc-arch-storage-relocator"]
+
+  - id: "arch-eventbus-deliverers"
+    query: "EventBus deliverers pluggable"
+    relevant_doc_ids: ["doc-arch-eventbus-routing"]
+
+  - id: "arch-rust-first"
+    query: "Rust-first persistence IPC settings"
+    relevant_doc_ids: ["doc-arch-rust-first"]
+
+  - id: "arch-extension-host"
+    query: "extension protocol compile-time WindowGroup"
+    relevant_doc_ids: ["doc-arch-extension-protocol"]
+
+  - id: "arch-dispatch-skill"
+    query: "dispatch architect skill-creator delegation"
+    relevant_doc_ids: ["doc-arch-dispatch-skill-creator"]
+
+  - id: "arch-rust-or-swift"
+    query: "Rust new non-UI logic Swift views"
+    relevant_doc_ids: ["doc-arch-rust-first"]
+
+  - id: "arch-dome-write-barrier"
+    query: "Dome write barrier user agent"
+    relevant_doc_ids: ["doc-conv-dome-write-barrier"]
+
+  # ---- Completion-claim queries --------------------------------------
+  - id: "done-auto-mode"
+    query: "Eternal auto mode shipped permission-mode"
+    relevant_doc_ids: ["doc-done-eternal-auto"]
+
+  - id: "done-rust-metal"
+    query: "Rust Metal renderer SwiftTerm removed"
+    relevant_doc_ids: ["doc-done-rust-metal"]
+
+  - id: "done-codebase-index-shipped"
+    query: "codebase indexing tree-sitter shipped"
+    relevant_doc_ids: ["doc-done-codebase-index"]
+
+  - id: "done-mcp-rust"
+    query: "tado-mcp Node Rust port"
+    relevant_doc_ids: ["doc-done-mcp-rust-port"]
+
+  - id: "done-extension-host"
+    query: "extension host shipped Notifications Dome"
+    relevant_doc_ids: ["doc-done-extension-host"]
+
+  - id: "done-glyph-atlas"
+    query: "glyph atlas Metal pipeline ANSI"
+    relevant_doc_ids: ["doc-done-rust-metal"]
+
+  - id: "done-dome-code-search"
+    query: "dome_code_search wired end-to-end"
+    relevant_doc_ids: ["doc-done-codebase-index"]
+
+  - id: "done-zero-node"
+    query: "zero Node runtime bundled .app"
+    relevant_doc_ids: ["doc-done-mcp-rust-port"]
+
+  - id: "done-onboarding-overlay"
+    query: "onboarding overlay extension host"
+    relevant_doc_ids: ["doc-done-extension-host"]
+
+  - id: "done-eternal-permission"
+    query: "Continuous permission-mode auto dual-layer"
+    relevant_doc_ids: ["doc-done-eternal-auto"]
+
+  # ---- Team-handoff queries ------------------------------------------
+  - id: "team-renderer-owner"
+    query: "renderer team Metal pipeline owner"
+    relevant_doc_ids: ["doc-team-renderer-owner"]
+
+  - id: "team-persistence-owner"
+    query: "persistence team vault atomic IO"
+    relevant_doc_ids: ["doc-team-persistence-owner"]
+
+  - id: "team-ipc-owner"
+    query: "ipc team A2A surface tado-mcp"
+    relevant_doc_ids: ["doc-team-ipc-owner"]
+
+  - id: "team-runtime-owner"
+    query: "runtime team scheduler automations"
+    relevant_doc_ids: ["doc-team-runtime-owner"]
+
+  - id: "team-eval-owner"
+    query: "eval team dome-eval corpus"
+    relevant_doc_ids: ["doc-team-eval-owner"]
+
+  - id: "conv-axi-toon"
+    query: "AXI toon convention compact CLI"
+    relevant_doc_ids: ["doc-conv-axi-toon"]
+
+  - id: "conv-no-watchdogs"
+    query: "watchdogs auto-retry dispatch forbidden"
+    relevant_doc_ids: ["doc-conv-no-watchdogs"]
+
+  - id: "conv-rfc3339"
+    query: "timestamps RFC3339 UTC"
+    relevant_doc_ids: ["doc-conv-rfc3339-timestamps"]
+
+  - id: "conv-explicit-stage"
+    query: "git add explicit path no -A"
+    relevant_doc_ids: ["doc-conv-write-explicit-paths"]
+
+  - id: "conv-bootstrap-rerun"
+    query: "Bootstrap knowledge layer re-run release"
+    relevant_doc_ids: ["doc-conv-bootstrap-knowledge"]

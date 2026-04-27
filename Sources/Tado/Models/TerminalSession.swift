@@ -11,8 +11,8 @@ enum SessionStatus: String, Equatable {
     /// The agent is actively asking the user a question / presenting a
     /// plan and awaiting an explicit response (yes/no, plan approval,
     /// numbered selection). Detected by scraping the bottom of the
-    /// grid for selector arrows (`❯`), `(y/n)` markers, plan-approval
-    /// language. Higher-urgency: SystemNotifier + sound by default.
+    /// grid for `(y/n)` markers and plan-approval language. Higher-
+    /// urgency: SystemNotifier + sound by default.
     case awaitingResponse
     case completed
     case failed
@@ -267,8 +267,28 @@ final class TerminalSession: Identifiable {
     /// eternal tiles don't have this problem because nothing auto-drains
     /// them; their `promptQueue` only fills via explicit
     /// `enqueueOrSend` from forward mode or IPC.
+    ///
+    /// **Internal-mode eternal workers also drain on `.awaitingResponse`**
+    /// — defensively, in case a real selector menu / y-n prompt slips
+    /// through `--permission-mode auto`. Auto mode is supposed to keep
+    /// the worker out of those states, but a bespoke hook or tool
+    /// could still gate one. Typing the continuation prompt over an
+    /// interactive prompt is benign in auto mode (it either escapes
+    /// the menu or types harmless characters), and the alternative —
+    /// the worker hanging silently with a queued continuation — is
+    /// the exact failure mode the dual-layer continuation was built
+    /// to avoid.
     func drainQueueIfReady() {
-        guard status == .needsInput, !promptQueue.isEmpty else { return }
+        let canDrain: Bool
+        if status == .needsInput {
+            canDrain = true
+        } else if status == .awaitingResponse,
+                  isEternalWorker, eternalLoopKind == "internal" {
+            canDrain = true
+        } else {
+            canDrain = false
+        }
+        guard canDrain, !promptQueue.isEmpty else { return }
         if userInputCooldownActive {
             return
         }
@@ -380,9 +400,19 @@ final class TerminalSession: Identifiable {
     /// false negatives leave the user thinking nothing is asking for
     /// their attention.
     ///
+    /// **Why `❯` (U+276F) is NOT a marker:** Claude Code v2.x uses
+    /// that character as the always-on input prompt indicator inside
+    /// its idle input box, NOT only as a selector arrow. Treating it
+    /// as awaiting-response was load-bearing for one bug: it kept an
+    /// internal-mode Eternal worker's `drainQueueIfReady` from ever
+    /// firing the initial brief — claude booted, settled at the input
+    /// prompt with `❯` showing, status flipped to `.awaitingResponse`
+    /// instead of `.needsInput`, and the queued sprint/mega prompt
+    /// sat there forever. Real awaiting-response cases (plan approval,
+    /// y/n confirmations, numbered selectors with prose) still get
+    /// caught by the markers below.
+    ///
     /// Markers (any one is sufficient):
-    ///   - `❯` (U+276F) — the heavy right-pointing angle bracket used
-    ///     by Claude Code's numbered selectors and Codex's prompts.
     ///   - `(y/n)`, `(Y/n)`, `(y/N)`, `[y/n]`, `(yes/no)` — generic
     ///     CLI prompts.
     ///   - `Approve plan`, `Do you want`, `Press Enter`, `Continue?`,
@@ -421,7 +451,6 @@ final class TerminalSession: Identifiable {
     /// Case-sensitive markers — kept separate so we don't lowercase
     /// every scan when the symbol-only markers can short-circuit.
     private static let awaitingResponseMarkers: [String] = [
-        "❯",
         "(y/n)",
         "(Y/n)",
         "(y/N)",

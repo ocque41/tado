@@ -9,10 +9,13 @@ import SwiftData
 struct NewProjectSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query private var appSettingsList: [AppSettings]
 
     @State private var name: String = ""
     @State private var path: String = ""
     @FocusState private var nameFocused: Bool
+
+    private var appSettings: AppSettings? { appSettingsList.first }
 
     private var canCreate: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !path.isEmpty
@@ -160,6 +163,36 @@ struct NewProjectSheet: View {
         // the project still works; the first agent note or user
         // note will create the topic lazily.
         DomeProjectMemory.seedOverview(for: project)
+
+        // C3 (Phase 3): Register the project for code indexing and
+        // kick off a full rebuild on a detached task. Runs for many
+        // minutes on a multi-thousand-file project — the user can
+        // start using the app immediately while indexing proceeds in
+        // the background. Status is poll-able via
+        // `DomeRpcClient.codeIndexStatus`.
+        let projectID = project.id.uuidString.lowercased()
+        let projectName = project.name
+        let projectRoot = project.rootPath
+        // Honor the per-user kill switch — if code indexing is OFF,
+        // we still register the project (so flipping the switch on
+        // later picks it up via `code.watch.resume_all`), but skip
+        // the immediate full index + watcher start.
+        let codeIndexingOn = appSettings?.codeIndexingEnabled ?? true
+        Task.detached(priority: .background) {
+            DomeRpcClient.codeRegisterProject(
+                projectID: projectID,
+                name: projectName,
+                rootPath: projectRoot,
+                enabled: codeIndexingOn
+            )
+            guard codeIndexingOn else { return }
+            _ = DomeRpcClient.codeIndexProject(projectID: projectID, fullRebuild: true)
+            // Phase 4: keep the index live by file-watching the
+            // project root. The watcher debounces 500 ms and only
+            // re-embeds files whose SHA actually changed, so it's
+            // cheap even for large projects.
+            DomeRpcClient.codeWatchStart(projectID: projectID)
+        }
 
         dismiss()
     }

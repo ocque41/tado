@@ -175,7 +175,7 @@ pub fn f32_vec_to_bytes(v: &[f32]) -> Vec<u8> {
 /// Inverse of [`f32_vec_to_bytes`]. Returns an empty vec if the byte
 /// length isn't a multiple of 4.
 pub fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Vec::new();
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);

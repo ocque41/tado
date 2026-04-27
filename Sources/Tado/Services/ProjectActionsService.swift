@@ -123,6 +123,46 @@ enum ProjectActionsService {
         appState.currentView = .canvas
     }
 
+    /// Spawn a tile that injects Tado's knowledge-layer docs (Dome second
+    /// brain + spawn-time context preamble + the `dome-mcp` / `tado-mcp`
+    /// MCP tool surfaces) into the project's CLAUDE.md and AGENTS.md.
+    ///
+    /// Parallel to `bootstrapTools` and `bootstrapTeam` — runs from the
+    /// project root so the agent has direct access to the target docs,
+    /// inherits the project's name/path for the prompt, and the spawned
+    /// agent's own context preamble already references the same vault
+    /// it's documenting (nice closure on the loop).
+    static func bootstrapKnowledge(
+        project: Project,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager,
+        appState: AppState
+    ) {
+        let prompt = ProcessSpawner.bootstrapKnowledgePrompt(
+            projectName: project.name,
+            projectRoot: project.rootPath
+        )
+        let settings = fetchOrCreateSettings(modelContext: modelContext)
+        let index = nextAvailableGridIndex(modelContext: modelContext)
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        todo.projectID = project.id
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: project.rootPath,
+            projectName: project.name
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
     /// Tear down every session belonging to the project, then delete
     /// the project itself. Caller is responsible for clearing any
     /// `appState.activeProjectID` it owns — kept out of here so the

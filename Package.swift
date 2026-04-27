@@ -38,7 +38,12 @@ let package = Package(
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("Security"),
                 .linkedLibrary("resolv"),
-                .linkedLibrary("iconv")
+                .linkedLibrary("iconv"),
+                // bt-core's `tokenizers` crate pulls in `esaxx_fast`,
+                // which contains C++ TUs (`esaxx.o`) referencing
+                // `__cxa_throw` / `__gxx_personality_v0`. Link the
+                // C++ runtime so the Swift exec can resolve them.
+                .linkedLibrary("c++")
             ]
         ),
         .testTarget(

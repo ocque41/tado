@@ -58,7 +58,14 @@ struct ProjectSettings: Codable, Equatable {
     struct DispatchBlock: Codable, Equatable {}
 
     struct DomeBlock: Codable, Equatable {
-        var includeGlobal: Bool = true
+        /// nil = inherit (`globalSettings.includeGlobalInProject`).
+        /// .some = explicit per-project override.
+        ///
+        /// Why optional: a plain `Bool` default conflates "user
+        /// explicitly set to default" with "never set", so the merge
+        /// step silently drops the explicit value. Optional makes
+        /// explicitness representable, so toggle round-trips work.
+        var includeGlobal: Bool? = nil
         var defaultKnowledgeKind: String = "knowledge"
         var agentRegistrationEnabled: Bool = true
         var advancedWorkflowsEnabled: Bool = true

@@ -618,7 +618,7 @@ pub fn list_tasks(
         LIMIT :limit
     "#;
 
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(
         rusqlite::named_params! {
             ":status": status,
@@ -1319,7 +1319,7 @@ pub fn list_runs(
             ":status": status,
             ":limit": limit as i64,
         },
-        |row| parse_run_row(row),
+        parse_run_row,
     )?;
 
     let mut out = Vec::new();
@@ -1359,7 +1359,7 @@ pub fn list_runs_in_range(
             ":to": to.to_rfc3339(),
             ":limit": limit as i64,
         },
-        |row| parse_run_row(row),
+        parse_run_row,
     )?;
     let mut out = Vec::new();
     for row in rows {
@@ -5195,7 +5195,7 @@ pub fn list_suggestions(
             ":doc_id": doc_id,
             ":status": status,
         },
-        |row| parse_suggestion_row(row),
+        parse_suggestion_row,
     )?;
 
     let mut out = Vec::new();

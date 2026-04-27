@@ -233,6 +233,16 @@ struct TopNavBar: View {
             }) {
                 Label("Bootstrap Claude auto mode", systemImage: "lock.open.rotation")
             }
+            Button(action: {
+                ProjectActionsService.bootstrapKnowledge(
+                    project: project,
+                    modelContext: modelContext,
+                    terminalManager: terminalManager,
+                    appState: appState
+                )
+            }) {
+                Label("Bootstrap knowledge layer", systemImage: "brain.head.profile")
+            }
             Divider()
             Button(role: .destructive, action: {
                 ProjectActionsService.deleteProject(

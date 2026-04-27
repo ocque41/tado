@@ -83,6 +83,64 @@ enum DomeProjectMemory {
         }
     }
 
+    /// Phase 3 — append a structured retro that the v0.10 enrichment
+    /// pipeline can mine into a typed `graph_node` (kind=retro). The
+    /// body uses the standard recipe shape (`## Outcome`, `## Decision`,
+    /// `## Caveats`, `## Cite`) so the deterministic extractor lifts
+    /// each section into its own typed node + provenance edge.
+    ///
+    /// Retros are content-hashed by `(runID, sprintN, mode)` upstream
+    /// (RunEventWatcher dedupes before calling); duplicate calls land
+    /// as separate notes but the deduper pass chains them via
+    /// `superseded_by` so search demotes the older copy automatically.
+    static func appendStructuredRetro(
+        for project: Project,
+        runID: UUID,
+        kind: String,                // "eternal" | "dispatch"
+        outcome: String,
+        decision: String?,
+        caveats: String?,
+        cites: [String],
+        nextAgentNote: String?
+    ) {
+        let topic = topic(for: project)
+        let title = "retro-\(kind)-\(runID.uuidString.prefix(8).lowercased())-\(Self.compactStamp())"
+        let runRef = "run://\(runID.uuidString)"
+        var body = ["# Retro — \(kind) — \(project.name)", "", "## Outcome", outcome]
+        if let decision, !decision.isEmpty {
+            body.append("")
+            body.append("## Decision")
+            body.append(decision)
+        }
+        if let caveats, !caveats.isEmpty {
+            body.append("")
+            body.append("## Caveats")
+            body.append(caveats)
+        }
+        body.append("")
+        body.append("## Cite")
+        body.append("- [run](\(runRef))")
+        for cite in cites {
+            body.append("- \(cite)")
+        }
+        if let next = nextAgentNote, !next.isEmpty {
+            body.append("")
+            body.append("## Next agent should know")
+            body.append(next)
+        }
+        let bodyText = body.joined(separator: "\n")
+        Task.detached(priority: .utility) {
+            _ = DomeRpcClient.writeNote(
+                scope: .user,
+                topic: topic,
+                title: title,
+                body: bodyText,
+                domeScope: .project(id: project.id, name: project.name, rootPath: project.rootPath, includeGlobal: true),
+                knowledgeKind: "knowledge"
+            )
+        }
+    }
+
     private static func compactStamp() -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"

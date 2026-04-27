@@ -22,6 +22,8 @@ pub enum BtError {
     Auth(String),
     #[error("rpc error: {0}")]
     Rpc(String),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl BtError {
@@ -37,6 +39,7 @@ impl BtError {
             BtError::Db(_) => "ERR_DB",
             BtError::Auth(_) => "ERR_AUTH",
             BtError::Rpc(_) => "ERR_RPC",
+            BtError::Internal(_) => "ERR_INTERNAL",
         }
     }
 }

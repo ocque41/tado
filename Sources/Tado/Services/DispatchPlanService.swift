@@ -73,8 +73,24 @@ enum DispatchPlanService {
         dispatchRoot(run).appendingPathComponent("phases")
     }
 
+    /// Human-reviewable plan summary written by the architect alongside
+    /// `plan.json`. Source of truth for the Plan Review modal.
+    static func craftedFileURL(_ run: DispatchRun) -> URL {
+        dispatchRoot(run).appendingPathComponent("crafted.md")
+    }
+
     static func planExistsOnDisk(_ run: DispatchRun) -> Bool {
         FileManager.default.fileExists(atPath: planFileURL(run).path)
+    }
+
+    /// Has the architect finished writing the human-reviewable plan?
+    /// The display state machine flips a run from `planning` → `awaitingReview`
+    /// only when BOTH `plan.json` (runtime source of truth) AND `crafted.md`
+    /// (human source of truth) are on disk. They are written in the same
+    /// architect step so this is a tight window — but checking both prevents
+    /// us from showing the review modal against a half-written file.
+    static func craftedExistsOnDisk(_ run: DispatchRun) -> Bool {
+        FileManager.default.fileExists(atPath: craftedFileURL(run).path)
     }
 
     /// Number of phase JSON files in this run's `phases/` dir. Used by the
@@ -327,5 +343,28 @@ enum DispatchPlanService {
         appState.pendingNavigationID = todo.id
         appState.currentView = .canvas
         return true
+    }
+
+    /// Called from the Plan Review modal's Accept button. Architect has
+    /// finished, the user has read crafted.md, and approved the plan —
+    /// kick off phase 1 immediately. No intermediate `ready` state, no
+    /// second-click required: review IS the gate, accept IS the launch.
+    /// Returns false if plan.json or phase 1 is somehow missing (race
+    /// against architect cleanup); the modal surfaces that as a
+    /// "still planning" hint via its caller.
+    @MainActor
+    @discardableResult
+    static func acceptReview(
+        run: DispatchRun,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager,
+        appState: AppState
+    ) -> Bool {
+        return startPhaseOne(
+            run: run,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
     }
 }

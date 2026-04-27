@@ -35,3 +35,35 @@ tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net", "io-
 toml = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2"
+
+# Phase 1: real Qwen3-Embedding-0.6B in pure Rust.
+# candle is HuggingFace's Rust ML framework; the `metal` feature lights
+# up Apple Silicon GPU acceleration so 1024-dim batched inference stays
+# under ~15ms/chunk on M-series.
+candle-core = { version = "0.10", default-features = false, features = ["metal"] }
+candle-nn = { version = "0.10", default-features = false, features = ["metal"] }
+candle-transformers = { version = "0.10", default-features = false, features = ["metal"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig", "esaxx_fast"] }
+# blocking reqwest is fine — model fetch runs once at app boot on a
+# spawn_blocking task. rustls keeps us off OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "stream"] }
+
+# Phase 2: codebase indexing.
+# `ignore` honors .gitignore + .ignore + custom skiplists during the
+# project walk. Battle-tested via ripgrep.
+ignore = "0.4"
+# tree-sitter for AST-aware code chunking. We cover the four languages
+# this codebase cares about most (Swift/Rust/TS/Python) — line-window
+# fallback handles every other extension. Adding more grammars is a
+# one-line Cargo addition + one match arm in `code::language`.
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.25"
+
+# Phase 4: file-watch incremental indexing.
+# `notify` is the same crate ripgrep / cargo-watch use. We pin to the
+# stable 8.x line — 9.x is rc and not yet hardened on macOS FSEvents.
+notify = "8"
+notify-debouncer-mini = "0.6"

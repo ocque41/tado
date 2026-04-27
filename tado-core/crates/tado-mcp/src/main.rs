@@ -490,8 +490,7 @@ fn resolve_target<'a>(
 
     // Grid coordinates: strip brackets + spaces, split on `,` or `:`.
     let cleaned = t
-        .replace('[', "")
-        .replace(']', "")
+        .replace(['[', ']'], "")
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect::<String>();

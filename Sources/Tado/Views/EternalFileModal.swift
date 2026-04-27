@@ -4,9 +4,14 @@ import SwiftData
 /// Brief editor for Eternal — 1:1 structural peer of `DispatchFileModal`.
 ///
 /// Accept → writes the brief into `project.eternalMarkdown`, transitions
-/// `eternalState = "planning"`, and spawns the Eternal Architect (Opus 4.7
-/// max effort). The section on the project detail page then flips to the
-/// planning card until crafted.md lands, at which point it flips to ready.
+/// `eternalState = "planning"`, and spawns the Eternal Architect using the
+/// user's Settings model + effort. The section on the project detail page
+/// then flips to the planning card until crafted.md lands, at which point
+/// it flips to ready.
+///
+/// Best results come from picking Opus 4.7 + Auto effort in Settings and
+/// running "Bootstrap Claude auto mode" on the project first; the modal
+/// surfaces that recommendation in its footer.
 ///
 /// No TASK/EVALUATE/IMPROVE fields here anymore — the architect derives
 /// those from the raw brief. Fields the user sets:
@@ -125,16 +130,30 @@ struct EternalFileModal: View {
     }
 
     private var footerHint: some View {
-        HStack {
-            Text("Accept spawns the Eternal Architect (Opus 4.7 max) on the canvas. It will craft the worker brief; you then click Start on the Eternal section.")
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textSecondary)
-                .lineLimit(2)
-            Spacer()
-            Text("⌘↩ to Accept · Esc to Cancel")
-                .font(Typography.monoCaption)
-                .foregroundStyle(Palette.textTertiary)
-                .fixedSize()
+        VStack(alignment: .leading, spacing: 6) {
+            // Recommendation banner — explains the canonical "good" config
+            // up front so the user doesn't discover the wrong combination
+            // by stalling out hours into a Continuous run.
+            HStack(spacing: 6) {
+                Image(systemName: "lightbulb.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.accent)
+                Text("Best results: pick Opus 4.7 + Auto effort in Settings and run \"Bootstrap Claude auto mode\" on the project. Architect and worker both follow your Settings picks — Tado no longer pins Opus 4.7 / max effort behind your back.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Text("Accept spawns the Eternal Architect on the canvas using your Settings model + effort. It crafts the worker brief; you then review the plan and click Accept to launch the worker.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
+                    .lineLimit(2)
+                Spacer()
+                Text("⌘↩ to Accept · Esc to Cancel")
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textTertiary)
+                    .fixedSize()
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -193,6 +212,13 @@ struct EternalFileModal: View {
                     .foregroundStyle(Palette.textPrimary)
                     .scrollContentBackground(.hidden)
                     .padding(10)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.command) || press.modifiers.contains(.control) else {
+                            return .ignored
+                        }
+                        acceptTapped()
+                        return .handled
+                    }
             }
             .frame(minHeight: 200)
             .background(Palette.surfaceElevated)
@@ -251,9 +277,9 @@ struct EternalFileModal: View {
 
     private var loopKindSubtitle: String {
         if loopKind == "internal" {
-            return "Uses `--permission-mode auto` — Claude Code's classifier-gated autonomy mode, available for Opus 4.7 on Max/Teams/Enterprise plans. A classifier judges each tool call so the worker runs without babysitting. Run \"Bootstrap Claude auto mode\" from the project ⋯ menu first to install the required settings. Tado pins Opus 4.7 for Continuous runs automatically."
+            return "Uses `--permission-mode auto` — Claude Code's classifier-gated autonomy mode, available for Opus 4.7 on Max/Teams/Enterprise plans. A classifier judges each tool call so the worker runs without babysitting. Run \"Bootstrap Claude auto mode\" from the project ⋯ menu first to install the required settings. Architect and worker both follow your Settings model + effort picks — works best with Opus 4.7 + Auto effort selected; smaller models or non-auto effort can stall on the auto-mode classifier."
         } else {
-            return "Fresh `claude -p` per turn via the eternal-loop.sh wrapper. Model follows Settings; the bypass toggle below controls per-turn `--dangerously-skip-permissions`."
+            return "Fresh `claude -p` per turn via the eternal-loop.sh wrapper. Architect and worker both follow your Settings model + effort picks; the bypass toggle below controls per-turn `--dangerously-skip-permissions`."
         }
     }
 

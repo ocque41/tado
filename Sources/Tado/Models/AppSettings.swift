@@ -8,8 +8,8 @@ final class AppSettings {
     var gridColumns: Int
     var claudeModeRaw: String = ClaudeMode.askPermissions.rawValue
     var codexModeRaw: String = CodexMode.defaultPermissions.rawValue
-    var claudeEffortRaw: String = ClaudeEffort.high.rawValue
-    var codexEffortRaw: String = CodexEffort.high.rawValue
+    var claudeEffortRaw: String = ClaudeEffort.auto.rawValue
+    var codexEffortRaw: String = CodexEffort.auto.rawValue
     var claudeModelRaw: String = ClaudeModel.opus47.rawValue
     var codexModelRaw: String = CodexModel.gpt55.rawValue
 
@@ -82,6 +82,15 @@ final class AppSettings {
     // the flag for idempotence.
     var didMigrateToMultipleRuns: Bool = false
 
+    // Phase 4: per-user kill switch for code-index file watching.
+    // Defaults true so the auto-watch path the NewProjectSheet sets up
+    // actually does its job. Toggling off in Settings stops every
+    // active watcher and prevents future ones from starting; flipping
+    // back on calls `code.watch.resume_all` to reattach. Indexed
+    // chunks already on disk stay queryable via `dome_code_search`
+    // either way.
+    var codeIndexingEnabled: Bool = true
+
     // How terminal bells (0x07) are surfaced on the Metal path. Stored
     // as a raw string so SwiftData schema stays stable if we add modes
     // later. Default matches Terminal.app: audible-only.
@@ -97,8 +106,8 @@ final class AppSettings {
         self.gridColumns = 3
         self.claudeModeRaw = ClaudeMode.askPermissions.rawValue
         self.codexModeRaw = CodexMode.defaultPermissions.rawValue
-        self.claudeEffortRaw = ClaudeEffort.high.rawValue
-        self.codexEffortRaw = CodexEffort.high.rawValue
+        self.claudeEffortRaw = ClaudeEffort.auto.rawValue
+        self.codexEffortRaw = CodexEffort.auto.rawValue
         self.claudeModelRaw = ClaudeModel.opus47.rawValue
         self.codexModelRaw = CodexModel.gpt55.rawValue
     }
@@ -119,12 +128,12 @@ final class AppSettings {
     }
 
     var claudeEffort: ClaudeEffort {
-        get { ClaudeEffort(rawValue: claudeEffortRaw) ?? .high }
+        get { ClaudeEffort(rawValue: claudeEffortRaw) ?? .auto }
         set { claudeEffortRaw = newValue.rawValue }
     }
 
     var codexEffort: CodexEffort {
-        get { CodexEffort(rawValue: codexEffortRaw) ?? .high }
+        get { CodexEffort(rawValue: codexEffortRaw) ?? .auto }
         set { codexEffortRaw = newValue.rawValue }
     }
 

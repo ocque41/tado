@@ -388,6 +388,39 @@ char *tado_settings_read_json(const char *path_cstr);
 int tado_dome_start(const char *vault_cstr);
 
 /**
+ * JSON status snapshot for the Dome onboarding view. Always returns a
+ * payload, never null — Swift uses the `ready` flag to decide whether
+ * to gate embed-dependent UI behind the download panel.
+ *
+ * Byte counts come from on-disk file sizes, not from the in-memory
+ * progress object — that way a partially-downloaded model reported
+ * from a previous run shows up at its real percentage instead of
+ * resetting to 0% on every app restart.
+ */
+char *tado_dome_model_status(void);
+
+/**
+ * Kick off the model download in a background thread. Idempotent —
+ * repeated calls observe the same progress object. Returns 0 on
+ * successful spawn (or "already running"), 2 if the daemon hasn't
+ * been booted yet.
+ *
+ * Resumable: if a previous run partially downloaded `model.safetensors`,
+ * this thread sends a `Range: bytes=<existing>-` header and appends
+ * rather than restarting from byte 0.
+ */
+int tado_dome_model_fetch_start(void);
+
+/**
+ * Tell Dome to load the model from a user-supplied directory (the
+ * onboarding panel's "I have the file" path picker writes here when
+ * the user is offline or behind a proxy). Validates that all
+ * required files are present, then loads them. Returns 0 on success,
+ * 2 on missing daemon, 3 on invalid path / load failure.
+ */
+int tado_dome_model_set_path(const char *path_cstr);
+
+/**
  * Shut down the Dome daemon.
  *
  * Phase-2 stub: the OS reclaims the runtime on app exit and the
@@ -577,11 +610,249 @@ char *tado_dome_agent_status_scoped(int limit,
                                     bool include_global);
 
 /**
+ * Fetch recent retrieval_log rows for the Knowledge → System surface.
+ * Optional filters: `project_id_cstr` (null = all projects),
+ * `tool_cstr` (null = all tools, e.g. "dome_search"). Returns the
+ * JSON envelope `{ rows, n, consumption_rate, mean_latency_ms }`.
+ * Caller frees with `tado_string_free`.
+ */
+char *tado_dome_retrieval_log_recent(int limit,
+                                     const char *project_id_cstr,
+                                     const char *tool_cstr);
+
+/**
+ * Phase 3 — supersede `old_id` with `new_id`. Returns
+ * `{ old_id, new_id, reason }` JSON on success, NULL on failure.
+ * Caller frees with `tado_string_free`.
+ */
+char *tado_dome_node_supersede(const char *old_id_cstr,
+                               const char *new_id_cstr,
+                               const char *reason_cstr);
+
+/**
+ * Phase 3 — confirm or dispute a graph_node. `verdict` must be
+ * 'confirmed' or 'disputed'. Caller frees with `tado_string_free`.
+ */
+char *tado_dome_node_verify(const char *node_id_cstr,
+                            const char *verdict_cstr,
+                            const char *agent_id_cstr,
+                            const char *reason_cstr);
+
+/**
+ * Phase 3 — soft-archive a graph_node. Caller frees with
+ * `tado_string_free`.
+ */
+char *tado_dome_node_decay(const char *node_id_cstr,
+                           const char *reason_cstr);
+
+/**
+ * Phase 3 — read enrichment queue depth for the Knowledge → System
+ * backfill chip. Returns `{ queued, running, done, failed }` JSON.
+ * Caller frees with `tado_string_free`.
+ */
+char *tado_dome_enrichment_queue_depth(void);
+
+/**
+ * Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
+ * to `DomeContextPreamble.build(for:)` once the Swift composer adopts
+ * the deterministic relative-time formatter. JSON args shape:
+ *   { "agent_name", "project_name", "project_id", "project_root",
+ *     "team_name", "teammates": ["..."] }
+ * Returns the rendered preamble or NULL if nothing to render.
+ * Caller frees with `tado_string_free`.
+ */
+char *tado_dome_compose_spawn_preamble(const char *json_args_cstr);
+
+/**
+ * Phase 5 — seed the three default retrieval recipes at global scope
+ * (architecture-review, completion-claim, team-handoff). Idempotent.
+ * Returns `{ "seeded": N }` JSON or NULL on failure.
+ * Caller frees with `tado_string_free`.
+ */
+char *tado_dome_recipe_seed_defaults(void);
+
+/**
+ * Resolve the latest context pack for a brand/session/doc tuple.
+ * Wraps `service.context_resolve(...)`. Returns the JSON envelope
+ * bt-core produces, or null on daemon-down / failure. Caller frees
+ * with `tado_string_free`.
+ *
+ * All pointers are optional. At least one of `brand_cstr` or
+ * `session_id_cstr`/`doc_id_cstr` will typically be set; passing all
+ * nil returns whatever pack the brand-default lookup finds.
+ */
+char *tado_dome_context_resolve(const char *brand_cstr,
+                                const char *session_id_cstr,
+                                const char *doc_id_cstr,
+                                const char *mode_cstr);
+
+/**
+ * Compact a brand/session/doc context pack via
+ * `service.context_compact(...)`. Caller passes `force=true` to
+ * rebuild even if the source hash hasn't changed. Returns the
+ * produced manifest JSON or null on failure. Caller frees with
+ * `tado_string_free`.
+ */
+char *tado_dome_context_compact(const char *brand_cstr,
+                                const char *session_id_cstr,
+                                const char *doc_id_cstr,
+                                bool force);
+
+/**
  * Install the Tado-owned Claude status line script into the Dome vault.
  *
  * This does not mutate Claude settings by itself. Swift can decide how
  * aggressively to register the returned script path in user settings.
  */
 char *tado_dome_install_status_line_script(const char *vault_cstr);
+
+/**
+ * Trigger `vault.reindex` — re-runs every doc through the live
+ * embedder, upgrading legacy `noop@1` chunks to the current Qwen3
+ * model. Long-running (30-60s on 1000 notes); Swift dispatches via
+ * `Task.detached` to keep the UI responsive.
+ *
+ * Returns `{"ok": true}` on success or null on failure. Caller frees
+ * via `tado_string_free`.
+ */
+char *tado_dome_vault_reindex(void);
+
+/**
+ * Snapshot of `note_chunks` rows grouped by embedding model. Used by
+ * the Knowledge → Agent System "Embeddings" panel to show how many
+ * chunks are still on legacy embeddings.
+ *
+ * Returns JSON `{"model_counts": { "<id>@<version>": <count>, ... },
+ * "total": <count>}` or null on failure.
+ */
+char *tado_dome_vault_embedding_stats(void);
+
+/**
+ * Recursively ingest a directory as Dome notes. One note per
+ * eligible file, capped at 5000 (`capped: true` in the result if hit).
+ *
+ * Returns JSON `{"created": N, "skipped": M, "capped": <bool>}` or
+ * null on failure.
+ *
+ * # Safety
+ * `path_cstr` must be a NUL-terminated UTF-8 string. The optional
+ * pointers (`topic`, `project_id`, `project_root`) may be null.
+ */
+char *tado_dome_vault_ingest_path(const char *path_cstr,
+                                  const char *topic_cstr,
+                                  const char *owner_scope_cstr,
+                                  const char *project_id_cstr,
+                                  const char *project_root_cstr);
+
+/**
+ * Live snapshot of legacy `vault_ingest_path` progress. Caller frees
+ * the returned C string with `tado_string_free`. Always returns a
+ * JSON object — null only if the daemon hasn't booted.
+ *
+ * JSON shape: `{ running, created, skipped, total, canceled }`.
+ */
+char *tado_dome_vault_ingest_progress(void);
+
+/**
+ * Request that the in-flight ingest stop at the next file boundary.
+ * Returns 1 if an ingest was running, 0 otherwise. Idempotent.
+ */
+int tado_dome_vault_ingest_cancel(void);
+
+/**
+ * Register a project for code indexing. Idempotent.
+ *
+ * Returns JSON `{ ok, project_id, name, root_path, enabled }` or
+ * null on failure. Caller frees with `tado_string_free`.
+ *
+ * # Safety
+ * All pointers must be NUL-terminated UTF-8.
+ */
+char *tado_dome_code_register_project(const char *project_id_cstr,
+                                      const char *name_cstr,
+                                      const char *root_path_cstr,
+                                      bool enabled);
+
+/**
+ * Unregister a project from code indexing. With `purge=true`,
+ * deletes every chunk row for the project too.
+ */
+char *tado_dome_code_unregister_project(const char *project_id_cstr, bool purge);
+
+/**
+ * List every registered code project plus per-project file/chunk
+ * counts. Used by Settings → Code Indexing.
+ */
+char *tado_dome_code_list_projects(void);
+
+/**
+ * Run a full code index. Blocks for the duration of the walk +
+ * embed (minutes for a multi-thousand-file project). Swift MUST
+ * invoke from `Task.detached`.
+ *
+ * Returns the `IndexResult` JSON on success or null on failure.
+ */
+char *tado_dome_code_index_project(const char *project_id_cstr, bool full_rebuild);
+
+/**
+ * Start a file watcher for a registered project. Idempotent — a
+ * second call replaces the existing watcher for the same project.
+ * The watcher debounces 500 ms and incrementally re-embeds changed
+ * files via the same `replace_chunks_for_file` path the full
+ * indexer uses.
+ */
+char *tado_dome_code_watch_start(const char *project_id_cstr);
+
+/**
+ * Stop the file watcher for a project. No-op if no watcher was
+ * running. Returns `{ ok, project_id, watching: false, had_watcher }`.
+ */
+char *tado_dome_code_watch_stop(const char *project_id_cstr);
+
+/**
+ * List every project_id with an active watcher.
+ */
+char *tado_dome_code_watch_list(void);
+
+/**
+ * Reattach watchers for every `enabled=1` project. Called on app
+ * boot from `tado_dome_start` and on `AppSettings.codeIndexingEnabled`
+ * flipping back to `true` from Swift. Idempotent — projects that
+ * already have a watcher are skipped.
+ */
+char *tado_dome_code_watch_resume_all(void);
+
+/**
+ * Stop every active watcher in one call. Used when the per-user
+ * kill switch flips off or before vault relocation.
+ */
+char *tado_dome_code_watch_stop_all(void);
+
+/**
+ * Hybrid search across the indexed code chunks.
+ *
+ * Accepts a JSON envelope so the FFI signature stays stable as we
+ * add more knobs (project filter, language filter, alpha):
+ *
+ * ```json
+ * {
+ *   "query": "where do we spawn the PTY",
+ *   "project_ids": ["tado"],
+ *   "languages": ["rust", "swift"],
+ *   "limit": 25,
+ *   "alpha": 0.6
+ * }
+ * ```
+ *
+ * Returns the bt-core `code.search` payload as JSON, or null on
+ * failure. Caller frees with `tado_string_free`.
+ */
+char *tado_dome_code_search(const char *query_json_cstr);
+
+/**
+ * Read the live progress snapshot for an in-flight index. Cheap;
+ * safe to poll from the main thread every 250 ms.
+ */
+char *tado_dome_code_index_status(const char *project_id_cstr);
 
 #endif  /* TADO_CORE_H */

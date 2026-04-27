@@ -20,6 +20,14 @@
 //! - `2`  — invalid input (UTF-8 / JSON parse failure)
 //! - `3`  — IO error
 //! - `255` — unknown error
+//!
+//! All `unsafe extern "C"` functions here share the same contract:
+//! `*const c_char` args must be NUL-terminated valid UTF-8 (or null
+//! where individually documented), returned `*mut c_char` values are
+//! freed via `tado_string_free`. The `clippy::missing_safety_doc`
+//! lint is suppressed file-wide rather than repeating that paragraph
+//! on every entry point.
+#![allow(clippy::missing_safety_doc)]
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};

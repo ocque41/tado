@@ -317,8 +317,8 @@ final class ScopedConfig {
         }
 
         // Dome
-        if local.dome.includeGlobal != defaults.dome.includeGlobal {
-            out.dome.includeGlobal = local.dome.includeGlobal
+        if let v = local.dome.includeGlobal {
+            out.dome.includeGlobal = v
         }
         if local.dome.defaultKnowledgeKind != defaults.dome.defaultKnowledgeKind {
             out.dome.defaultKnowledgeKind = local.dome.defaultKnowledgeKind

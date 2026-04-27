@@ -1,0 +1,50 @@
+# dome-eval — measurable retrieval evaluation for Dome.
+#
+# Phase 2 of the Knowledge Catalog upgrade. Two roles:
+#
+# 1. `replay`  — reads `retrieval_log` rows that the in-process daemon
+#                wrote during real agent activity, recomputes precision@k /
+#                recall / freshness using the implicit `was_consumed` signal,
+#                and prints a regression-friendly summary. The hook for
+#                "did this week's ranking change make agents better off."
+#
+# 2. `corpus run` — runs a hand-labeled corpus of (query, scope,
+#                relevant_doc_ids) cases against a fresh in-memory vault
+#                seeded by the corpus fixture, computes precision@k +
+#                recall + nDCG, and exits non-zero on regression. The CI
+#                gate for every later phase that touches retrieval.
+#
+# 3. `explain <log_id>` — dumps the full ranking decision for one logged
+#                query: candidates, vector / lexical scores, freshness,
+#                scope-match, confidence, supersede penalty, final order.
+#                The "why is this answer first" tool.
+#
+# Lives under tado-core/crates/ and links to bt-core directly so the
+# eval harness uses the *same* search code agents use — no test-only
+# fork to drift out of sync.
+
+[package]
+name = "dome-eval"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Measurable retrieval evaluation CLI for Tado's Dome second brain."
+
+[[bin]]
+name = "dome-eval"
+path = "src/main.rs"
+
+[lib]
+name = "dome_eval"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+rusqlite = { version = "0.38.0", features = ["bundled", "chrono", "serde_json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+bt-core = { path = "../bt-core" }

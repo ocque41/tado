@@ -72,6 +72,7 @@ struct TerminalTileView: View {
                 cursorBlink: cursorBlink,
                 bellMode: bellMode,
                 isVisible: isVisible,
+                isFocused: isFocused,
                 width: isResizing ? visualWidth : session.tileWidth,
                 height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
             )
@@ -364,6 +365,7 @@ private struct StableTerminalContent: View {
     let cursorBlink: Bool
     let bellMode: BellMode
     let isVisible: Bool
+    let isFocused: Bool
     let width: CGFloat
     let height: CGFloat
 
@@ -382,6 +384,7 @@ private struct StableTerminalContent: View {
                 fontFamily: fontFamily,
                 cursorBlink: cursorBlink,
                 bellMode: bellMode,
+                isFocused: isFocused,
                 width: width,
                 height: height
             )

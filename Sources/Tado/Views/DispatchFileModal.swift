@@ -59,7 +59,7 @@ struct DispatchFileModal: View {
             // Markdown editor body
             ZStack(alignment: .topLeading) {
                 if draft.isEmpty {
-                    Text("Describe WHAT you want built and WHY — the goal, constraints, and any known context. You don't need to plan the phases or pick tools.\n\nWhen you hit Accept, a Dispatch Architect agent spawns on the canvas. It will: research the project, break the work into phases, create a dedicated skill per phase via /skill-creator, assign agents, and write the full execution plan to .tado/dispatch/. Then you click Start to launch phase 1.\n\nThe more context you give here (users, stack, priorities, done criteria), the better the plan it builds.")
+                    Text("Describe WHAT you want built and WHY — the goal, constraints, and any known context. You don't need to plan the phases or pick tools.\n\nWhen you hit Accept, a Dispatch Architect agent spawns on the canvas. It will: research the project, break the work into phases, create a dedicated skill per phase via /skill-creator, assign agents, and write the full execution plan to .tado/dispatch/. The run then flips to REVIEW so you can read crafted.md in the Plan Review modal and click Accept to dispatch phase 1.\n\nThe more context you give here (users, stack, priorities, done criteria), the better the plan it builds.")
                         .font(Typography.body)
                         .foregroundStyle(Palette.textTertiary)
                         .padding(.horizontal, 16)
@@ -72,6 +72,13 @@ struct DispatchFileModal: View {
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 10)
                     .padding(.top, 8)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.command) || press.modifiers.contains(.control) else {
+                            return .ignored
+                        }
+                        acceptTapped()
+                        return .handled
+                    }
             }
 
             Divider()

@@ -1,0 +1,11 @@
+[env]
+# Match Package.swift `platforms: [.macOS(.v14)]`. Without this, cargo
+# inherits the host SDK (macOS 26.x on Tahoe), and `swift build`
+# floods the link step with "object file was built for newer macOS
+# version (26.x) than being linked (14.0)" warnings — one per .o
+# from ring, sqlite, esaxx_fast, regexec, etc.
+#
+# Both rustc and cc-rs (the C compiler driver used by C-FFI deps)
+# read this env, so it covers the Rust .o's and the C .o's in the
+# same static archive.
+MACOSX_DEPLOYMENT_TARGET = "14.0"

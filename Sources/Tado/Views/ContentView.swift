@@ -129,6 +129,18 @@ struct ContentView: View {
                 EternalInterveneModal(run: run)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { appState.craftedReviewRunID != nil && appState.craftedReviewKind != nil },
+            set: { if !$0 {
+                appState.craftedReviewRunID = nil
+                appState.craftedReviewKind = nil
+            } }
+        )) {
+            if let id = appState.craftedReviewRunID,
+               let kind = appState.craftedReviewKind {
+                CraftedReviewModal(runID: id, kind: kind)
+            }
+        }
         .frame(minWidth: 800, minHeight: 600)
         .onAppear { installKeyboardMonitor() }
         .onDisappear { removeKeyboardMonitor() }

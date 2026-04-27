@@ -48,7 +48,8 @@ struct ProjectEternalSection: View {
     private var activeRuns: [EternalRun] {
         projectRuns.filter { run in
             let s = run.state
-            return s == "drafted" || s == "planning" || s == "ready" || s == "running"
+            return s == "drafted" || s == "planning" || s == "awaitingReview"
+                || s == "ready" || s == "running"
         }
     }
 
@@ -290,22 +291,24 @@ struct ProjectEternalSection: View {
 
     private func statePillStyle(state: String) -> (String, Color) {
         switch state {
-        case "drafted":   return ("DRAFT",     Palette.textSecondary)
-        case "planning":  return ("PLANNING",  Palette.accent)
-        case "ready":     return ("READY",     Palette.accent)
-        case "running":   return ("RUNNING",   Palette.success)
-        case "completed": return ("COMPLETED", Palette.success)
-        case "stopped":   return ("STOPPED",   Palette.textSecondary)
-        default:          return (state.uppercased(), Palette.textSecondary)
+        case "drafted":         return ("DRAFT",     Palette.textSecondary)
+        case "planning":        return ("PLANNING",  Palette.accent)
+        case "awaitingReview":  return ("REVIEW",    Palette.warning)
+        case "ready":           return ("READY",     Palette.accent)
+        case "running":         return ("RUNNING",   Palette.success)
+        case "completed":       return ("COMPLETED", Palette.success)
+        case "stopped":         return ("STOPPED",   Palette.textSecondary)
+        default:                return (state.uppercased(), Palette.textSecondary)
         }
     }
 
     private func borderColor(for state: String) -> Color {
         switch state {
-        case "running":   return Palette.success.opacity(0.5)
-        case "planning":  return Palette.accent.opacity(0.4)
-        case "ready":     return Palette.accent.opacity(0.6)
-        default:          return Palette.divider
+        case "running":         return Palette.success.opacity(0.5)
+        case "planning":        return Palette.accent.opacity(0.4)
+        case "awaitingReview":  return Palette.warning.opacity(0.6)
+        case "ready":           return Palette.accent.opacity(0.6)
+        default:                return Palette.divider
         }
     }
 
@@ -326,6 +329,11 @@ struct ProjectEternalSection: View {
                 }
                 smallButton("Redo", tint: Palette.warning) {
                     appState.eternalModalRunID = run.id
+                }
+            case "awaitingReview":
+                smallButton("Review", tint: Palette.warning) {
+                    appState.craftedReviewKind = .eternal
+                    appState.craftedReviewRunID = run.id
                 }
             case "ready":
                 smallButton("Redo", tint: Palette.warning) {
@@ -452,10 +460,12 @@ struct ProjectEternalSection: View {
     /// Prefer on-disk ground truth (state.json + crafted.md + active flag)
     /// over the cached `run.state` — the architect, worker, and stop hook
     /// all write to disk without touching SwiftData, so the Swift field
-    /// lags behind the actual lifecycle. Three reconciliation rules:
+    /// lags behind the actual lifecycle. Reconciliation rules:
     ///
     /// 1. **Hook fresh** (active flag + recent lastActivityAt) → `"running"`.
-    /// 2. **planning + crafted.md on disk** → `"ready"`. Architect exited.
+    /// 2. **planning + crafted.md on disk** → `"awaitingReview"`. Architect
+    ///    exited; user must accept the plan in the review modal before the
+    ///    worker spawns.
     /// 3. **running + state.json.phase in {"completed","stopped"}** → match
     ///    that phase. Worker stopped cleanly (ETERNAL-DONE or user Stop).
     ///
@@ -468,9 +478,12 @@ struct ProjectEternalSection: View {
         }
 
         // Architect finished: crafted.md landed, no active flag yet.
-        if run.state == "planning" && EternalService.craftedExistsOnDisk(run) {
-            healIfNeeded(run: run, target: "ready")
-            return "ready"
+        // The user must Accept in the review modal — the run does NOT
+        // auto-flip to ready/running.
+        if (run.state == "planning" || run.state == "awaitingReview")
+            && EternalService.craftedExistsOnDisk(run) {
+            healIfNeeded(run: run, target: "awaitingReview")
+            return "awaitingReview"
         }
 
         // Worker exited cleanly: state.json carries the terminal phase.

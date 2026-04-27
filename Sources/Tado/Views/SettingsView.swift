@@ -315,6 +315,8 @@ struct SettingsView: View {
 
                 StorageSection()
 
+                CodeIndexingSection()
+
                 Section("Shortcuts") {
                     LabeledContent("Cycle pages", value: "Ctrl + Tab")
                     LabeledContent("Projects", value: "Cmd + P")
@@ -545,6 +547,114 @@ private struct StorageSection: View {
             importError = nil
         } else {
             importError = "tar -xzf failed — see Console.app for details"
+        }
+    }
+}
+
+/// Phase 4: per-user kill switch + per-project re-index controls.
+/// The toggle is *live* — flipping it OFF stops every active watcher
+/// and ON kicks `code.watch.resume_all`. Per-project re-index buttons
+/// fire `code.index_project` on a detached task; the existing
+/// `CodeIndexBadge` on the project card surfaces progress.
+private struct CodeIndexingSection: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query private var settingsList: [AppSettings]
+    @Query(sort: \Project.createdAt) private var projects: [Project]
+
+    @State private var rebuildBusy: Set<String> = []
+    @State private var lastResume: [String] = []
+
+    private var settings: AppSettings? { settingsList.first }
+
+    var body: some View {
+        Section {
+            if let settings {
+                Toggle(isOn: Binding(
+                    get: { settings.codeIndexingEnabled },
+                    set: { newValue in
+                        settings.codeIndexingEnabled = newValue
+                        try? modelContext.save()
+                        applyKillSwitch(enabled: newValue)
+                    }
+                )) {
+                    labelWithTip(
+                        "Code indexing & file watching",
+                        "Master switch. OFF stops every active file watcher and prevents new ones from starting; existing chunks stay queryable. ON reattaches watchers for every previously-enabled project."
+                    )
+                }
+                if !lastResume.isEmpty {
+                    Text("Resumed: \(lastResume.joined(separator: ", "))")
+                        .font(Typography.monoMicro)
+                        .foregroundStyle(Palette.textTertiary)
+                        .lineLimit(2)
+                }
+            }
+
+            if !projects.isEmpty {
+                Divider()
+                Text("Projects")
+                    .font(Typography.calloutBold)
+                    .foregroundStyle(Palette.textSecondary)
+                ForEach(projects) { project in
+                    let pid = project.id.uuidString.lowercased()
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(project.name)
+                                .font(Typography.bodyEmphasis)
+                                .foregroundStyle(Palette.textPrimary)
+                            Text(project.rootPath)
+                                .font(Typography.monoMicro)
+                                .foregroundStyle(Palette.textTertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button(rebuildBusy.contains(pid) ? "Re-indexing…" : "Re-index") {
+                            rebuild(projectID: pid)
+                        }
+                        .disabled(
+                            rebuildBusy.contains(pid)
+                            || (settings?.codeIndexingEnabled == false)
+                        )
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        } header: {
+            Text("Code indexing")
+        }
+    }
+
+    private func applyKillSwitch(enabled: Bool) {
+        if enabled {
+            Task.detached {
+                let started = DomeRpcClient.codeWatchResumeAll()
+                await MainActor.run { lastResume = started }
+            }
+        } else {
+            Task.detached {
+                _ = DomeRpcClient.codeWatchStopAll()
+                await MainActor.run { lastResume = [] }
+            }
+        }
+    }
+
+    private func rebuild(projectID: String) {
+        rebuildBusy.insert(projectID)
+        Task.detached {
+            _ = DomeRpcClient.codeIndexProject(projectID: projectID, fullRebuild: true)
+            await MainActor.run { _ = rebuildBusy.remove(projectID) }
+        }
+    }
+
+    private func labelWithTip(_ title: String, _ tip: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(tip)
+                .font(Typography.monoMicro)
+                .foregroundStyle(Palette.textTertiary)
+                .lineLimit(3)
         }
     }
 }

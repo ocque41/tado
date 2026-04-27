@@ -12,11 +12,19 @@ import SwiftData
 /// nil-returning FFI calls gracefully and shows its own placeholder.
 struct DomeRootView: View {
     @Query(sort: \Project.createdAt) private var projects: [Project]
-    @State private var activeSurface: DomeSurfaceTab = .userNotes
-    @State private var activeKnowledgePage: DomeKnowledgePage = .list
+    /// Cross-surface state lives on `DomeAppState`. Per-surface state
+    /// (`activeKnowledgePage`, `knowledgeExpanded`) stays local — see the
+    /// P0 contract in the Eternal brief at
+    /// `.tado/eternal/runs/.../crafted.md`.
+    @State private var domeState = DomeAppState()
+    /// P3 — `.graph` is the default Knowledge page; the list/system
+    /// pages remain reachable via the sidebar disclosure.
+    @State private var activeKnowledgePage: DomeKnowledgePage = .graph
     @State private var knowledgeExpanded = false
-    @State private var activeScopeID = "global"
-    @State private var includeGlobalData = true
+    /// Live status of the Qwen3 embedding model. Polled by the
+    /// onboarding overlay; we keep it here so the overlay can be
+    /// dismissed in-place once `ready == true`.
+    @State private var modelStatus: DomeRpcClient.ModelStatus?
 
     /// Direct singleton access matches the pattern already used by
     /// `NotificationsWindowView`. `@Observable` on EventBus means the
@@ -25,27 +33,65 @@ struct DomeRootView: View {
     private var eventBus: EventBus { EventBus.shared }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 220)
-            Divider().overlay(Palette.divider)
-            VStack(spacing: 0) {
-                domeNavbar
+        GeometryReader { proxy in
+            // `compact` collapses the sidebar to icon-only at narrow
+            // widths so the detail pane keeps a usable share of the
+            // window. 420pt is the threshold where a 220pt sidebar
+            // starts crushing the content; below it we drop to a
+            // 52pt icon strip.
+            let compact = proxy.size.width < 420
+            HStack(spacing: 0) {
+                sidebar(compact: compact)
+                    .frame(width: compact ? 52 : 220)
                 Divider().overlay(Palette.divider)
-                surfaceContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    domeNavbar(compact: compact)
+                    Divider().overlay(Palette.divider)
+                    surfaceContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .background(Palette.background)
         .preferredColorScheme(.dark)
+        .environment(domeState)
+        .overlay(alignment: .topLeading) {
+            DomeHotkeyRegistrar()
+                .environment(domeState)
+        }
+        .overlay {
+            if let modelStatus, !modelStatus.ready {
+                DomeOnboardingView()
+                    .transition(.opacity)
+            }
+        }
         .onAppear {
-            syncIncludeGlobalData(for: activeScopeID)
+            syncIncludeGlobalData(for: domeState.activeScopeID)
+            modelStatus = DomeRpcClient.modelStatus()
+        }
+        .task {
+            // Re-poll every 2 seconds while the overlay is visible.
+            // Once the runtime loads, `ready` flips and the overlay
+            // disappears; the loop exits cleanly when the view does.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                modelStatus = DomeRpcClient.modelStatus()
+                if modelStatus?.ready == true { break }
+            }
         }
     }
 
+    private var breadcrumbs: [DomeBreadcrumbs.Crumb] {
+        DomeBreadcrumbs.trail(
+            for: domeState.activeSurface,
+            knowledgePage: domeState.activeSurface == .knowledge ? activeKnowledgePage : nil,
+            scope: selectedScope
+        )
+    }
+
     private var selectedProject: Project? {
-        guard activeScopeID != "global",
-              let id = UUID(uuidString: activeScopeID) else {
+        guard domeState.activeScopeID != "global",
+              let id = UUID(uuidString: domeState.activeScopeID) else {
             return nil
         }
         return projects.first(where: { $0.id == id })
@@ -57,29 +103,36 @@ struct DomeRootView: View {
             id: project.id,
             name: project.name,
             rootPath: project.rootPath,
-            includeGlobal: includeGlobalData
+            includeGlobal: domeState.includeGlobalData
         )
     }
 
     private var scopePickerSelection: Binding<String> {
         Binding(
             get: {
-                if activeScopeID == "global" { return "global" }
-                guard let id = UUID(uuidString: activeScopeID),
+                if domeState.activeScopeID == "global" { return "global" }
+                guard let id = UUID(uuidString: domeState.activeScopeID),
                       projects.contains(where: { $0.id == id }) else {
                     return "global"
                 }
-                return activeScopeID
+                return domeState.activeScopeID
             },
             set: {
-                activeScopeID = $0
+                domeState.activeScopeID = $0
                 syncIncludeGlobalData(for: $0)
             }
         )
     }
 
-    private var domeNavbar: some View {
-        HStack(spacing: 12) {
+    private var includeGlobalDataBinding: Binding<Bool> {
+        Binding(
+            get: { domeState.includeGlobalData },
+            set: { domeState.includeGlobalData = $0 }
+        )
+    }
+
+    private func domeNavbar(compact: Bool) -> some View {
+        HStack(spacing: compact ? 6 : 12) {
             Picker("Scope", selection: scopePickerSelection) {
                 Text("Global").tag("global")
                 ForEach(projects) { project in
@@ -87,36 +140,57 @@ struct DomeRootView: View {
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 220, alignment: .leading)
+            .frame(minWidth: 100, idealWidth: 220, maxWidth: 220, alignment: .leading)
+            .layoutPriority(1)
             .help("Choose Global common knowledge or a project overlay.")
 
             if selectedProject != nil {
-                Toggle(isOn: $includeGlobalData) {
-                    Label("Global", systemImage: "globe")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
+                Toggle(isOn: includeGlobalDataBinding) {
+                    if compact {
+                        Label("Global", systemImage: "globe")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.textSecondary)
+                            .labelStyle(.iconOnly)
+                    } else {
+                        Label("Global", systemImage: "globe")
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.textSecondary)
+                    }
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .onChange(of: includeGlobalData) { _, newValue in
+                .onChange(of: domeState.includeGlobalData) { _, newValue in
                     persistIncludeGlobalData(newValue)
                 }
                 .help("Include inherited global knowledge in this project view.")
 
-                Divider()
-                    .frame(height: 18)
-                    .overlay(Palette.divider)
+                if !compact {
+                    Divider()
+                        .frame(height: 18)
+                        .overlay(Palette.divider)
+                }
             }
 
-            Text(scopeSubtitle)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
-                .lineLimit(1)
-            Spacer()
+            if !compact {
+                Text(scopeSubtitle)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(0)
+            }
+            Spacer(minLength: 4)
+            if !compact {
+                DomeBreadcrumbsView(crumbs: breadcrumbs)
+                    .lineLimit(1)
+                    .layoutPriority(0)
+            }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, compact ? 8 : 16)
         .padding(.vertical, 10)
         .background(Palette.surface)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Dome navigation")
     }
 
     private var scopeSubtitle: String {
@@ -133,16 +207,27 @@ struct DomeRootView: View {
 
     private func syncIncludeGlobalData(for scopeID: String) {
         guard let project = project(for: scopeID) else {
-            includeGlobalData = ScopedConfig.shared.get().dome.includeGlobalInProject
+            domeState.includeGlobalData = ScopedConfig.shared.get().dome.includeGlobalInProject
             return
         }
-        includeGlobalData = resolvedIncludeGlobal(for: project)
+        domeState.includeGlobalData = resolvedIncludeGlobal(for: project)
     }
 
     private func persistIncludeGlobalData(_ value: Bool) {
         guard let project = selectedProject else { return }
-        guard value != resolvedIncludeGlobal(for: project) else { return }
         let rootURL = URL(fileURLWithPath: project.rootPath, isDirectory: true)
+        // Skip the write when nothing would actually change. Two cases:
+        //   1. local already has the same explicit value → exact match.
+        //   2. local is nil AND resolution already returns `value`
+        //      (i.e. shared/global default already says so) → writing
+        //      would be a redundant promotion of "inherit" to "explicit".
+        // This keeps the file-watcher quiet on every project-pick where
+        // `syncIncludeGlobalData` round-trips through `.onChange`.
+        let local = ScopedConfig.shared.getProjectLocal(at: rootURL)
+        if local.dome.includeGlobal == value { return }
+        if local.dome.includeGlobal == nil && value == resolvedIncludeGlobal(for: project) {
+            return
+        }
         ScopedConfig.shared.setProjectLocal(at: rootURL) {
             $0.dome.includeGlobal = value
         }
@@ -151,18 +236,11 @@ struct DomeRootView: View {
     private func resolvedIncludeGlobal(for project: Project) -> Bool {
         let rootURL = URL(fileURLWithPath: project.rootPath, isDirectory: true)
         let globalDefault = ScopedConfig.shared.get().dome.includeGlobalInProject
-        let projectDefaults = ProjectSettings()
         let shared = ScopedConfig.shared.getProjectShared(at: rootURL)
         let local = ScopedConfig.shared.getProjectLocal(at: rootURL)
-
-        var includeGlobal = globalDefault
-        if shared.dome.includeGlobal != projectDefaults.dome.includeGlobal {
-            includeGlobal = shared.dome.includeGlobal
-        }
-        if local.dome.includeGlobal != projectDefaults.dome.includeGlobal {
-            includeGlobal = local.dome.includeGlobal
-        }
-        return includeGlobal
+        return local.dome.includeGlobal
+            ?? shared.dome.includeGlobal
+            ?? globalDefault
     }
 
     private func project(for scopeID: String) -> Project? {
@@ -174,94 +252,112 @@ struct DomeRootView: View {
 
     // MARK: - Sidebar
 
-    private var sidebar: some View {
+    private func sidebar(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            header(compact: compact)
             Divider().overlay(Palette.divider)
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(DomeSurfaceTab.allCases) { tab in
                     if tab == .knowledge {
-                        knowledgeButton
+                        knowledgeButton(compact: compact)
                     } else {
-                        tabButton(tab)
+                        tabButton(tab, compact: compact)
                     }
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, compact ? 4 : 10)
             .padding(.top, 12)
             Spacer()
-            statusFooter
+            statusFooter(compact: compact)
         }
         .background(Palette.surfaceElevated)
     }
 
-    private var header: some View {
+    private func header(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Dome")
+            Text(compact ? "D" : "Dome")
                 .font(Typography.displayXL)
                 .foregroundStyle(Palette.textPrimary)
-            Text("second brain")
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
+                .help("Dome — second brain")
+            if !compact {
+                Text("second brain")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+            }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, compact ? 8 : 14)
         .padding(.top, 22)
         .padding(.bottom, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
     }
 
-    private func tabButton(_ tab: DomeSurfaceTab) -> some View {
-        let active = tab == activeSurface
-        return Button(action: { activeSurface = tab }) {
-            HStack(spacing: 10) {
-                Image(systemName: tab.iconSystemName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 16)
+    private func tabButton(_ tab: DomeSurfaceTab, compact: Bool) -> some View {
+        let active = tab == domeState.activeSurface
+        return Button(action: { domeState.activeSurface = tab }) { tabButtonLabel(tab, active: active, compact: compact) }
+            .buttonStyle(.plain)
+            .help(tab.label)
+            .accessibilityLabel("\(tab.label) surface")
+            .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
+            .accessibilityHint("Switches the Dome window to the \(tab.label) surface.")
+    }
+
+    private func tabButtonLabel(_ tab: DomeSurfaceTab, active: Bool, compact: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: tab.iconSystemName)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 16)
+            if !compact {
                 Text(tab.label)
                     .font(Typography.label)
-                Spacer()
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            .foregroundStyle(active ? Palette.accent : Palette.textSecondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(active ? Palette.surfaceAccent : Color.clear)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(active ? Palette.accent : Palette.textSecondary)
+        .padding(.horizontal, compact ? 0 : 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(active ? Palette.surfaceAccent : Color.clear)
+        )
+        .contentShape(Rectangle())
     }
 
-    private var knowledgeButton: some View {
+    private func knowledgeButton(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Button(action: {
-                activeSurface = .knowledge
+                domeState.activeSurface = .knowledge
                 knowledgeExpanded.toggle()
             }) {
                 HStack(spacing: 10) {
                     Image(systemName: DomeSurfaceTab.knowledge.iconSystemName)
                         .font(.system(size: 12, weight: .semibold))
                         .frame(width: 16)
-                    Text(DomeSurfaceTab.knowledge.label)
-                        .font(Typography.label)
-                    Spacer()
-                    Image(systemName: knowledgeExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Palette.textTertiary)
+                    if !compact {
+                        Text(DomeSurfaceTab.knowledge.label)
+                            .font(Typography.label)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: knowledgeExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Palette.textTertiary)
+                    }
                 }
-                .foregroundStyle(activeSurface == .knowledge ? Palette.accent : Palette.textSecondary)
-                .padding(.horizontal, 10)
+                .foregroundStyle(domeState.activeSurface == .knowledge ? Palette.accent : Palette.textSecondary)
+                .padding(.horizontal, compact ? 0 : 10)
                 .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(activeSurface == .knowledge ? Palette.surfaceAccent : Color.clear)
+                        .fill(domeState.activeSurface == .knowledge ? Palette.surfaceAccent : Color.clear)
                 )
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help(DomeSurfaceTab.knowledge.label)
 
-            if knowledgeExpanded || activeSurface == .knowledge {
+            if !compact, knowledgeExpanded || domeState.activeSurface == .knowledge {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(DomeKnowledgePage.allCases) { page in
                         knowledgePageButton(page)
@@ -273,9 +369,9 @@ struct DomeRootView: View {
     }
 
     private func knowledgePageButton(_ page: DomeKnowledgePage) -> some View {
-        let active = activeSurface == .knowledge && activeKnowledgePage == page
+        let active = domeState.activeSurface == .knowledge && activeKnowledgePage == page
         return Button(action: {
-            activeSurface = .knowledge
+            domeState.activeSurface = .knowledge
             activeKnowledgePage = page
             knowledgeExpanded = true
         }) {
@@ -293,21 +389,29 @@ struct DomeRootView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Knowledge \(page.label) sub-page")
+        .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
+        .accessibilityHint("Opens the Knowledge surface on the \(page.label) page.")
     }
 
-    private var statusFooter: some View {
+    private func statusFooter(compact: Bool) -> some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(statusTint)
                 .frame(width: 8, height: 8)
-            Text(statusLabel)
-                .font(Typography.micro)
-                .foregroundStyle(Palette.textSecondary)
-            Spacer()
+            if !compact {
+                Text(statusLabel)
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, compact ? 8 : 14)
         .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
         .background(Palette.surface)
+        .help(compact ? statusLabel : "")
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Palette.divider)
@@ -344,10 +448,11 @@ struct DomeRootView: View {
 
     @ViewBuilder
     private var surfaceContent: some View {
-        switch activeSurface {
+        switch domeState.activeSurface {
+        case .search: SearchSurface(domeScope: selectedScope)
         case .userNotes: UserNotesSurface(domeScope: selectedScope)
         case .agentNotes: AgentNotesSurface(domeScope: selectedScope)
-        case .calendar: CalendarSurface()
+        case .calendar: CalendarSurface(domeScope: selectedScope)
         case .knowledge: KnowledgeSurface(page: activeKnowledgePage, domeScope: selectedScope)
         }
     }

@@ -5,6 +5,646 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-04-25
+
+The "graph of knowledge embeds the entire codebase" release. v0.9.0
+shipped the Dome second brain with `Qwen3EmbeddingProvider` as a stub
+that fell back to FNV-1a hashing — vectors had the right *shape* but
+zero semantic content, and only markdown notes were indexed. v0.10.0
+makes Dome's vector graph actually semantic and extends it to source
+code: Qwen3-Embedding-0.6B runs in-process via candle on Metal,
+project source trees get tree-sitter-aware AST chunks plus i8-quantized
+embeddings, and a `notify`-driven file watcher keeps the index live
+on every save. Agents on the canvas can now ask `dome_code_search
+"where do we spawn the PTY"` and get pointed at `pty.rs` even though
+the literal phrase appears nowhere in the codebase.
+
+The dome-mcp tool inventory grew from 8 → 13 (5 new code-indexing
+tools), the `tado-dome` CLI gained 6 new subcommands following the
+existing `--toon` AXI conventions, and SwiftUI gained an onboarding
+overlay, a sidebar progress badge, and a per-user kill switch.
+
+The Knowledge Catalog overlay (Phases 1-5 below) brings dome-mcp
+to **18 tools**, schema to **v24**, and adds the `dome-eval` crate
+(measurable retrieval evaluation). Final cumulative test count:
+**195+ Rust tests**, 0 failures, 0 clippy errors. End of the cycle
+ships a 25-item hardening pass — race conditions closed, retention
+policies on every append-only table, panic isolation in workers,
+bounded caches everywhere, deterministic byte-stable spawn-pack
+contract pinned by integration tests.
+
+### Hardening (post-implementation pass)
+
+A focused audit before tagging surfaced 7 real bugs and 5 scalability
+gaps; all are fixed.
+
+- **Feature-flag wiring**: `dome.contextPacksV2` is now hydrated
+  from `global.json` at app launch and tracks live changes via
+  `ScopedConfig.addOnChange` — without this, the v0.10 Swift
+  composer was the only path that ever ran.
+- **TOCTOU race in `enrichment::enqueue`**: SELECT-then-INSERT is
+  now wrapped in an explicit transaction so concurrent doc writes
+  can't both insert duplicate jobs for the same target.
+- **claim_batch atomicity**: `BEGIN IMMEDIATE` plus the
+  `WHERE status='queued'` guard on the UPDATE so two enrichment
+  workers can never claim the same row.
+- **Worker panic isolation**: `drain_once` wraps each job in
+  `catch_unwind`. A poisoned input fails the job (status=`failed`,
+  `panic: …` recorded in `last_error`) instead of taking down the
+  worker for the daemon's lifetime. Per the no-watchdog rule,
+  there's still no auto-restart — operators see the failed row and
+  decide.
+- **Cache invalidation correctness**: `spawn_pack_invalidate_project(None)`
+  now clears the entire spawn-pack cache (a global change can affect
+  every project's merged-scope view), not just the empty-string
+  cache key.
+- **Extractor confidence**: deterministic extractions write
+  `confidence=0.95` explicitly so the rerank's confidence multiplier
+  doesn't demote freshly-extracted entities below un-extracted notes
+  (which default to 1.0×). Stub nodes get 0.5 (low signal); file
+  mentions get 0.9 (high but with whitelisted-extension caveats).
+- **Heading parser case sensitivity**: `## decision: …` and
+  `## DECISION: …` now extract the same way `## Decision: …` does,
+  while preserving original-case display labels.
+- **Recipe filter prefix matching**: `recipes/runner.rs::filter_titles`
+  switched from substring (`title.contains("decision")`) to prefix
+  match (`title.starts_with("decision:")`), eliminating false
+  positives like "Income report" matching the "outcome" filter.
+- **Bounded spawn-pack cache**: hard cap of 128 entries, opportunistic
+  expired-entry sweep on insert, soonest-to-expire eviction beyond
+  the cap. No more unbounded growth on long-lived sessions with
+  rotating projects/agents.
+- **Retention policies**: the decayer now prunes `retrieval_log`
+  rows older than 90 days and finished `pending_enrichment` jobs
+  older than 30 days. Live (queued/running) jobs are never pruned.
+- **Truncated error strings**: enrichment job errors are capped at
+  2 KB so a runaway diagnostic doesn't bloat
+  `pending_enrichment.last_error` or slow scans.
+- **JSON-failure observability**: `composeViaRust` writes a one-
+  line stderr message when JSON encoding fails (visible in
+  Console.app), then falls back to the v0.10 Swift composer so
+  spawns never lose their preamble — diagnostic, not blocking.
+
+### Added — Real Qwen3-Embedding-0.6B in pure Rust
+
+- **candle-core 0.10 + Metal acceleration.** `bt-core` now bundles
+  candle (`metal` feature) plus a vendored `qwen3_model` (the
+  upstream `candle_transformers::models::qwen3` with `clear_kv_cache`
+  exposed and the `model.` prefix removed to match how the Qwen
+  team publishes the embedding model's safetensors). Forward passes
+  go through `tokio::task::spawn_blocking`; F16 dtype on Metal,
+  F32 on CPU fallback. Single-input batch=1 throughput hits
+  ~120 emb/s on M-series, enough to embed a 5 000-file project in
+  ~10 minutes.
+- **First-launch model fetch.** New `notes::model_fetch` resumable
+  HTTP-Range downloader pulls `model.safetensors` (~1.19 GB F16),
+  `tokenizer.json`, `tokenizer_config.json`, and `config.json` from
+  HuggingFace into `<vault>/.bt/models/qwen3-embedding-0.6b/`. The
+  bar reads from on-disk file sizes (not in-memory atomics) so
+  progress survives app restarts and partial downloads pick up
+  where they left off. A `_fetch.log` next to the model files
+  records every HTTP attempt for debugging.
+- **`DomeOnboardingView`.** SwiftUI overlay that appears in
+  `DomeRootView` whenever the runtime isn't loaded. Shows live
+  progress, exposes a "Choose…" path picker that writes
+  `TADO_DOME_EMBEDDING_MODEL_PATH` (escape hatch for users behind
+  proxies who pre-downloaded the files), and surfaces both fetch
+  errors and runtime-load errors so silent failure is no longer
+  possible.
+- **Honest metadata stamping.** `Qwen3EmbeddingProvider::metadata()`
+  now returns `noop@1` (384-dim) when the runtime isn't loaded, so
+  rows written during the fallback window can be found by future
+  re-embedding sweeps. Stamping qwen3 metadata on hash bytes
+  silently corrupted the index in v0.9.0; that bug is fixed.
+
+### Added — Codebase indexing (Phase 2)
+
+- **Schema migration 22**: five new tables — `code_projects`,
+  `code_files`, `code_chunks`, `code_index_jobs`, `fts_code` (FTS5
+  with `unicode61` tokenizer to preserve identifiers).
+- **`bt-core::code` module** (six files: `mod`, `language`, `walker`,
+  `chunker`, `store`, `indexer`). Walker uses the `ignore` crate
+  (ripgrep's engine) honoring `.gitignore` + `.ignore` + a hardcoded
+  20-directory denylist plus a `.domeignore` per-project override.
+  Binary detection skips files with NUL bytes / >30 % non-text in
+  the first 4 KB; size cap 1 MB / 10 000 lines; project cap
+  25 000 files.
+- **Tree-sitter chunker** for Swift, Rust, TypeScript/TSX, and
+  Python (the four most-used languages in the Tado workspace). AST
+  nodes matching `function_declaration` / `class_declaration` /
+  `impl_item` / etc become their own chunks; gap regions between
+  AST chunks fall back to overlapping line windows so top-of-file
+  imports don't disappear. Every other extension goes through
+  `LineWindowChunker` (40 lines / 5-line overlap).
+- **i8 quantization** for code embeddings. Reduces stored vector
+  size 4× (1024 dim × 4 B → 1024 B per chunk). `embedding_quant`
+  column lets future writes opt back into f32 if needed.
+- **End-to-end RPC surface.** `code.project.register`,
+  `code.project.unregister`, `code.list_projects`,
+  `code.index_project { full_rebuild }`, `code.index_status`.
+- **`NewProjectSheet` auto-index hook.** Creating a project
+  registers + full-rebuilds the code index on a detached task; the
+  user keeps working while embedding proceeds in the background.
+
+### Added — Hybrid retrieval (Phase 3)
+
+- **`bt-core::code::search`**. `code_hybrid_search` runs vector
+  cosine over i8-decoded `code_chunks` + FTS5 BM25 over `fts_code`,
+  blended at α=0.6. Filters by `project_ids` and `languages`; the
+  vector lane skips chunks stamped with a different
+  `embedding_model_id` / `embedding_dimension` so qwen3 query
+  vectors never get compared against legacy noop@1 rows. UTF-8-
+  boundary-safe excerpts.
+- **`code.search` RPC** + `tado_dome_code_search(query_json)` FFI
+  + `DomeRpcClient.codeSearch(...)` Swift wrapper.
+- **MCP inventory: +2 tools** → `dome_code_search` (project +
+  language filtered hybrid retrieval) and `dome_code_status` (poll
+  an in-flight job).
+
+### Added — File-watch incremental + UI (Phase 4)
+
+- **`bt-core::code::watcher`**. `notify`-driven FSEvents watcher
+  with 500 ms debounce, FSEvents canonical-path normalization (the
+  `/private/tmp` symlink quirk that breaks `strip_prefix`), per-
+  path SHA dedup so untouched-but-rewritten files don't churn the
+  index, deletion-as-row-purge, `panic::catch_unwind` so a single
+  malformed file can't kill the watcher thread. `WatchRegistry`
+  on `CoreService` keyed by `project_id`.
+- **Auto-resume on app boot.** `tado_dome_start` calls
+  `code_resume_watchers` for every `enabled=1` project so users
+  don't re-click "watch" on every launch.
+- **Auto-stop on unregister.** `code.project.unregister` stops the
+  watcher first to prevent it from racing the chunk-row cleanup.
+- **MCP inventory: +3 tools** → `dome_code_watch`,
+  `dome_code_unwatch`, `dome_code_watch_list`. Total 13.
+- **`CodeIndexBadge`** sidebar component on every project card.
+  Three states: spinning indicator + "X / Y files" while indexing,
+  green eye + "watching" while a watcher is live, hidden when idle.
+- **`CodeIndexEventBridge`** singleton MainActor poller bridges
+  the bt-core status FFIs to `EventBus`. The `InAppBannerOverlay`,
+  `EventPersister` (NDJSON), and `EventsSocketBridge` (`tado-events`
+  CLI subscribers) all surface `code.index.{started,progress,
+  completed,failed}` events for free.
+- **`AppSettings.codeIndexingEnabled`** per-user kill switch.
+  Live-reactive: flipping OFF calls `code.watch.stop_all`, flipping
+  ON calls `code.watch.resume_all`. Surfaced in Settings → Code
+  indexing alongside per-project "Re-index" buttons.
+
+### Added — `tado-dome` CLI (AXI parity)
+
+Every new subcommand follows the existing `tado-list --toon` AXI
+conventions (space-separated, `-` for null, spaces → `_`, variable-
+length excerpt last with internal whitespace collapsed, silent on
+empty so agents can detect zero hits via stdout/exit):
+
+```
+tado-dome code-register --project <id> --root <path> [--name <n>]
+tado-dome code-unregister --project <id> [--keep]
+tado-dome code-list                        [--toon]
+tado-dome index --project <id> [--root <path>] [--full]
+tado-dome index-status --project <id>
+tado-dome code-search "query" [--project ...] [--language ...]
+                              [--limit N] [--alpha 0.6] [--toon]
+tado-dome watch / unwatch --project <id>
+tado-dome watch-list                       [--toon]
+tado-dome wait-for-index --project <id> [--timeout 900] [--toon]
+                          # exit 0 on completion, 1 on timeout, 2 on error
+```
+
+`tado-dome index --root <path>` auto-registers if the project
+isn't there yet — one-step path for a fresh codebase.
+
+### Verified — Real-world end-to-end against the Tado source tree
+
+Two `#[ignore]` integration tests in
+`bt-core/tests/code_index_e2e.rs` exercise the full pipeline
+against `~/Library/Application Support/Tado/dome/.bt/models/
+qwen3-embedding-0.6b/` and the Tado repo itself:
+
+| Test | What it does | Result |
+|---|---|---|
+| `indexes_real_tado_codebase_with_real_qwen3` | Indexes 237 files / 2 325 chunks across 10 languages, then re-runs to verify SHA dedup | 100 % skipped on second pass |
+| `hybrid_search_finds_real_code` | Identifier query (`spawn_session`) + paraphrased semantic query (`where do we spawn the PTY for a terminal session`) | Top vector hit on identifier query is `tado_session_spawn` (cosine 0.745); paraphrased query returns `pty.rs` / `session.rs` / `lib.rs` with zero lexical hits — the vector lane carried the entire query |
+
+### Changed
+
+- **bt-core grew 6 deps:** `candle-core/-nn/-transformers 0.10`
+  (with `metal` feature), `tokenizers 0.21`, `reqwest 0.12`
+  (rustls-tls + blocking + stream), `tree-sitter 0.26` plus four
+  language grammars (`rust 0.24`, `swift 0.7`, `typescript 0.23`,
+  `python 0.25`), `ignore 0.4`, `notify 8` + `notify-debouncer-mini 0.6`.
+- **`tado-terminal` grew `chrono`** for fetch.log timestamping.
+- **`Qwen3EmbeddingProvider`** stamps `noop@1` metadata when the
+  runtime isn't loaded (was `qwen3-embedding-0.6b@1` regardless).
+  Honest stamps prevent the index from silently mixing vector
+  spaces during the model-load window.
+- **Search query embedding** now uses `embed_query` (with the
+  trained instruction prefix) on the query side while passages
+  stay on `embed`. Was using `embed` for both; the asymmetric
+  pairing recovers ~10 % retrieval recall.
+
+### Fixed
+
+- **Stuck "Downloading model.safetensors…" progress bar.** v0.9.0's
+  in-memory atomic counter reset to 0 on every app restart even
+  when a partial 800 MB file was on disk; the bar would sit at
+  ~0 % while the resume succeeded silently. v0.10.0 reads byte
+  counts directly from disk so progress survives restarts and
+  resume-from-`Range` shows up correctly.
+- **`MODEL_FETCH_STARTED: OnceLock<()>` blocked retries.** A
+  failed first attempt could only be retried by relaunching the
+  app. Replaced with `MODEL_FETCH_RUNNING: Mutex<bool>` that flips
+  back to `false` on worker exit.
+- **Silent runtime-load failures.** Eager-load on `tado_dome_start`
+  used to `eprintln!` the error and disappear; now `MODEL_LOAD_ERROR`
+  is surfaced through `tado_dome_model_status` so the onboarding
+  overlay shows "files complete but load failed: <reason>".
+- **Vendored qwen3 weight prefix.** Upstream `candle_transformers`
+  expects `model.embed_tokens.weight` etc.; Qwen3-Embedding-0.6B
+  publishes weights without the `model.` prefix. Without the fix,
+  `Qwen3Runtime::load` errored with "tensor not found" the moment
+  any user finished the download.
+
+### Added — Knowledge Catalog foundation (Phase 5)
+
+Tado's second brain takes the design discipline Google Cloud just
+crystallized as the **Knowledge Catalog** (formerly Dataplex Universal
+Catalog, rebranded April 2026) — *Aggregate, Enrich, Search* with
+measurable retrieval — and ports it down to a single-user laptop.
+v0.10.0 lands the foundation; later releases add background
+enrichment (v0.12), context packs v2 (v0.13), and governed answers
+with retrieval recipes (v0.14). The full design lives in
+`/Users/miguel/.claude/plans/1-analyze-project-start-recursive-naur.md`.
+
+- **Schema migration 23**: lifecycle, provenance, and measurement
+  layer. Purely additive — every column has a constant default,
+  every new table uses `IF NOT EXISTS`, every existing query path
+  keeps working unchanged. Schema is now at v23.
+  - `graph_nodes` gains `confidence`, `superseded_by`, `supersedes`,
+    `expires_at`, `archived_at`, `content_hash`,
+    `last_referenced_at`, `entity_version` (+ five indexes). Lets
+    entities outlive their first write — confirmed, disputed,
+    archived, or replaced without losing history.
+  - `graph_edges` gains `source_signal` (`'deterministic_extract' |
+    'agent_assertion' | 'manual' | 'user_link' | 'backfill'`),
+    `signal_confidence`, `evidence_id`. Multiple signals can claim
+    the same conceptual edge; aggregation happens at query time.
+  - `retrieval_log` (new): one row per `dome_search` /
+    `dome_graph_query` / `dome_context_resolve` call. Carries the
+    actor, scope, query, ranked results, per-result scope (for
+    cross-project audit), latency, optional pack id, and
+    `was_consumed` flag. Append-only; the upcoming `dome-eval`
+    CLI replays it for measurable evaluation.
+  - `pending_enrichment` (new): durable queue mirroring the
+    `code_index_jobs` shape so v0.12's enrichment workers
+    (extractor, linker, deduper, decayer) survive crashes.
+  - `retrieval_recipes` (new): registry reserved for v0.14's
+    intent-keyed retrieval policies (Tado's analog of Knowledge
+    Catalog "verified queries"). Phase 1 reserves the shape;
+    Phase 5 fills it.
+
+- **Heuristic rerank in `notes::search::hybrid_search`.** After the
+  existing convex combine, `combined_score` is multiplied by
+  `(0.5 + 0.5·freshness) × scope_match × confidence ×
+  supersede_penalty`. Freshness is an exponential decay with a
+  30-day half-life over the most recent of `updated_at` /
+  `last_referenced_at` / `created_at` (no `freshness_cache` table —
+  computed inline as a pure function). Scope match is 1.0× for
+  hits in the caller's preferred scope, 0.6× otherwise. Confidence
+  and supersede penalty are 1.0× placeholders in v0.10 (Phase 3
+  reads them from `graph_nodes`). The freshness function handles
+  both RFC3339 and SQLite's native `datetime('now')` shapes.
+
+- **Retrieval log writes are non-breaking.** `HybridQuery` gains an
+  optional `ctx: Option<RetrievalCtx>` field. When `None`, behavior
+  is byte-identical to v0.9 — no rerank, no log, every existing
+  caller unchanged. When `Some`, hybrid search applies the rerank
+  and writes one row to `retrieval_log` with measured latency.
+  `dome-mcp::dome_search` always sets the ctx (logging `tool:
+  "dome_search"`); the bare `search.query` JSON-RPC method now
+  parses `actor` from params and sets the ctx automatically. Log
+  failures are silent — logging never fails the user-visible
+  search.
+
+- **Freshness signal feedback loop.** `agent.context_event.record`
+  with `event_kind = 'agent_used_context'` now bumps the consumed
+  `graph_node`'s `last_referenced_at` to `now` (when the row isn't
+  already archived) and flips matching `retrieval_log` rows'
+  `was_consumed = 1` (when a `context_id` is present). This is the
+  implicit-feedback hook the upcoming `dome-eval replay` reads for
+  precision@k mining.
+
+- **Bootstrap knowledge prompt rewritten.** "Bootstrap knowledge
+  layer" now teaches agents the v0.10 second-brain contract: the
+  AXI-compact `--toon` convention (~40-45 % fewer tokens for bulk
+  reads), structured-retro recipe (`## Outcome / ## Decision /
+  ## Caveats / ## Cite / ## Next agent should know`), the
+  measurable-retrieval contract (every search is logged, every
+  consumption shapes the next preamble), and the lifecycle
+  primitives that ship now (`confidence`, `superseded_by`,
+  `expires_at`, `last_referenced_at`) plus the MCP tools that will
+  drive them in later releases (`dome_supersede`, `dome_verify`,
+  `dome_decay`, `dome_recipe_apply`). The "Bootstrap A2A tools"
+  prompt gains a one-block AXI convention callout so both prompts
+  speak with one voice. Existing projects re-run the bootstrap to
+  pick up the new shape.
+
+### Added — `dome-eval` CLI + measurable evaluation (Phase 2)
+
+Phase 1 of the Knowledge Catalog upgrade added the `retrieval_log`
+table; Phase 2 ships the harness that turns it into a regression
+gate. New crate `tado-core/crates/dome-eval/` (Rust [[bin]] + [[lib]])
+with three subcommands:
+
+- **`dome-eval replay --vault <db> [--since 7d]`** — reads every
+  `retrieval_log` row in the window and reports precision@k /
+  recall@k / nDCG / consumption rate / mean latency. Implicit
+  feedback: if the row's `was_consumed=1` (an `agent_used_context`
+  event flipped it), the entire ranked list is treated as relevant
+  for that call. The signal you actually care about is consumption
+  rate — "did the agent act on what we served them" — which the
+  Phase 1 feedback loop now feeds.
+- **`dome-eval corpus run <fixture.yaml>`** — replays a hand-labeled
+  YAML corpus against an in-memory v23 vault seeded through the
+  production write paths (`bt_core::notes::store::reindex_note` for
+  chunks + embeddings, real `fts_notes` insertion for the lexical
+  lane). Computes precision@k / recall@k / nDCG against labeled
+  relevance and exits non-zero on threshold regression. Designed as
+  a CI gate — `cargo test -p dome-eval --test baseline_corpus` runs
+  every PR.
+- **`dome-eval explain --vault <db> --log-id <id>`** — reconstructs
+  the rerank decision for one logged query: per-result freshness
+  multiplier, scope-match multiplier, supersede penalty,
+  confidence, final ordering. The "why was this answer ranked
+  first?" tool. Joins `retrieval_log` × `docs` × `graph_nodes` to
+  recover what `hybrid_search` saw at call time.
+
+- **30-doc / 30-case baseline corpus** at
+  `tado-core/crates/dome-eval/tests/corpus/baseline.yaml`. Three
+  intent buckets (architecture-review, completion-claim,
+  team-handoff) plus six distractors that are semantically near but
+  not relevant. Calibrated against the v0.10 NoopEmbedder +
+  heuristic-rerank baseline (P@5=0.193, P@10=0.097, R@10=0.967,
+  nDCG@10=0.967); thresholds set ~5% below measured to catch real
+  regressions without false-failing on scoring noise. Real-model
+  retrieval is exercised by `bt-core/tests/code_index_e2e.rs`,
+  which is gated behind the `RUN_REAL_QWEN3_TESTS` flag.
+
+- **Defensive FTS5 query sanitizer** in
+  `bt_core::notes::sanitize_fts5_query`. Discovered while building
+  the corpus: a query like `"Rust-first"` crashed `dome_search`
+  with `no such column: first` because FTS5 parses bare hyphens as
+  column qualifiers. The sanitizer now wraps each whitespace
+  separated token in double quotes (after stripping any embedded
+  quotes), turning the query into a clean term-AND-term match.
+  Production agents writing hyphenated or punctuated queries no
+  longer crash the daemon. Test coverage:
+  `notes::search::tests::lexical_search_handles_hyphenated_query`.
+
+- **Knowledge → System "Retrieval Log" panel.** New section in the
+  Dome system surface lists the most-recent 20 `retrieval_log`
+  rows with header chips for total count, consumption rate,
+  and mean latency — the same numbers `dome-eval replay` prints,
+  served live from the daemon via the new
+  `tado_dome_retrieval_log_recent` FFI. Each row shows tool
+  (e.g. `dome_search`), query, actor, scope, hit count, and a
+  consumption checkmark. New JSON-RPC method
+  `retrieval.log.recent` for non-Swift callers.
+
+### Added — Entity layer + deterministic enrichment (Phase 3)
+
+Phase 1 added the schema. Phase 2 made it measurable. Phase 3 turns
+the still raw notes table into a typed entity graph:
+deterministic enrichment workers run as tokio tasks alongside the
+scheduler tick, every doc write enqueues an extract job, and the
+heuristic rerank now reads real confidence + supersede + last-
+referenced-at from `graph_nodes`. Plus three new MCP tools
+(`dome_supersede`, `dome_verify`, `dome_decay`) bring lifecycle
+mutations to agent reach. dome-mcp grew from 13 → 16 tools.
+
+- **`tado-core/crates/bt-core/src/enrichment/`** — six-module
+  pipeline (`mod`, `extractor`, `linker`, `deduper`, `decayer`,
+  `worker`). The worker pool spawns one tokio task per kind, each
+  polling `pending_enrichment` every 2 s with a batch size of 16.
+  Decayer ticks every 15 min on its own cadence (TTL/retention is a
+  sweep, not a queue drain). Drop semantics: panics tear down only
+  the affected worker — no auto-restart, no watchdog. Recoverable
+  errors stash into `pending_enrichment.last_error` and the worker
+  keeps going.
+
+- **Deterministic extractor** — markdown link parser
+  (`dome://note/<id>` → `references` edge, `file://path` →
+  `mentions_file`, `agent://name` → `authored_by`, `run://<id>` →
+  `occurred_in_run`); heading parser lifts `## Decision: …`,
+  `## Intent: …`, `## Outcome: …`, `## Caveats: …`, `## Retro …`
+  into typed graph_nodes; file-mention scanner turns paths like
+  `Sources/Auth/Session.swift:42` into `mentions_file` edges with
+  whitelisted extensions. Idempotent: a deterministic node id =
+  `sha256(doc_id ‖ kind ‖ lower(label))[:24]` so re-extracting the
+  same body is a no-op.
+
+- **Linker** — resolves "stub" graph_nodes (created when an extractor
+  encountered a forward reference whose target hadn't been written
+  yet). Re-points every edge from the stub to the real node when
+  one materialises with matching `(kind, ref_id)`, then archives the
+  stub. Idempotent on a clean DB.
+
+- **Deduper** — content-hash exact match across `(content_hash, kind,
+  group_key)` tuples. The newest row wins; older rows get
+  `superseded_by = newer.node_id` and the search rerank's supersede
+  penalty (0.3×) demotes them automatically. Also emits a
+  `supersedes` graph_edge with `source_signal='deterministic_extract'`
+  for the graph view.
+
+- **Decayer** — three sweeps on each tick: explicit TTL (`expires_at <
+  now()`), per-kind retention (retros default to 540 days), and
+  stub-archival (any unresolved stub older than 14 days). Soft
+  delete only — `archived_at` is set; rows survive for audit and
+  rerank demotes them. Hard delete is reserved for explicit user
+  action via Knowledge → System.
+
+- **Auto-enqueue from doc writes** — every `db::upsert_doc` call
+  site (5 in service.rs across `doc.create_scoped`, `vault_ingest`,
+  `doc.update_user`, `doc.update_agent`, and the Eternal craft-
+  session writer) now also enqueues an `Extract` + `Link` + `Dedupe`
+  job. Idempotent: a queued/running job for the same
+  `(target_kind, target_id, kind)` is coalesced rather than
+  duplicated.
+
+- **Heuristic rerank reads real values** —
+  [`bt_core::notes::rerank`](tado-core/crates/bt-core/src/notes/search.rs)
+  now consumes `confidence` and `superseded_by` from `graph_nodes`
+  via the doc → entity join in `attach_doc_metadata`. Confidence
+  defaults to 1.0 when no typed entity exists yet (so legacy rows
+  aren't penalised). Superseded rows get a 0.3× penalty — heavy
+  demotion that keeps retired facts visible for audit while
+  ranking them below their replacements. Two new tests exercise
+  both paths.
+
+- **3 new MCP tools — `dome_supersede`, `dome_verify`, `dome_decay`**
+  — round-trip through `node.supersede` / `node.verify` /
+  `node.decay` JSON-RPC methods. `dome_verify` accepts
+  `verdict ∈ {"confirmed", "disputed"}` and lifts confidence to
+  `max(0.9, current)` or floors at `min(0.4, current)` accordingly,
+  recording an `agent_assertion` edge from the verifier to the node.
+  Provenance signal feeds future eval — multiple verifiers can
+  converge on a fact, the deduper sees the chain.
+
+- **`tado_dome_node_supersede` / `tado_dome_node_verify` /
+  `tado_dome_node_decay` / `tado_dome_enrichment_queue_depth`** FFI
+  shims so Swift can drive the same surfaces as agents. Used by the
+  Knowledge → System backfill chip and the new lifecycle bindings
+  in `DomeRpcClient` (`SupersedeResult` / `VerifyResult` /
+  `DecayResult` / `EnrichmentQueueDepth` types).
+
+- **RunEventWatcher v2 — structured retros.** Sprint completions,
+  Eternal-run completions, and Dispatch-run completions now write a
+  *structured* retro alongside the legacy one-line markdown. The
+  body uses the recipe shape (`## Outcome / ## Decision / ## Caveats
+  / ## Cite / ## Next agent should know`) so the deterministic
+  extractor lifts each section into its own typed `graph_node` +
+  edge. Deduper chains repeats via supersede when RunEventWatcher
+  fires twice on the same `(runID, sprintN, kind)` tuple.
+
+- **Knowledge → System "backfill chip"** — visible whenever the
+  enrichment queue has any queued or running jobs. Hides at
+  pipeline idle. Fed by the new
+  `DomeRpcClient.enrichmentQueueDepth()` binding.
+
+### Added — Context Packs v2 (Phase 4)
+
+The spawn-time preamble engine moves from Swift to Rust, with
+60-second caching, supersede/verify/decay invalidation, and a
+deterministic byte-stable contract pinned by integration tests on
+both sides. Dark-launched in v0.10 behind `dome.contextPacksV2`
+(default `false`); v0.11 will flip the default and v0.12 will
+retire the Swift composer. Every bootstrapped project keeps the
+exact `<!-- tado:context:begin -->` / `<!-- tado:context:end -->`
+marker contract.
+
+- **`tado-core/crates/bt-core/src/context/`** — new module:
+  `relative.rs` (deterministic relative-time formatter) +
+  `spawn_pack.rs` (the pack engine itself). 14 unit tests +
+  4 byte-equivalence integration tests pin the contract:
+  `fixture_solo_agent_no_project`, `fixture_full_team_with_recent_notes`,
+  `fixture_project_only_no_team_no_notes`,
+  `fixture_marker_contract_is_locked`. Goldens encode the exact
+  bytes — every bootstrapped agent's preamble lookup depends on this.
+
+- **Deterministic relative-time formatter.** v0.10 used Apple's
+  `RelativeDateTimeFormatter` which produces locale-specific
+  strings (`"5 min. ago"` / `"hace 5 min."`). Phase 4 standardises
+  on a fixed shape that's cheap to mirror in Rust:
+  `just now / {n}m ago / {n}h ago / {n}d ago / {n}w ago / {n}mo ago
+  / {n}y ago` (with `in {…}` for future timestamps). The Swift
+  composer was updated to use this formatter so both sides render
+  byte-identical output.
+
+- **`spawn_pack_get_or_build` service method** — keyed by
+  `(project_id, agent_name)`. Pulls reranked recent notes via the
+  existing `note_chunks` + `graph_nodes` join (Phase 3 confidence /
+  supersede / last_referenced_at all flow through), composes the
+  preamble, caches in-memory for 60 seconds. Cache invalidation
+  hooks fire from `note_supersede`, `note_verify`, and `node_decay`
+  paths so the next spawn for the affected project always picks up
+  the new state.
+
+- **`tado_dome_compose_spawn_preamble` FFI** + new RPC method
+  `context.spawn_pack`. Both wrap the same service method. Swift's
+  `DomeContextPreamble.build(for:)` becomes a dual path: when the
+  feature flag is on it delegates via FFI; otherwise it runs the
+  v0.10 Swift composer verbatim. Both produce byte-identical output
+  (verified by the integration test pair).
+
+- **`GlobalSettings.dome.contextPacksV2`** — new default-`false`
+  flag. Also accepts `TADO_DOME_CONTEXT_PACKS_V2=1` env override
+  for spawn-time scenarios that don't have main-actor access. Read
+  via `AtomicBool` so any thread can poll without main-actor hop.
+
+### Added — Retrieval recipes + governed answers (Phase 5)
+
+The capstone of the Knowledge Catalog upgrade. Three baseline
+intents (`architecture-review`, `completion-claim`, `team-handoff`)
+ship as deterministic recipes — each one bundles a retrieval
+policy (topics, knowledge kinds, scope, freshness window,
+minimum-confidence threshold) plus a markdown template that
+renders into a synthesised answer with citations and an explicit
+"missing authority" gap report. No LLM in the loop: the
+synthesis is template substitution, the policy is what makes
+the answer governed.
+
+- **`tado-core/crates/bt-core/src/recipes/`** — three modules:
+  `mod.rs` (types: `RetrievalRecipe`, `RetrievalPolicy`,
+  `GovernedAnswer`, `Citation`; loader + upsert), `template.rs`
+  (tiny placeholder substitution: `{{ var }}` and
+  `{{ list | bullets(N) }}`), `runner.rs` (apply a recipe end-to-
+  end). 13 unit tests.
+
+- **Three baked recipes** — markdown templates committed at
+  `tado-core/crates/bt-core/recipes/{architecture-review,
+  completion-claim, team-handoff}.md` and `include_str!`'d into
+  the binary. `service.recipe_seed_defaults` upserts them at
+  global scope on every launch, idempotently. Users can override
+  per project by dropping `<project>/.tado/verified-prompts/<intent>.md`
+  files — the runner reads the on-disk path first, falls back to
+  the baked default, and finally to a stub.
+
+- **`dome_recipe_list` / `dome_recipe_apply` MCP tools.**
+  `dome-mcp` inventory grew from 16 → 18. `dome_recipe_apply`
+  takes `intent_key` (and optional `project_id`), runs the recipe's
+  policy as a `HybridQuery` with rerank logging, separates hits
+  into citations vs `missing_authority`, and returns the
+  rendered template plus those structured fields.
+
+- **Project-scope-wins resolution.** `load_recipes` returns
+  project-scoped recipes that shadow globals on shared
+  `intent_key`. Two-pass design so DB iteration order doesn't
+  affect the outcome.
+
+- **Migration 24 — activation marker.** Schema bumps to v24.
+  Stamps a `schema_activation_log` row so dome-eval can audit
+  when the v0.10 stack landed; downstream code can require v24
+  for new behaviours. Pure stamp; no destructive DDL.
+
+- **Bootstrap knowledge prompt refresh.** Adds the recipe contract
+  + the three baseline intents to every project's CLAUDE.md /
+  AGENTS.md "Knowledge & Memory" section. Existing projects re-run
+  "Bootstrap knowledge layer" to pick up the v0.10 contract.
+
+- **Recipe retrieval logged separately.** The recipe runner sets
+  `RetrievalCtx.tool = "dome_recipe_apply:<intent_key>"` so
+  `dome-eval replay` can score recipe hits as a distinct group
+  from raw `dome_search` calls.
+
+### Migration notes
+
+- The first launch on v0.10.0 triggers the model download
+  (~1.19 GB F16). Operators behind proxies can pre-download the
+  four files into any directory and use the onboarding panel's
+  "Choose…" button (writes `TADO_DOME_EMBEDDING_MODEL_PATH` for
+  the rest of the session) instead.
+- **Schema is now v24.** Migrations 23 (Phase 1 — entity columns
+  + retrieval log) and 24 (Phase 5 — activation marker) are
+  purely additive. Existing v0.9.0 vaults walk through both
+  without backfill blocking app launch; the enrichment workers
+  drain the queue at low priority once the daemon boots.
+- Existing v0.9.0 vaults work without changes. Legacy `noop@1`
+  384-dim chunks stay queryable through the FTS5 lexical lane;
+  re-running "Bootstrap vectors" in Knowledge → Embeddings after
+  the model loads upgrades them to qwen3 embeddings.
+- Projects created before v0.10.0 are not auto-indexed —
+  Settings → Code indexing → Re-index seeds the chunk table.
+  After that, the watcher takes over on save.
+- **Schema is now v23.** Migration 23 is purely additive: existing
+  rows get safe defaults (`confidence=0.7`, `entity_version=1`,
+  `source_signal='manual'`, `signal_confidence=0.7`), nullable
+  lifecycle columns stay NULL until written. No backfill is
+  required for v0.10; future releases (v0.12+) drain
+  `pending_enrichment` in the background to populate the
+  enriched fields without blocking app launch. The migration
+  re-runs cleanly on existing v22 vaults — every ALTER is guarded
+  by `table_has_column`, every CREATE uses `IF NOT EXISTS`.
+
 ## [0.9.0] - 2026-04-25
 
 The longest single release in Tado's history. v0.9.0 bundles five months

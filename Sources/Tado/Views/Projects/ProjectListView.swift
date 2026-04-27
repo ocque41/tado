@@ -101,6 +101,7 @@ struct ProjectListView: View {
             onBootstrapTools: { bootstrapTools(for: project) },
             onBootstrapTeam: { bootstrapTeam(for: project) },
             onBootstrapAutoMode: { bootstrapAutoMode(for: project) },
+            onBootstrapKnowledge: { bootstrapKnowledge(for: project) },
             onDispatch: { createDispatchRunAndEdit(for: project) },
             onStart: { startMostRecentPhaseOne(for: project) },
             onDelete: { deleteProject(project) }
@@ -176,6 +177,15 @@ struct ProjectListView: View {
 
     private func bootstrapAutoMode(for project: Project) {
         ProjectActionsService.bootstrapAutoMode(
+            project: project,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+    }
+
+    private func bootstrapKnowledge(for project: Project) {
+        ProjectActionsService.bootstrapKnowledge(
             project: project,
             modelContext: modelContext,
             terminalManager: terminalManager,

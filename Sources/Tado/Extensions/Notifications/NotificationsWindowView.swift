@@ -19,7 +19,6 @@ struct NotificationsWindowView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 520, minHeight: 520)
         .background(Palette.surface)
     }
 
@@ -39,28 +38,33 @@ struct NotificationsWindowView: View {
 
     private var filterBar: some View {
         HStack(spacing: 8) {
+            // Chips wrap into the available width via `Layout`'s native
+            // priority resolution; at narrow widths the search field
+            // gives up space first (lowest layoutPriority), then chips
+            // truncate with `.lineLimit(1)`. No fixed widths anywhere.
             severityChip(nil, label: "All")
             severityChip(.info, label: "Info")
             severityChip(.success, label: "Success")
             severityChip(.warning, label: "Warning")
             severityChip(.error, label: "Error")
-            Spacer()
+            Spacer(minLength: 6)
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
                     .foregroundStyle(Palette.textTertiary)
-                TextField("Search title or body", text: $query)
+                TextField("Search", text: $query)
                     .textFieldStyle(.plain)
                     .font(Typography.monoCaption)
                     .foregroundStyle(Palette.textPrimary)
-                    .frame(width: 200)
+                    .frame(minWidth: 60, idealWidth: 200)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(Palette.surfaceElevated)
             .clipShape(Capsule())
+            .layoutPriority(0)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 

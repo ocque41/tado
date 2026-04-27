@@ -674,18 +674,10 @@ pub struct TokenRecord {
     pub revoked: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VaultCraftingConfig {
     #[serde(default)]
     pub default_craftship_id: Option<String>,
-}
-
-impl Default for VaultCraftingConfig {
-    fn default() -> Self {
-        Self {
-            default_craftship_id: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

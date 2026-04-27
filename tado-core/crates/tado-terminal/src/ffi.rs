@@ -8,6 +8,11 @@
 //!   and are read-only from Swift.
 //! - Input strings/bytes from Swift are borrowed for the duration of the
 //!   call only; Rust copies if it needs to retain.
+//!
+//! All `unsafe extern "C"` functions in this module share that contract,
+//! so `clippy::missing_safety_doc` is suppressed file-wide rather than
+//! repeating the same `# Safety` paragraph on every entry point.
+#![allow(clippy::missing_safety_doc)]
 
 use crate::grid::Cell;
 use crate::session::{GridSnapshot, MouseReportingMode, ScrollbackSnapshot, Session};
@@ -230,9 +235,7 @@ pub unsafe extern "C" fn tado_session_set_ansi_palette(
     let _ = panic::catch_unwind(|| {
         let s = &*(session as *const Session);
         let mut copy = [0u32; 16];
-        for i in 0..16 {
-            copy[i] = *palette.add(i);
-        }
+        std::ptr::copy_nonoverlapping(palette, copy.as_mut_ptr(), 16);
         s.set_ansi_palette(copy);
     });
 }

@@ -1184,8 +1184,11 @@ enum EternalService {
 
     /// Spawn the Eternal Architect tile. Reads `user-brief.md` the modal
     /// wrote, produces `.tado/eternal/crafted.md` (the worker's authoritative
-    /// brief), then naturally exits. Pinned to Opus 4.7 / max effort — this
-    /// is the one-shot planning pass that the whole infinite loop hinges on.
+    /// brief), then naturally exits. Uses the model + effort picked in
+    /// Settings — Eternal honors both the global model and effort pickers
+    /// so Sonnet/Haiku and effort-`auto` can be A/B tested across the whole
+    /// infinite-loop pipeline (architect + worker) without source edits.
+    /// The modal recommends Opus 4.7 + Auto-mode for the best results.
     ///
     /// Called from the modal's Accept path. Sets `eternalState = "planning"`
     /// so the section flips to the planning card. The section polls for
@@ -1249,8 +1252,17 @@ enum EternalService {
         run.workerTodoID = nil
         try? modelContext.save()
 
-        // Pin Opus 4.7 + max effort for the architect. Permission mode comes
-        // from the run's Full-Auto toggle (default on).
+        // Architect honors the user's Settings model + effort picks so
+        // an Eternal A/B test of Sonnet/Haiku covers the planner too —
+        // a pure run uses the same model+effort end-to-end. Previously
+        // we pinned `--effort max` here on the theory that the planner
+        // is one-shot and crafted.md being good is load-bearing, but
+        // that silently overrode the user's choice (and forced Sonnet+Max,
+        // which is server-clamped and surprising on the bill). The
+        // modal's footer note tells the user that Opus 4.7 + Auto-mode
+        // is the recommended combo; if they pick something else they
+        // get exactly what they picked. Permission mode still comes
+        // from the run's Full-Auto toggle.
         terminalManager.spawnAndWire(
             todo: todo,
             engine: .claude,
@@ -1259,8 +1271,8 @@ enum EternalService {
             modeFlagsOverride: ProcessSpawner.eternalPermissionFlags(
                 skipPermissions: run.skipPermissions
             ),
-            modelFlagsOverride: ["--model", ClaudeModel.opus47.rawValue],
-            effortFlagsOverride: ["--effort", ClaudeEffort.max.rawValue],
+            modelFlagsOverride: ["--model", settings.claudeModel.rawValue],
+            effortFlagsOverride: settings.claudeEffort.cliFlags,
             eternalRunID: run.id,
             runRole: "architect"
         )
@@ -1467,20 +1479,16 @@ enum EternalService {
         //     kicks off the first turn; `eternalContinuePrompt` is
         //     what Tado types for every subsequent iteration.
         //
-        // Model/effort come from the user's AppSettings default, EXCEPT for
-        // internal-mode workers. Internal mode ran via `claude
-        // --permission-mode auto`, which gates its classifier on Opus 4.7 +
-        // a Max/Teams/Enterprise plan per the official announcement. Sending
-        // `--permission-mode auto --model haiku` silently no-ops the
-        // classifier and stalls on the first permission prompt — the exact
-        // "babysitting" failure auto mode was built to remove. Hard-override
-        // to Opus 4.7 here so a non-Opus default in Settings doesn't footgun
-        // a Continuous run. External mode still honors the user's pick
-        // because its per-turn `claude -p` wrapper doesn't need auto mode.
+        // Model + effort come from the user's AppSettings picks for both
+        // loop kinds. Eternal exists in part to A/B-test infinite-mode
+        // performance across Opus/Sonnet/Haiku, so the global model picker
+        // drives every spawn. Caveat: internal mode runs `claude
+        // --permission-mode auto`, whose classifier currently gates on
+        // Opus 4.7 + a Max/Teams/Enterprise plan; pairing auto mode with
+        // a smaller model can stall on the first permission prompt. That's
+        // an intentional trade-off — the experiment is the point.
         let loopKind = (run.loopKind == "internal") ? "internal" : "external"
-        let workerModelID: String = (loopKind == "internal")
-            ? ClaudeModel.opus47.rawValue
-            : settings.claudeModel.rawValue
+        let workerModelID: String = settings.claudeModel.rawValue
         let continuePrompt: String? = loopKind == "internal"
             ? internalContinuePrompt(run: run, runDir: eternalRoot(run).path)
             : nil
@@ -1914,5 +1922,26 @@ enum EternalService {
         modelContext.insert(settings)
         try? modelContext.save()
         return settings
+    }
+
+    /// Called from the Plan Review modal's Accept button. The architect
+    /// has finished writing `crafted.md` and the user has approved it
+    /// — spawn the worker immediately. Skips the legacy two-click
+    /// "ready then Start" flow because review IS the gate now. The
+    /// modal does not need a fallback: `crafted.md` is asserted-on-disk
+    /// before the modal opens.
+    @MainActor
+    static func acceptReview(
+        run: EternalRun,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager,
+        appState: AppState
+    ) {
+        spawnWorker(
+            run: run,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
     }
 }

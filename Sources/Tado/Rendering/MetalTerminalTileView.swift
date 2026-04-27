@@ -18,6 +18,11 @@ struct MetalTerminalTileView: View {
     let fontFamily: String
     let cursorBlink: Bool
     let bellMode: BellMode
+    /// True when this is the keyboard-focused tile (`AppState.focusedTileTodoID`
+    /// matches). `MetalTerminalView` uses this to keep `firstResponder` in
+    /// sync with the accent ring — see the false→true transition in its
+    /// `updateNSView`.
+    let isFocused: Bool
     let width: CGFloat
     let height: CGFloat
 
@@ -97,7 +102,8 @@ struct MetalTerminalTileView: View {
                             MainActor.assumeIsolated {
                                 session?.noteUserInput()
                             }
-                        }
+                        },
+                        isFocused: isFocused
                     )
                     if flashActive {
                         Color.white

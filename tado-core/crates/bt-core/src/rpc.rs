@@ -134,6 +134,17 @@ pub async fn run_daemon(service: CoreService) -> Result<(), BtError> {
         }
     });
 
+    // Phase 3 — boot the deterministic enrichment workers alongside
+    // the scheduler. Four tokio tasks: extractor, linker, deduper,
+    // decayer. They drain `pending_enrichment` at low priority and
+    // never touch the agent-visible write path. Handles are leaked
+    // intentionally — daemon lives for the .app's lifetime.
+    let _enrichment_handles = crate::enrichment::spawn_workers(
+        service.clone(),
+        crate::enrichment::EnrichmentSettings::default(),
+    );
+    std::mem::forget(_enrichment_handles);
+
     let socket_path = service.socket_path()?;
     if socket_path.exists() {
         std::fs::remove_file(&socket_path)?;

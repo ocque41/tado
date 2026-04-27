@@ -39,6 +39,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 use uuid::Uuid;
@@ -172,6 +173,37 @@ pub struct CoreService {
     // refresh is safe. `maybe_refresh_graph_projection()` skips the
     // refresh if a previous one happened within the throttle window.
     last_graph_refresh: Arc<Mutex<Option<Instant>>>,
+    // Per-project code-index progress, keyed by project_id. Populated
+    // when `code.index_project` enqueues a job; read by
+    // `code.index_status`. The map outlives individual jobs so the UI
+    // can fetch the final result snapshot after `running == false`.
+    code_progress: Arc<Mutex<std::collections::HashMap<String, Arc<crate::code::indexer::IndexProgress>>>>,
+    // Phase 4: per-project file watchers. Started via
+    // `code.watch.start`, dropped via `code.watch.stop` (or service
+    // shutdown). Each watcher reuses the same `code_progress` entry
+    // so the UI badge ticks on incremental updates too.
+    code_watchers: Arc<crate::code::watcher::WatchRegistry>,
+    // Phase 4 (Knowledge Catalog): in-memory cache for spawn-time
+    // context preambles. Keyed by `(project_id_or_blank,
+    // agent_name_or_blank)`. TTL is 60 seconds — short enough that a
+    // mid-session note write surfaces in the next spawn's preamble,
+    // long enough that a burst of agent spawns hits the cache. The
+    // entry's `expires_at` is checked on read; supersede / decay
+    // operations punch the matching project's cache entries out via
+    // `spawn_pack_invalidate_project`.
+    spawn_pack_cache: Arc<Mutex<std::collections::HashMap<SpawnPackCacheKey, SpawnPackCacheEntry>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SpawnPackCacheKey {
+    pub project_id: String,
+    pub agent_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SpawnPackCacheEntry {
+    pub rendered: Option<String>,
+    pub expires_at: std::time::Instant,
 }
 
 /// Role selector for `build_craftship_system_prompt`. Governs the prompt's
@@ -375,6 +407,16 @@ struct CraftshipNodeInput {
 // graph queries see no more than ~2s of staleness.
 const GRAPH_REFRESH_THROTTLE: StdDuration = StdDuration::from_millis(2000);
 
+// Live state for the legacy `vault_ingest_path` so the UI can poll
+// progress and cancel the walk. Only one ingest is allowed at a time
+// (Swift gates the button behind `ingestBusy`); these globals are
+// guarded by `INGEST_RUNNING` and reset on each new ingest start.
+static INGEST_RUNNING: AtomicBool = AtomicBool::new(false);
+static INGEST_CANCEL: AtomicBool = AtomicBool::new(false);
+static INGEST_CREATED: AtomicU64 = AtomicU64::new(0);
+static INGEST_SKIPPED: AtomicU64 = AtomicU64::new(0);
+static INGEST_TOTAL: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Debug, Clone)]
 struct KnowledgeScopeFilter {
     mode: String,
@@ -464,12 +506,21 @@ fn normalize_knowledge_kind(value: Option<&str>) -> String {
     }
 }
 
+impl Default for CoreService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoreService {
     pub fn new() -> Self {
         Self {
             vault_root: Arc::new(RwLock::new(None)),
             wal_keepalive: Arc::new(Mutex::new(None)),
             last_graph_refresh: Arc::new(Mutex::new(None)),
+            code_progress: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            code_watchers: crate::code::watcher::WatchRegistry::new(),
+            spawn_pack_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -633,6 +684,8 @@ impl CoreService {
             "vault.bootstrap_agent_runtime",
             "vault.status",
             "vault.reindex",
+            "vault.embedding_stats",
+            "vault.ingest_path",
             "import.preview",
             "import.execute",
             "system.health",
@@ -773,54 +826,55 @@ impl CoreService {
             "tools.list",
         ];
 
-        let mut smoke = Vec::new();
-        smoke.push(("topic.list", self.topic_list().is_ok()));
-        smoke.push(("doc.list", self.doc_list(None, false).is_ok()));
-        smoke.push(("import.preview", self.import_preview(None).is_ok()));
-        smoke.push((
-            "task.list",
-            self.task_list(None, None, None, None, false, 10).is_ok(),
-        ));
-        smoke.push(("run.list", self.run_list(None, 5).is_ok()));
-        smoke.push(("suggestion.list", self.suggestion_list(None, None).is_ok()));
-        smoke.push(("audit.tail", self.audit_tail(None, 10).is_ok()));
-        smoke.push(("events.tail", self.events_tail(None, 5).is_ok()));
-        smoke.push(("events.latest", self.events_latest(5).is_ok()));
-        smoke.push((
-            "automation.list",
-            self.automation_list(None, None, 10).is_ok(),
-        ));
-        smoke.push((
-            "system.runtime_status",
-            self.system_runtime_status(None).is_ok(),
-        ));
-        smoke.push((
-            "system.automation_status",
-            self.system_automation_status().is_ok(),
-        ));
-        smoke.push(("brand.list", self.brand_list().is_ok()));
-        smoke.push(("adapter.list", self.adapter_list().is_ok()));
-        smoke.push((
-            "context.list",
-            self.context_list(None, None, None, 5).is_ok(),
-        ));
-        smoke.push(("company.list", self.company_list().is_ok()));
-        smoke.push(("agent.list", self.agent_list(None).is_ok()));
-        smoke.push(("goal.list", self.goal_list(None, None).is_ok()));
-        smoke.push(("ticket.list", self.ticket_list(None, None).is_ok()));
-        smoke.push(("plan.list", self.plan_list(None, None, None, 5).is_ok()));
-        smoke.push((
-            "crafting.framework.list",
-            self.crafting_framework_list(false).is_ok(),
-        ));
-        smoke.push((
-            "crafting.craftship.list",
-            self.craftship_list(false).is_ok(),
-        ));
-        smoke.push((
-            "crafting.craftship.default.get",
-            self.craftship_default_get().is_ok(),
-        ));
+        let smoke = vec![
+            ("topic.list", self.topic_list().is_ok()),
+            ("doc.list", self.doc_list(None, false).is_ok()),
+            ("import.preview", self.import_preview(None).is_ok()),
+            (
+                "task.list",
+                self.task_list(None, None, None, None, false, 10).is_ok(),
+            ),
+            ("run.list", self.run_list(None, 5).is_ok()),
+            ("suggestion.list", self.suggestion_list(None, None).is_ok()),
+            ("audit.tail", self.audit_tail(None, 10).is_ok()),
+            ("events.tail", self.events_tail(None, 5).is_ok()),
+            ("events.latest", self.events_latest(5).is_ok()),
+            (
+                "automation.list",
+                self.automation_list(None, None, 10).is_ok(),
+            ),
+            (
+                "system.runtime_status",
+                self.system_runtime_status(None).is_ok(),
+            ),
+            (
+                "system.automation_status",
+                self.system_automation_status().is_ok(),
+            ),
+            ("brand.list", self.brand_list().is_ok()),
+            ("adapter.list", self.adapter_list().is_ok()),
+            (
+                "context.list",
+                self.context_list(None, None, None, 5).is_ok(),
+            ),
+            ("company.list", self.company_list().is_ok()),
+            ("agent.list", self.agent_list(None).is_ok()),
+            ("goal.list", self.goal_list(None, None).is_ok()),
+            ("ticket.list", self.ticket_list(None, None).is_ok()),
+            ("plan.list", self.plan_list(None, None, None, 5).is_ok()),
+            (
+                "crafting.framework.list",
+                self.crafting_framework_list(false).is_ok(),
+            ),
+            (
+                "crafting.craftship.list",
+                self.craftship_list(false).is_ok(),
+            ),
+            (
+                "crafting.craftship.default.get",
+                self.craftship_default_get().is_ok(),
+            ),
+        ];
 
         let openclaw = self.system_openclaw_status()?;
 
@@ -1050,7 +1104,15 @@ impl CoreService {
         fs_guard::safe_join(&root, Path::new(".bt/index.sqlite"))
     }
 
-    fn open_conn(&self) -> Result<rusqlite::Connection, BtError> {
+    /// Public alias of [`Self::open_conn`] for FFI callers (tado-terminal
+    /// consumes this for `tado_dome_enrichment_queue_depth` etc.). Same
+    /// path-of-trust as the internal accessor; cheap to call (rusqlite's
+    /// bundled driver).
+    pub fn open_conn_for_ffi(&self) -> Result<rusqlite::Connection, BtError> {
+        self.open_conn()
+    }
+
+    pub(crate) fn open_conn(&self) -> Result<rusqlite::Connection, BtError> {
         // Lazily open a long-lived keepalive connection on the first RPC
         // after the vault is opened. This is the entire fix for Bug I:
         // SQLite only deletes the WAL/SHM sidecars when the LAST connection
@@ -1531,6 +1593,7 @@ impl CoreService {
                     db::upsert_links(&conn, &meta.id.to_string(), &meta.links_out)?;
                     db::refresh_fts(&conn, &meta.id.to_string(), &user, &agent)?;
                     self.reindex_doc_embeddings(&conn, &meta.id.to_string(), &user, &agent)?;
+                    self.enqueue_doc_extract(&conn, &meta.id.to_string(), None);
                 }
             }
         }
@@ -1538,6 +1601,581 @@ impl CoreService {
         self.refresh_graph_projection()?;
 
         Ok(json!({ "ok": true }))
+    }
+
+    /// Counts of `note_chunks` rows by `embedding_model_version`.
+    /// `embedding_model_version` is already in `<id>@<version>` form
+    /// (e.g. `noop@1`, `qwen3-embedding-0.6b@1`) — see
+    /// `EmbeddingMetadata` in `notes/embeddings.rs`. Lets the UI show
+    /// how many chunks are still on legacy `noop@1` embeddings vs. the
+    /// live Qwen3 model so the user can decide whether to run
+    /// `vault.reindex`.
+    pub fn vault_embedding_stats(&self) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT embedding_model_version, COUNT(*) FROM note_chunks \
+             GROUP BY embedding_model_version",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        let mut model_counts = serde_json::Map::new();
+        let mut total: i64 = 0;
+        for row in rows {
+            let (model, count) = row?;
+            total += count;
+            model_counts.insert(model, json!(count));
+        }
+        Ok(json!({
+            "model_counts": Value::Object(model_counts),
+            "total": total,
+        }))
+    }
+
+    /// Delete `note_chunks` rows whose `embedding_model_id` starts with
+    /// "Qwen/" but whose stored `embedding_dimension` doesn't match the
+    /// runtime's target dimension. These rows are unsearchable (cosine
+    /// returns 0 on length mismatch) and indicate a prior load wrote
+    /// the index at the wrong dim — for instance the v0.10.0 dim bug
+    /// where `metadata().dimension` returned the noop fallback (384)
+    /// during runtime initialization. Returns the number of rows
+    /// deleted.
+    pub fn purge_corrupt_qwen3_chunks(&self, target_dim: usize) -> Result<u64, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let n = conn.execute(
+            "DELETE FROM note_chunks WHERE embedding_model_id LIKE 'Qwen/%' \
+             AND embedding_dimension != ?1",
+            params![target_dim as i64],
+        )?;
+        Ok(n as u64)
+    }
+
+    // ── code indexing (Phase 2) ──────────────────────────────────
+    //
+    // Project-scoped source-code embedding. Schema lives in migration
+    // 22 (`code_projects`, `code_files`, `code_chunks`, `fts_code`).
+    // The pipeline walks the project root, AST-chunks
+    // Swift/Rust/TS/Python via tree-sitter, line-window-chunks
+    // everything else, and writes `i8`-quantized vectors stamped with
+    // the live embedding model metadata.
+
+    pub fn code_register_project(
+        &self,
+        project_id: &str,
+        name: &str,
+        root_path: &str,
+        enabled: bool,
+    ) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        crate::code::register_project(&conn, project_id, name, root_path, enabled)?;
+        Ok(json!({
+            "ok": true,
+            "project_id": project_id,
+            "name": name,
+            "root_path": root_path,
+            "enabled": enabled,
+        }))
+    }
+
+    pub fn code_unregister_project(
+        &self,
+        project_id: &str,
+        purge: bool,
+    ) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        // Stop the watcher first — otherwise it would keep re-creating
+        // chunk rows the unregister is trying to delete.
+        self.code_watchers.stop(project_id);
+        let conn = self.open_conn()?;
+        crate::code::unregister_project(&conn, project_id, purge)?;
+        if let Ok(mut map) = self.code_progress.lock() {
+            map.remove(project_id);
+        }
+        Ok(json!({ "ok": true, "project_id": project_id, "purged": purge }))
+    }
+
+    /// On vault open, reattach watchers for every project that had
+    /// `enabled=1` in `code_projects`. This survives app restarts so
+    /// users don't have to re-click "watch" on every launch. Errors
+    /// are logged but don't fail the open — the rest of the daemon
+    /// is healthy and the user can still trigger a manual rebuild.
+    pub fn code_resume_watchers(&self) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT project_id FROM code_projects WHERE enabled = 1")?;
+        let project_ids: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        drop(conn);
+
+        let mut started: Vec<String> = Vec::new();
+        let mut failed: Vec<(String, String)> = Vec::new();
+        for pid in &project_ids {
+            // Skip projects that already have a watcher (idempotent).
+            if self.code_watchers.is_watching(pid) {
+                continue;
+            }
+            match self.code_watch_start(pid) {
+                Ok(_) => started.push(pid.clone()),
+                Err(err) => failed.push((pid.clone(), err.to_string())),
+            }
+        }
+        Ok(json!({
+            "ok": true,
+            "started": started,
+            "failed": failed.iter().map(|(id, err)| json!({"project_id": id, "error": err})).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Run a full code index synchronously. Long-running. The caller
+    /// (FFI thread or RPC connection) is responsible for spawning
+    /// this on a background thread/task before invoking.
+    pub fn code_index_project(
+        &self,
+        project_id: &str,
+        full_rebuild: bool,
+    ) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+
+        // Read project metadata.
+        let conn = self.open_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT name, root_path, enabled FROM code_projects WHERE project_id = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![project_id])?;
+        let row = rows
+            .next()?
+            .ok_or_else(|| BtError::NotFound(format!("project {project_id}")))?;
+        let _name: String = row.get(0)?;
+        let root_path: String = row.get(1)?;
+        let enabled: i64 = row.get(2)?;
+        drop(rows);
+        drop(stmt);
+        drop(conn);
+        if enabled == 0 {
+            return Err(BtError::Validation(format!(
+                "project {project_id} has code indexing disabled"
+            )));
+        }
+
+        if full_rebuild {
+            let conn = self.open_conn()?;
+            crate::code::purge_project(&conn, project_id)?;
+        }
+
+        let progress = {
+            let mut map = self
+                .code_progress
+                .lock()
+                .map_err(|_| BtError::Internal("code_progress lock poisoned".to_string()))?;
+            map.entry(project_id.to_string())
+                .or_insert_with(|| crate::code::indexer::IndexProgress::new(project_id.to_string()))
+                .clone()
+        };
+
+        let provider = crate::notes::Qwen3EmbeddingProvider::default();
+        let factory = || -> Result<rusqlite::Connection, BtError> { self.open_conn() };
+        let result = crate::code::run_full_index(
+            factory,
+            project_id,
+            std::path::Path::new(&root_path),
+            &provider,
+            &progress,
+            |_kind, _payload| {
+                // Phase 2: events flow through bt-core's internal
+                // emit_event_no_refresh path is wired up later. For
+                // now we record via the IndexProgress snapshot which
+                // the FFI exposes via `code.index_status`.
+            },
+        )?;
+
+        serde_json::to_value(result).map_err(|e| BtError::Validation(e.to_string()))
+    }
+
+    pub fn code_search(
+        &self,
+        text: &str,
+        project_ids: Option<Vec<String>>,
+        languages: Option<Vec<String>>,
+        limit: usize,
+        alpha: Option<f32>,
+    ) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let provider = crate::notes::Qwen3EmbeddingProvider::default();
+        let project_id_strs = project_ids.as_deref();
+        let language_strs = languages.as_deref();
+        let mut q = crate::code::CodeQuery::new(text);
+        q.project_ids = project_id_strs;
+        q.languages = language_strs;
+        q.limit = limit.clamp(1, 500);
+        if let Some(a) = alpha {
+            q.alpha = a;
+        }
+        let hits = crate::code::code_hybrid_search(&conn, &q, &provider)?;
+        Ok(json!({
+            "results": serde_json::to_value(hits).map_err(|e| BtError::Validation(e.to_string()))?,
+            "retrieval": {
+                "mode": "hybrid",
+                "alpha": q.alpha,
+                "embedding_model": provider.metadata(),
+                "project_ids": project_ids,
+                "languages": languages,
+            }
+        }))
+    }
+
+    pub fn code_watch_start(&self, project_id: &str) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+
+        // Pull root_path + enabled from the registered project.
+        let conn = self.open_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT root_path, enabled FROM code_projects WHERE project_id = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![project_id])?;
+        let row = rows
+            .next()?
+            .ok_or_else(|| BtError::NotFound(format!("project {project_id}")))?;
+        let root_path: String = row.get(0)?;
+        let enabled: i64 = row.get(1)?;
+        drop(rows);
+        drop(stmt);
+        drop(conn);
+
+        if enabled == 0 {
+            return Err(BtError::Validation(format!(
+                "project {project_id} has code indexing disabled"
+            )));
+        }
+
+        let progress = {
+            let mut map = self
+                .code_progress
+                .lock()
+                .map_err(|_| BtError::Internal("code_progress lock poisoned".to_string()))?;
+            map.entry(project_id.to_string())
+                .or_insert_with(|| crate::code::indexer::IndexProgress::new(project_id.to_string()))
+                .clone()
+        };
+
+        let svc = self.clone();
+        let factory = move || -> Result<rusqlite::Connection, BtError> { svc.open_conn() };
+        let watcher = crate::code::watcher::start_watcher(
+            project_id.to_string(),
+            std::path::PathBuf::from(&root_path),
+            progress,
+            factory,
+            || Box::new(crate::notes::Qwen3EmbeddingProvider::default())
+                as Box<dyn crate::notes::Embedder + Send + Sync>,
+        )?;
+        self.code_watchers.install(watcher);
+        Ok(json!({
+            "ok": true,
+            "project_id": project_id,
+            "root_path": root_path,
+            "watching": true,
+        }))
+    }
+
+    pub fn code_watch_stop(&self, project_id: &str) -> Result<Value, BtError> {
+        let stopped = self.code_watchers.stop(project_id);
+        Ok(json!({
+            "ok": true,
+            "project_id": project_id,
+            "watching": false,
+            "had_watcher": stopped,
+        }))
+    }
+
+    pub fn code_watch_list(&self) -> Result<Value, BtError> {
+        let project_ids = self.code_watchers.list();
+        Ok(json!({ "watching": project_ids }))
+    }
+
+    /// Stop every active watcher. Returns the list of project IDs
+    /// whose watchers were running. Used by the per-user kill switch
+    /// when it flips OFF — keeps the SwiftData state and the Rust
+    /// watcher state synchronized without leaking watchers.
+    pub fn code_watchers_stop_all_handle(&self) -> Vec<String> {
+        let watching = self.code_watchers.list();
+        self.code_watchers.stop_all();
+        watching
+    }
+
+    pub fn code_index_status(&self, project_id: &str) -> Result<Value, BtError> {
+        let snapshot = {
+            let map = self
+                .code_progress
+                .lock()
+                .map_err(|_| BtError::Internal("code_progress lock poisoned".to_string()))?;
+            map.get(project_id).map(|p| p.snapshot())
+        };
+        match snapshot {
+            Some(snap) => {
+                Ok(serde_json::to_value(snap).map_err(|e| BtError::Validation(e.to_string()))?)
+            }
+            None => Ok(json!({ "project_id": project_id, "running": false, "files_done": 0, "files_total": 0, "chunks_done": 0 })),
+        }
+    }
+
+    pub fn code_list_projects(&self) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT
+                p.project_id,
+                p.name,
+                p.root_path,
+                p.enabled,
+                p.last_full_index_at,
+                p.embedding_model_id,
+                p.embedding_model_version,
+                COALESCE((SELECT COUNT(*) FROM code_files WHERE project_id = p.project_id), 0) AS file_count,
+                COALESCE((SELECT COUNT(*) FROM code_chunks WHERE project_id = p.project_id), 0) AS chunk_count
+            FROM code_projects p
+            ORDER BY p.created_at DESC
+            "#,
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(json!({
+                    "project_id": row.get::<_, String>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                    "root_path": row.get::<_, String>(2)?,
+                    "enabled": row.get::<_, i64>(3)? != 0,
+                    "last_full_index_at": row.get::<_, Option<String>>(4)?,
+                    "embedding_model_id": row.get::<_, Option<String>>(5)?,
+                    "embedding_model_version": row.get::<_, Option<String>>(6)?,
+                    "file_count": row.get::<_, i64>(7)?,
+                    "chunk_count": row.get::<_, i64>(8)?,
+                }))
+            })?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+        Ok(json!({ "projects": rows }))
+    }
+
+    /// Recursively walk `path` and ingest each eligible file as a Dome
+    /// note via `knowledge_register`. Capped at 5000 files to keep the
+    /// daemon responsive — `capped: true` in the result lets the UI
+    /// nudge the user toward a narrower path. Skips common build /
+    /// dependency directories and only ingests text + source files
+    /// matching a small allow-list of extensions ≤ 512 KB each.
+    pub fn vault_ingest_path(
+        &self,
+        actor: &Actor,
+        path: &Path,
+        topic: Option<&str>,
+        owner_scope: &str,
+        project_id: Option<&str>,
+        project_root: Option<&Path>,
+    ) -> Result<Value, BtError> {
+        const MAX_INGEST: usize = 5000;
+        const MAX_FILE_BYTES: u64 = 512 * 1024;
+        const SKIP_DIRS: &[&str] = &[
+            ".git",
+            "node_modules",
+            "target",
+            ".venv",
+            "venv",
+            "dist",
+            "build",
+            ".next",
+            "Pods",
+            "DerivedData",
+            ".build",
+            ".swiftpm",
+        ];
+        const ALLOW_EXTS: &[&str] = &[
+            "rs", "swift", "ts", "tsx", "js", "jsx", "py", "go", "java", "kt", "m", "mm", "h",
+            "hpp", "cpp", "c", "sh", "toml", "yaml", "yml", "json", "md",
+        ];
+
+        let _ = self.require_vault()?;
+        if !path.is_dir() {
+            return Err(BtError::Validation(format!(
+                "{} is not a directory",
+                path.display()
+            )));
+        }
+
+        let topic_value = topic.unwrap_or("codebase");
+        let project_root_str = project_root.map(|p| p.to_string_lossy().into_owned());
+
+        // Reset live counters and claim the singleton lane. If another
+        // ingest is already running we still proceed (counters get
+        // overwritten) — Swift's UI prevents concurrent kicks, this is
+        // a defense-in-depth reset.
+        INGEST_CANCEL.store(false, AtomicOrdering::SeqCst);
+        INGEST_CREATED.store(0, AtomicOrdering::SeqCst);
+        INGEST_SKIPPED.store(0, AtomicOrdering::SeqCst);
+        // Quick pre-walk to estimate total eligible files. Bounded by
+        // the same caps the real walk uses so a runaway tree can't
+        // freeze the UI. This is read-only — no DB writes.
+        let total_estimate = estimate_ingest_total(path, MAX_INGEST, ALLOW_EXTS, SKIP_DIRS);
+        INGEST_TOTAL.store(total_estimate as u64, AtomicOrdering::SeqCst);
+        INGEST_RUNNING.store(true, AtomicOrdering::SeqCst);
+        // Drop the running flag no matter how we exit (success, cancel,
+        // error). `IngestGuard` is a stack-local RAII helper.
+        struct IngestGuard;
+        impl Drop for IngestGuard {
+            fn drop(&mut self) {
+                INGEST_RUNNING.store(false, AtomicOrdering::SeqCst);
+            }
+        }
+        let _guard = IngestGuard;
+
+        let mut created: usize = 0;
+        let mut skipped: usize = 0;
+        let mut capped = false;
+        let mut canceled = false;
+        let mut stack: Vec<PathBuf> = vec![path.to_path_buf()];
+
+        while let Some(dir) = stack.pop() {
+            if INGEST_CANCEL.load(AtomicOrdering::SeqCst) {
+                canceled = true;
+                break;
+            }
+            let entries = match fs::read_dir(&dir) {
+                Ok(it) => it,
+                Err(_) => {
+                    skipped += 1;
+                    INGEST_SKIPPED.store(skipped as u64, AtomicOrdering::SeqCst);
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                if INGEST_CANCEL.load(AtomicOrdering::SeqCst) {
+                    canceled = true;
+                    break;
+                }
+                let entry_path = entry.path();
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                let file_type = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                if file_type.is_dir() {
+                    if SKIP_DIRS.iter().any(|d| name.eq_ignore_ascii_case(d)) {
+                        continue;
+                    }
+                    stack.push(entry_path);
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+                let ext_ok = entry_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| {
+                        ALLOW_EXTS
+                            .iter()
+                            .any(|allowed| allowed.eq_ignore_ascii_case(e))
+                    })
+                    .unwrap_or(false);
+                if !ext_ok {
+                    skipped += 1;
+                    continue;
+                }
+                let metadata = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                if metadata.len() > MAX_FILE_BYTES {
+                    skipped += 1;
+                    continue;
+                }
+                let body = match fs::read_to_string(&entry_path) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                let title = match path.parent() {
+                    Some(parent) => entry_path
+                        .strip_prefix(parent)
+                        .unwrap_or(&entry_path)
+                        .to_string_lossy()
+                        .into_owned(),
+                    None => entry_path.to_string_lossy().into_owned(),
+                };
+
+                if created >= MAX_INGEST {
+                    capped = true;
+                    break;
+                }
+
+                match self.knowledge_register(
+                    actor,
+                    &title,
+                    &body,
+                    owner_scope,
+                    project_id,
+                    project_root_str.as_deref(),
+                    Some(topic_value),
+                    Some("knowledge"),
+                    Some("user"),
+                ) {
+                    Ok(_) => {
+                        created += 1;
+                        INGEST_CREATED.store(created as u64, AtomicOrdering::SeqCst);
+                    }
+                    Err(_) => {
+                        skipped += 1;
+                        INGEST_SKIPPED.store(skipped as u64, AtomicOrdering::SeqCst);
+                    }
+                }
+            }
+            if capped || canceled {
+                break;
+            }
+        }
+
+        Ok(json!({
+            "created": created,
+            "skipped": skipped,
+            "capped": capped,
+            "canceled": canceled,
+        }))
+    }
+
+    /// Live snapshot of the legacy ingest's progress counters. Used
+    /// by Swift to render a count under the "Ingesting…" label and
+    /// by the FFI to surface cancellation status.
+    pub fn vault_ingest_progress(&self) -> Value {
+        json!({
+            "running": INGEST_RUNNING.load(AtomicOrdering::SeqCst),
+            "created": INGEST_CREATED.load(AtomicOrdering::SeqCst),
+            "skipped": INGEST_SKIPPED.load(AtomicOrdering::SeqCst),
+            "total":   INGEST_TOTAL.load(AtomicOrdering::SeqCst),
+            "canceled": INGEST_CANCEL.load(AtomicOrdering::SeqCst),
+        })
+    }
+
+    /// Request that the in-flight ingest stop at the next boundary.
+    /// Idempotent — returns `true` if an ingest was running, `false`
+    /// otherwise.
+    pub fn vault_ingest_cancel(&self) -> bool {
+        let was_running = INGEST_RUNNING.load(AtomicOrdering::SeqCst);
+        INGEST_CANCEL.store(true, AtomicOrdering::SeqCst);
+        was_running
     }
 
     pub fn vault_bootstrap_starter(&self, actor: &Actor) -> Result<Value, BtError> {
@@ -1956,6 +2594,23 @@ impl CoreService {
             }
             "vault.status" => self.status(),
             "vault.reindex" => self.reindex(),
+            "vault.embedding_stats" => self.vault_embedding_stats(),
+            "vault.ingest_path" => {
+                let actor = parse_actor(&params)?;
+                let path = required_str(&params, "path")?;
+                let owner_scope = optional_str(&params, "owner_scope").unwrap_or("global");
+                let topic = optional_str(&params, "topic");
+                let project_id = optional_str(&params, "project_id");
+                let project_root = optional_str(&params, "project_root");
+                self.vault_ingest_path(
+                    &actor,
+                    Path::new(path),
+                    topic,
+                    owner_scope,
+                    project_id,
+                    project_root.map(Path::new),
+                )
+            }
             "import.preview" => self.import_preview(optional_str(&params, "root_path")),
             "import.execute" => {
                 let actor = parse_actor(&params)?;
@@ -2178,11 +2833,13 @@ impl CoreService {
                 self.doc_delete(&actor, id)
             }
             "search.query" => {
+                let actor = parse_actor(&params)?;
                 let q = required_str(&params, "q")?;
                 let scope = required_str(&params, "scope")?;
                 let topic = optional_str(&params, "topic");
                 let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
                 self.search_query(
+                    &actor,
                     q,
                     scope,
                     topic,
@@ -2195,6 +2852,9 @@ impl CoreService {
                         .get("include_global")
                         .or_else(|| params.get("includeGlobal"))
                         .and_then(Value::as_bool),
+                    optional_str(&params, "tool"),
+                    optional_str(&params, "pack_id")
+                        .or_else(|| optional_str(&params, "packId")),
                 )
             }
 
@@ -2853,6 +3513,87 @@ impl CoreService {
                 let actor = parse_actor(&params)?;
                 self.agent_context_event_record(&actor, &params)
             }
+            "node.supersede" => {
+                let actor = parse_actor(&params)?;
+                let old_id = required_str(&params, "old_id")
+                    .or_else(|_| required_str(&params, "oldId"))?;
+                let new_id = required_str(&params, "new_id")
+                    .or_else(|_| required_str(&params, "newId"))?;
+                self.note_supersede(
+                    &actor,
+                    old_id,
+                    new_id,
+                    optional_str(&params, "reason"),
+                )
+            }
+            "node.verify" => {
+                let actor = parse_actor(&params)?;
+                let node_id = required_str(&params, "node_id")
+                    .or_else(|_| required_str(&params, "nodeId"))?;
+                let verdict = required_str(&params, "verdict")?;
+                self.note_verify(
+                    &actor,
+                    node_id,
+                    verdict,
+                    optional_str(&params, "agent_id")
+                        .or_else(|| optional_str(&params, "agentId")),
+                    optional_str(&params, "reason"),
+                )
+            }
+            "node.decay" => {
+                let actor = parse_actor(&params)?;
+                let node_id = required_str(&params, "node_id")
+                    .or_else(|_| required_str(&params, "nodeId"))?;
+                self.node_decay(&actor, node_id, optional_str(&params, "reason"))
+            }
+            "recipe.list" => self.recipe_list(
+                optional_str(&params, "scope"),
+                optional_str(&params, "project_id").or_else(|| optional_str(&params, "projectId")),
+            ),
+            "recipe.apply" => {
+                let actor = parse_actor(&params)?;
+                let intent_key = required_str(&params, "intent_key")
+                    .or_else(|_| required_str(&params, "intentKey"))?;
+                self.recipe_apply(
+                    &actor,
+                    intent_key,
+                    optional_str(&params, "project_id")
+                        .or_else(|| optional_str(&params, "projectId")),
+                )
+            }
+            "recipe.seed_defaults" => {
+                let n = self.recipe_seed_defaults()?;
+                Ok(json!({ "seeded": n }))
+            }
+            "context.spawn_pack" => {
+                let teammates = params
+                    .get("teammates")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let rendered = self.spawn_pack_get_or_build(
+                    optional_str(&params, "agent_name").or_else(|| optional_str(&params, "agentName")),
+                    optional_str(&params, "project_name").or_else(|| optional_str(&params, "projectName")),
+                    optional_str(&params, "project_id").or_else(|| optional_str(&params, "projectId")),
+                    optional_str(&params, "project_root").or_else(|| optional_str(&params, "projectRoot")),
+                    optional_str(&params, "team_name").or_else(|| optional_str(&params, "teamName")),
+                    teammates,
+                )?;
+                Ok(json!({ "preamble": rendered }))
+            }
+            "retrieval.log.recent" => {
+                let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
+                self.retrieval_log_recent(
+                    limit,
+                    optional_str(&params, "project_id")
+                        .or_else(|| optional_str(&params, "projectId")),
+                    optional_str(&params, "tool"),
+                )
+            }
             "audit.tail" => {
                 let since = optional_str(&params, "since");
                 let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
@@ -2890,6 +3631,78 @@ impl CoreService {
             "token.rotate" => self.token_rotate(required_str(&params, "token_id")?),
             "token.revoke" => self.token_revoke(required_str(&params, "token_id")?),
             "token.list" => self.token_list(),
+
+            "code.project.register" => {
+                let project_id = required_str(&params, "project_id")?;
+                let name = required_str(&params, "name")?;
+                let root_path = required_str(&params, "root_path")?;
+                let enabled = params
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                self.code_register_project(project_id, name, root_path, enabled)
+            }
+            "code.project.unregister" => {
+                let project_id = required_str(&params, "project_id")?;
+                let purge = params
+                    .get("purge")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                self.code_unregister_project(project_id, purge)
+            }
+            "code.list_projects" => self.code_list_projects(),
+            "code.index_project" => {
+                let project_id = required_str(&params, "project_id")?;
+                let full_rebuild = params
+                    .get("full_rebuild")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.code_index_project(project_id, full_rebuild)
+            }
+            "code.index_status" => {
+                let project_id = required_str(&params, "project_id")?;
+                self.code_index_status(project_id)
+            }
+            "code.watch.start" => {
+                let project_id = required_str(&params, "project_id")?;
+                self.code_watch_start(project_id)
+            }
+            "code.watch.stop" => {
+                let project_id = required_str(&params, "project_id")?;
+                self.code_watch_stop(project_id)
+            }
+            "code.watch.list" => self.code_watch_list(),
+            "code.watch.resume_all" => self.code_resume_watchers(),
+            "code.watch.stop_all" => {
+                let stopped = self.code_watchers_stop_all_handle();
+                Ok(json!({ "ok": true, "stopped": stopped }))
+            }
+            "code.search" => {
+                let text = required_str(&params, "query")?;
+                let project_ids = params
+                    .get("project_ids")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    });
+                let languages = params
+                    .get("languages")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    });
+                let limit = params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize)
+                    .unwrap_or(25);
+                let alpha = params.get("alpha").and_then(|v| v.as_f64()).map(|f| f as f32);
+                self.code_search(text, project_ids, languages, limit, alpha)
+            }
 
             _ => Err(BtError::Rpc(format!("unknown method: {}", method))),
         }
@@ -3016,6 +3829,7 @@ impl CoreService {
         db::upsert_doc_meta(&conn, &id.to_string(), &[], &[], None, now)?;
         db::refresh_fts(&conn, &id.to_string(), &user_content, &agent_content)?;
         self.reindex_doc_embeddings(&conn, &id.to_string(), &user_content, &agent_content)?;
+        self.enqueue_doc_extract(&conn, &id.to_string(), None);
 
         self.audit(
             actor,
@@ -3319,6 +4133,7 @@ impl CoreService {
             let user_content = fs::read_to_string(user_path)?;
             db::refresh_fts(&conn, id, &user_content, &next)?;
             self.reindex_doc_embeddings(&conn, id, &user_content, &next)?;
+            self.enqueue_doc_extract(&conn, id, None);
         }
 
         let mut meta = self
@@ -3343,10 +4158,8 @@ impl CoreService {
             json!({ "conflict_path": conflict_path }),
         )?;
 
-        if !ui_unsaved {
-            if parse_dome_task_plan(&next).ok().flatten().is_some() {
-                let _ = self.task_plan_sync_from_doc(actor, id);
-            }
+        if !ui_unsaved && parse_dome_task_plan(&next).ok().flatten().is_some() {
+            let _ = self.task_plan_sync_from_doc(actor, id);
         }
 
         let planning = self.planning_status_for_doc(&root, &doc)?;
@@ -3397,6 +4210,7 @@ impl CoreService {
         let agent_content = fs::read_to_string(agent_path)?;
         db::refresh_fts(&conn, id, &next, &agent_content)?;
         self.reindex_doc_embeddings(&conn, id, &next, &agent_content)?;
+        self.enqueue_doc_extract(&conn, id, None);
 
         let mut meta = self
             .load_meta_by_doc(id)?
@@ -3982,6 +4796,7 @@ impl CoreService {
 
     pub fn search_query(
         &self,
+        actor: &Actor,
         q: &str,
         scope: &str,
         topic: Option<&str>,
@@ -3989,6 +4804,8 @@ impl CoreService {
         knowledge_scope: Option<&str>,
         project_id: Option<&str>,
         include_global: Option<bool>,
+        tool_hint: Option<&str>,
+        pack_id: Option<&str>,
     ) -> Result<Value, BtError> {
         let conn = self.open_conn()?;
         let provider = crate::notes::Qwen3EmbeddingProvider::default();
@@ -3996,6 +4813,26 @@ impl CoreService {
         let mut query = crate::notes::HybridQuery::new(q, scope);
         query.topic = topic;
         query.limit = limit.saturating_mul(3).max(limit);
+
+        // Build retrieval context. Hybrid search applies the heuristic
+        // rerank and writes one row to retrieval_log when ctx is set —
+        // this is the measurable-evaluation hook that Phase 2's
+        // `dome-eval` CLI replays against future Dome state.
+        let preferred_scope = match filter.mode.as_str() {
+            "project" | "merged" => Some("user".to_string()),
+            _ => None,
+        };
+        let ctx = crate::notes::RetrievalCtx {
+            actor_kind: actor.actor_type().to_string(),
+            actor_id: Some(actor.actor_id()),
+            project_id: filter.project_id.clone(),
+            knowledge_scope: filter.mode.clone(),
+            tool: tool_hint.unwrap_or("search.query").to_string(),
+            preferred_scope,
+            pack_id: pack_id.map(|s| s.to_string()),
+        };
+        query.ctx = Some(ctx);
+
         match crate::notes::hybrid_search(&conn, &query, &provider) {
             Ok(rows) if !rows.is_empty() => {
                 let mut results = serde_json::to_value(rows)
@@ -5295,19 +6132,6 @@ impl CoreService {
         })?;
         self.build_craftship_session_payload(&conn, session)
     }
-
-    /// Build the canonical agent system prompt for a craftship session. The
-    /// prompt explicitly lists the pre-work phase ledger, the ordered node
-    /// map, the tools catalog, and every tool doc the vault ships — so the
-    /// agent receives its entire required-steps spec in one message.
-    ///
-    /// `role` selects which variant to produce:
-    /// - `PromptRole::LeadAgent { analyze_first_path }` — the classic
-    ///   Lead-agent prompt, optionally with a "First analyze `<path>`"
-    ///   preamble when the required-steps agent is disabled.
-    /// - `PromptRole::RequiredAgent { .. }` — the Required-Steps agent's
-    ///   prompt, which instructs it to read the source doc and then
-    ///   dispatch a synthesized plan to the Lead agent via `acpx`.
 
     pub fn craftship_session_rename(
         &self,
@@ -7694,6 +8518,7 @@ Behavioral Policy\n\
         db::upsert_doc_meta(conn, &id.to_string(), &tags, &[], Some("running"), now)?;
         db::refresh_fts(conn, &id.to_string(), &user_content, &agent_content)?;
         self.reindex_doc_embeddings(conn, &id.to_string(), &user_content, &agent_content)?;
+        self.enqueue_doc_extract(conn, &id.to_string(), None);
 
         Ok(id.to_string())
     }
@@ -8194,25 +9019,27 @@ Behavioral Policy\n\
                 .cloned()
                 .collect::<Vec<_>>();
 
-            if !candidate.mandatory && chain_of_knowledge.focus_mode == "allowed_only" {
-                if matched_allowed.is_empty() {
-                    dropped.push(json!({
-                        "source_ref": candidate.source.source_ref,
-                        "source_kind": candidate.source.source_kind,
-                        "reason": "focus_mode=allowed_only:no_allowed_match",
-                    }));
-                    continue;
-                }
+            if !candidate.mandatory
+                && chain_of_knowledge.focus_mode == "allowed_only"
+                && matched_allowed.is_empty()
+            {
+                dropped.push(json!({
+                    "source_ref": candidate.source.source_ref,
+                    "source_kind": candidate.source.source_kind,
+                    "reason": "focus_mode=allowed_only:no_allowed_match",
+                }));
+                continue;
             }
-            if !candidate.mandatory && chain_of_knowledge.focus_mode == "blocked_only" {
-                if !matched_blocked.is_empty() {
-                    dropped.push(json!({
-                        "source_ref": candidate.source.source_ref,
-                        "source_kind": candidate.source.source_kind,
-                        "reason": format!("blocked_knowledge:{}", matched_blocked.join(",")),
-                    }));
-                    continue;
-                }
+            if !candidate.mandatory
+                && chain_of_knowledge.focus_mode == "blocked_only"
+                && !matched_blocked.is_empty()
+            {
+                dropped.push(json!({
+                    "source_ref": candidate.source.source_ref,
+                    "source_kind": candidate.source.source_kind,
+                    "reason": format!("blocked_knowledge:{}", matched_blocked.join(",")),
+                }));
+                continue;
             }
 
             let source_cost = candidate
@@ -10842,12 +11669,7 @@ Behavioral Policy\n\
                 "runtime_mode must be event_driven or continuous".to_string(),
             ));
         }
-        let state = if mode == "continuous" {
-            "active"
-        } else {
-            "active"
-        };
-        db::set_agent_runtime_mode(&conn, agent_id, mode, Some(state), None, Utc::now())?;
+        db::set_agent_runtime_mode(&conn, agent_id, mode, Some("active"), None, Utc::now())?;
         let agent = db::get_agent(&conn, agent_id)?
             .ok_or_else(|| BtError::NotFound(format!("agent {} not found", agent_id)))?;
         self.record_config_revision(
@@ -12192,7 +13014,655 @@ Behavioral Policy\n\
         };
         let conn = self.open_conn()?;
         db::insert_agent_context_event(&conn, &event)?;
+
+        // Phase 1: feed the freshness loop. Every `agent_used_context`
+        // bumps the referenced node's `last_referenced_at` so the
+        // heuristic rerank promotes recently-consumed knowledge on the
+        // next search. Failures are silent — this is a signal, not a
+        // contract; the event itself is already persisted.
+        if event.event_kind == "agent_used_context" {
+            if let Some(node_id) = &event.node_id {
+                let _ = conn.execute(
+                    r#"UPDATE graph_nodes
+                       SET last_referenced_at = ?1
+                       WHERE node_id = ?2 AND archived_at IS NULL"#,
+                    rusqlite::params![now, node_id],
+                );
+            }
+            if let Some(context_id) = &event.context_id {
+                let _ = conn.execute(
+                    r#"UPDATE retrieval_log
+                       SET was_consumed = 1
+                       WHERE pack_id = ?1 AND was_consumed = 0"#,
+                    rusqlite::params![context_id],
+                );
+            }
+        }
+
         Ok(json!({ "context_event": event }))
+    }
+
+    // ── Phase 5 — retrieval recipes (governed answers) ─────────────
+
+    /// List enabled retrieval recipes for the given scope. Project-
+    /// scoped recipes shadow globals on shared `intent_key`; the
+    /// resolution mirrors `load_recipes`.
+    pub fn recipe_list(
+        &self,
+        scope: Option<&str>,
+        project_id: Option<&str>,
+    ) -> Result<Value, BtError> {
+        let conn = self.open_conn()?;
+        let recipes = crate::recipes::list_recipes(&conn, scope, project_id)?;
+        serde_json::to_value(recipes).map_err(|e| BtError::Validation(e.to_string()))
+    }
+
+    /// Apply a recipe — run its policy, render the template, return
+    /// a `GovernedAnswer`. The agent gets synthesized markdown plus
+    /// the citation list and an explicit "missing authority" flag.
+    pub fn recipe_apply(
+        &self,
+        actor: &Actor,
+        intent_key: &str,
+        project_id: Option<&str>,
+    ) -> Result<Value, BtError> {
+        let conn = self.open_conn()?;
+        // Detect whether the live Qwen3 runtime is loaded so the
+        // recipe's hybrid_search uses the real embedder vs the noop
+        // fallback. Same probe other paths use.
+        let embedder_loaded = crate::notes::Qwen3EmbeddingProvider::default()
+            .metadata()
+            .model_id
+            .contains("qwen");
+        let answer = crate::recipes::apply_recipe(
+            &conn,
+            intent_key,
+            project_id,
+            actor.actor_type(),
+            Some(&actor.actor_id()),
+            embedder_loaded,
+        )?;
+        self.audit(
+            actor,
+            "recipe.apply",
+            &json!({ "intent_key": intent_key, "project_id": project_id }),
+            None,
+            None,
+            "ok",
+            json!({
+                "citations": answer.citations.len(),
+                "missing_authority": answer.missing_authority.len(),
+            }),
+        )?;
+        serde_json::to_value(answer).map_err(|e| BtError::Validation(e.to_string()))
+    }
+
+    /// Seed the three default recipes (architecture-review,
+    /// completion-claim, team-handoff) at `global` scope. Idempotent
+    /// — re-running upserts the latest baked templates without
+    /// disturbing user-edited project-scoped overrides.
+    pub fn recipe_seed_defaults(&self) -> Result<usize, BtError> {
+        let conn = self.open_conn()?;
+        let mut count = 0usize;
+        for (intent_key, title, description, policy, body) in crate::recipes::default_recipes() {
+            let recipe = crate::recipes::RetrievalRecipe {
+                recipe_id: format!("rec_default_{intent_key}"),
+                intent_key: intent_key.to_string(),
+                scope: "global".to_string(),
+                project_id: None,
+                title: title.to_string(),
+                description: description.to_string(),
+                template_path: format!(".tado/verified-prompts/{intent_key}.md"),
+                policy,
+                enabled: true,
+                last_verified_at: Some(chrono::Utc::now().to_rfc3339()),
+                template_body: Some(body.to_string()),
+            };
+            crate::recipes::upsert_recipe(&conn, &recipe)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    // ── Phase 4 — context-pack v2 (spawn-time preamble) ────────────
+
+    /// Build (or fetch from cache) the spawn-time preamble for one
+    /// agent spawn. Cache TTL is 60 seconds; supersede / decay
+    /// operations punch matching project entries out so the next
+    /// spawn re-renders with the new state.
+    ///
+    /// Input is decoupled from any DB read: callers (Swift / FFI)
+    /// pass identity + project + team metadata they already have.
+    /// The recent-notes fragment is filled by [`spawn_pack_recent_notes`]
+    /// inside this method using the production hybrid_search path.
+    pub fn spawn_pack_get_or_build(
+        &self,
+        agent_name: Option<&str>,
+        project_name: Option<&str>,
+        project_id: Option<&str>,
+        project_root: Option<&str>,
+        team_name: Option<&str>,
+        teammates: Vec<String>,
+    ) -> Result<Option<String>, BtError> {
+        let cache_key = SpawnPackCacheKey {
+            project_id: project_id.unwrap_or("").to_string(),
+            agent_name: agent_name.unwrap_or("").to_string(),
+        };
+        // Cache lookup.
+        {
+            let cache = self
+                .spawn_pack_cache
+                .lock()
+                .map_err(|_| BtError::Validation("spawn_pack_cache lock poisoned".into()))?;
+            if let Some(entry) = cache.get(&cache_key) {
+                if entry.expires_at > std::time::Instant::now() {
+                    return Ok(entry.rendered.clone());
+                }
+            }
+        }
+
+        // Cache miss — build fresh.
+        let recent_notes = if let Some(pid) = project_id {
+            self.spawn_pack_recent_notes(pid).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let pack_ctx = crate::context::SpawnPackContext {
+            agent_name: agent_name.map(String::from),
+            project_name: project_name.map(String::from),
+            project_id: project_id.map(String::from),
+            project_root: project_root.map(String::from),
+            team_name: team_name.map(String::from),
+            teammates,
+            recent_notes,
+        };
+        let rendered = crate::context::compose_spawn_preamble(&pack_ctx, chrono::Utc::now());
+
+        let entry = SpawnPackCacheEntry {
+            rendered: rendered.clone(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(60),
+        };
+        if let Ok(mut cache) = self.spawn_pack_cache.lock() {
+            // Bounded cache: opportunistically reap expired entries
+            // before insert; if we're still over the cap (defensive
+            // against a burst of distinct keys that all land in the
+            // same 60 s window), evict the soonest-to-expire entries
+            // until we fit. Cap is generous (128) so a 50-tile canvas
+            // with 2-3 distinct agent names per project doesn't
+            // thrash; real usage stays well under.
+            const CACHE_HARD_CAP: usize = 128;
+            let now = std::time::Instant::now();
+            cache.retain(|_, e| e.expires_at > now);
+            if cache.len() >= CACHE_HARD_CAP {
+                if let Some(victim) = cache
+                    .iter()
+                    .min_by_key(|(_, e)| e.expires_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    cache.remove(&victim);
+                }
+            }
+            cache.insert(cache_key, entry);
+        }
+
+        Ok(rendered)
+    }
+
+    /// Pull the top-5 reranked recent notes for the project topic so
+    /// the spawn pack's "Recent project notes" fragment can render.
+    /// Mirrors what the Swift composer was doing via `listNotes`,
+    /// plus rerank — the freshness multiplier on `last_referenced_at`
+    /// surfaces actively-consumed notes.
+    fn spawn_pack_recent_notes(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::context::RecentNote>, BtError> {
+        let conn = self.open_conn()?;
+        let topic = format!("project-{}", short_project_topic(project_id));
+        let mut stmt = conn.prepare(
+            r#"SELECT d.id, d.title, d.updated_at, d.created_at,
+                       gn.last_referenced_at, gn.confidence, gn.superseded_by
+                FROM docs d
+                LEFT JOIN graph_nodes gn ON gn.ref_id = d.id
+                    AND gn.archived_at IS NULL
+                    AND (gn.secondary_label IS NULL OR gn.secondary_label != 'stub')
+                WHERE d.topic = ?1
+                ORDER BY COALESCE(gn.last_referenced_at, d.updated_at, d.created_at) DESC
+                LIMIT 20"#,
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![topic], |row| {
+                Ok(SpawnPackRow {
+                    title: row.get::<_, String>(1)?,
+                    updated_at: row.get::<_, Option<String>>(2)?,
+                    created_at: row.get::<_, Option<String>>(3)?,
+                    last_referenced_at: row.get::<_, Option<String>>(4)?,
+                    superseded_by: row.get::<_, Option<String>>(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut notes: Vec<crate::context::RecentNote> = rows
+            .into_iter()
+            .filter(|r| r.superseded_by.is_none())
+            .take(5)
+            .map(|r| crate::context::RecentNote {
+                title: r.title,
+                display_at: parse_timestamp_field(
+                    r.last_referenced_at
+                        .as_deref()
+                        .or(r.updated_at.as_deref())
+                        .or(r.created_at.as_deref()),
+                ),
+            })
+            .collect();
+        // Maintain Swift behaviour: deterministic sort descending by
+        // display_at (already in DB order, but be explicit).
+        notes.sort_by(|a, b| b.display_at.cmp(&a.display_at));
+        Ok(notes)
+    }
+
+    /// Punch all spawn-pack cache entries for a project. Called from
+    /// supersede / decay paths so the next spawn picks up the new
+    /// state instead of serving the stale 60-second cache.
+    ///
+    /// When `project_id` is `None` or empty we invalidate the
+    /// global-scope ("") entries *plus* every concrete-project entry
+    /// since a global change (e.g. a global note write) affects every
+    /// merged-scope spawn pack. Without the wider sweep, a global
+    /// supersede would leave concrete-project caches serving stale
+    /// data for up to 60 s.
+    pub fn spawn_pack_invalidate_project(&self, project_id: Option<&str>) {
+        let target = project_id.unwrap_or("");
+        if let Ok(mut cache) = self.spawn_pack_cache.lock() {
+            if target.is_empty() {
+                // Global-scope change: clear everything that could
+                // include the affected entity in its merged view.
+                cache.clear();
+            } else {
+                cache.retain(|key, _| key.project_id != target);
+            }
+        }
+    }
+
+    /// Punch every spawn-pack cache entry. Used on schema migrations
+    /// or when something changes globally (e.g. a global note write).
+    pub fn spawn_pack_invalidate_all(&self) {
+        if let Ok(mut cache) = self.spawn_pack_cache.lock() {
+            cache.clear();
+        }
+    }
+
+    /// Phase 3 — supersede an existing graph_node with a newer one.
+    /// `dome_supersede` agent contract: when an agent writes a fact
+    /// that replaces an old one, it calls this to chain them so
+    /// search demotes the old row via the supersede penalty path.
+    /// Phase 4: also punches the global spawn-pack cache so the next
+    /// spawn renders with the new supersede chain.
+    pub fn note_supersede(
+        &self,
+        actor: &Actor,
+        old_id: &str,
+        new_id: &str,
+        reason: Option<&str>,
+    ) -> Result<Value, BtError> {
+        if old_id == new_id {
+            return Err(BtError::Validation(
+                "old_id and new_id must differ".into(),
+            ));
+        }
+        let conn = self.open_conn()?;
+        // Both nodes must exist and not be archived.
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM graph_nodes WHERE node_id IN (?1, ?2) AND archived_at IS NULL",
+                rusqlite::params![old_id, new_id],
+                |r| r.get(0),
+            )?;
+        if exists != 2 {
+            return Err(BtError::NotFound(format!(
+                "supersede: both nodes must exist + be live (got {})",
+                exists
+            )));
+        }
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE graph_nodes SET superseded_by = ?1 WHERE node_id = ?2",
+            rusqlite::params![new_id, old_id],
+        )?;
+        tx.execute(
+            "UPDATE graph_nodes SET supersedes = COALESCE(supersedes, ?1) WHERE node_id = ?2",
+            rusqlite::params![old_id, new_id],
+        )?;
+        let edge_id = format!(
+            "edge_supersede_{}_{}",
+            &old_id.replace(['-', '_'], "")[..old_id.len().min(8)],
+            &new_id.replace(['-', '_'], "")[..new_id.len().min(8)],
+        );
+        tx.execute(
+            r#"INSERT INTO graph_edges(edge_id, kind, source_id, target_id,
+                search_text, sort_time, payload_json,
+                source_signal, signal_confidence, evidence_id)
+                VALUES (?1, 'supersedes', ?2, ?3, 'supersedes', datetime('now'),
+                        ?4, 'agent_assertion', 1.0, NULL)
+                ON CONFLICT(edge_id) DO UPDATE SET
+                    sort_time = excluded.sort_time,
+                    signal_confidence = excluded.signal_confidence,
+                    payload_json = excluded.payload_json"#,
+            rusqlite::params![
+                edge_id,
+                new_id,
+                old_id,
+                serde_json::json!({ "reason": reason }).to_string(),
+            ],
+        )?;
+        tx.commit()?;
+
+        self.audit(
+            actor,
+            "node.supersede",
+            &json!({ "old_id": old_id, "new_id": new_id, "reason": reason }),
+            Some(new_id),
+            None,
+            "ok",
+            json!({}),
+        )?;
+        // Phase 4: nuke the spawn-pack cache so the next spawn sees
+        // the new supersede chain. We don't know the project_id from
+        // the node ids alone — look it up.
+        if let Ok(conn) = self.open_conn() {
+            let pid: Option<String> = conn
+                .query_row(
+                    r#"SELECT project_id FROM docs WHERE id = ?1
+                        UNION ALL
+                        SELECT JSON_EXTRACT(payload_json, '$.project_id')
+                            FROM graph_nodes WHERE node_id = ?1
+                        LIMIT 1"#,
+                    rusqlite::params![new_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            self.spawn_pack_invalidate_project(pid.as_deref());
+        }
+
+        Ok(json!({
+            "old_id": old_id,
+            "new_id": new_id,
+            "reason": reason,
+        }))
+    }
+
+    /// Verify or dispute an entity. `confirmed` lifts confidence to
+    /// `max(current, 0.9)`; `disputed` floors it at `min(current, 0.4)`.
+    /// Either way, an `agent_assertion` edge from the verifier to the
+    /// node records the provenance.
+    pub fn note_verify(
+        &self,
+        actor: &Actor,
+        node_id: &str,
+        verdict: &str,
+        agent_id: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<Value, BtError> {
+        let confidence_op = match verdict {
+            "confirmed" => "MAX(confidence, 0.9)",
+            "disputed" => "MIN(confidence, 0.4)",
+            other => {
+                return Err(BtError::Validation(format!(
+                    "verdict must be 'confirmed' or 'disputed' (got '{other}')"
+                )))
+            }
+        };
+        let conn = self.open_conn()?;
+        let updated = conn.execute(
+            &format!("UPDATE graph_nodes SET confidence = {confidence_op} WHERE node_id = ?1 AND archived_at IS NULL"),
+            rusqlite::params![node_id],
+        )?;
+        if updated == 0 {
+            return Err(BtError::NotFound(format!(
+                "node not found or archived: {node_id}"
+            )));
+        }
+        // Read back the new confidence so the agent gets a precise view.
+        let new_conf: f64 = conn.query_row(
+            "SELECT confidence FROM graph_nodes WHERE node_id = ?1",
+            rusqlite::params![node_id],
+            |r| r.get(0),
+        )?;
+        let actor_id = agent_id
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| actor.actor_id());
+        let edge_id = format!(
+            "edge_verify_{}_{}",
+            verdict,
+            &node_id.replace(['-', '_'], "")[..node_id.len().min(12)],
+        );
+        conn.execute(
+            r#"INSERT INTO graph_edges(edge_id, kind, source_id, target_id,
+                search_text, sort_time, payload_json,
+                source_signal, signal_confidence, evidence_id)
+                VALUES (?1, ?2, ?3, ?4, ?2, datetime('now'),
+                        ?5, 'agent_assertion', ?6, NULL)
+                ON CONFLICT(edge_id) DO UPDATE SET
+                    sort_time = excluded.sort_time,
+                    signal_confidence = excluded.signal_confidence,
+                    payload_json = excluded.payload_json"#,
+            rusqlite::params![
+                edge_id,
+                if verdict == "confirmed" { "confirms" } else { "disputes" },
+                actor_id,
+                node_id,
+                serde_json::json!({ "reason": reason, "verdict": verdict }).to_string(),
+                if verdict == "confirmed" { 0.9 } else { 0.4 },
+            ],
+        )?;
+        self.audit(
+            actor,
+            "node.verify",
+            &json!({ "node_id": node_id, "verdict": verdict, "agent_id": agent_id, "reason": reason }),
+            Some(node_id),
+            None,
+            "ok",
+            json!({ "new_confidence": new_conf }),
+        )?;
+        // Phase 4: invalidate spawn-pack cache for the affected project.
+        if let Ok(conn) = self.open_conn() {
+            let pid: Option<String> = conn
+                .query_row(
+                    "SELECT JSON_EXTRACT(payload_json, '$.project_id') FROM graph_nodes WHERE node_id = ?1",
+                    rusqlite::params![node_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            self.spawn_pack_invalidate_project(pid.as_deref());
+        }
+
+        Ok(json!({
+            "node_id": node_id,
+            "verdict": verdict,
+            "confidence": new_conf,
+            "actor_id": actor_id,
+        }))
+    }
+
+    /// Soft-delete a graph_node by setting `archived_at = now`.
+    /// Does not touch its edges; rerank demotes archived rows via the
+    /// supersede penalty path.
+    pub fn node_decay(
+        &self,
+        actor: &Actor,
+        node_id: &str,
+        reason: Option<&str>,
+    ) -> Result<Value, BtError> {
+        let conn = self.open_conn()?;
+        let updated = conn.execute(
+            "UPDATE graph_nodes SET archived_at = datetime('now') WHERE node_id = ?1 AND archived_at IS NULL",
+            rusqlite::params![node_id],
+        )?;
+        if updated == 0 {
+            return Err(BtError::NotFound(format!(
+                "node not found or already archived: {node_id}"
+            )));
+        }
+        self.audit(
+            actor,
+            "node.decay",
+            &json!({ "node_id": node_id, "reason": reason }),
+            Some(node_id),
+            None,
+            "ok",
+            json!({}),
+        )?;
+        // Phase 4: invalidate spawn-pack cache for the affected project.
+        if let Ok(conn) = self.open_conn() {
+            let pid: Option<String> = conn
+                .query_row(
+                    "SELECT JSON_EXTRACT(payload_json, '$.project_id') FROM graph_nodes WHERE node_id = ?1",
+                    rusqlite::params![node_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            self.spawn_pack_invalidate_project(pid.as_deref());
+        }
+        Ok(json!({
+            "node_id": node_id,
+            "archived": true,
+            "reason": reason,
+        }))
+    }
+
+    /// Phase 3 — enqueue a deterministic extraction job for a freshly
+    /// written or updated doc. Called from every `db::upsert_doc`
+    /// site so the entity layer trails writes by at most one tokio
+    /// tick (default 2s). Failure is silent: enrichment is best-effort
+    /// and the synchronous write succeeded.
+    pub fn enqueue_doc_extract(
+        &self,
+        conn: &rusqlite::Connection,
+        doc_id: &str,
+        project_id: Option<&str>,
+    ) {
+        let _ = crate::enrichment::enqueue(
+            conn,
+            crate::enrichment::EnrichmentTargetKind::Doc,
+            doc_id,
+            crate::enrichment::EnrichmentKind::Extract,
+            project_id,
+        );
+        // Linker has nothing to do until the extractor lands new
+        // stubs, but enqueueing it here is the cleanest way to
+        // guarantee the linker pass runs after the extractor batch.
+        // Idempotent — duplicate enqueues are coalesced by
+        // (target_kind, target_id, kind).
+        let _ = crate::enrichment::enqueue(
+            conn,
+            crate::enrichment::EnrichmentTargetKind::GraphNode,
+            "all",
+            crate::enrichment::EnrichmentKind::Link,
+            project_id,
+        );
+        let _ = crate::enrichment::enqueue(
+            conn,
+            crate::enrichment::EnrichmentTargetKind::GraphNode,
+            "all",
+            crate::enrichment::EnrichmentKind::Dedupe,
+            project_id,
+        );
+    }
+
+    /// Read recent `retrieval_log` rows for the Knowledge → System
+    /// surface. Optionally filter by `project_id` and `tool` (e.g.
+    /// `'dome_search'`). Returns rows newest-first; `was_consumed` is
+    /// the implicit feedback flag the upcoming `dome-eval replay`
+    /// consumes for precision@k mining.
+    pub fn retrieval_log_recent(
+        &self,
+        limit: usize,
+        project_id: Option<&str>,
+        tool: Option<&str>,
+    ) -> Result<Value, BtError> {
+        let limit = limit.clamp(1, 1000);
+        let conn = self.open_conn()?;
+
+        let mut sql = String::from(
+            r#"SELECT log_id, created_at, actor_kind, actor_id, project_id,
+                       knowledge_scope, tool, query, result_ids_json,
+                       result_scopes_json, latency_ms, pack_id, was_consumed
+                FROM retrieval_log
+                WHERE 1=1"#,
+        );
+        if project_id.is_some() {
+            sql.push_str(" AND project_id = ?1");
+        }
+        if tool.is_some() {
+            // ?2 always when project_id is set; otherwise ?1.
+            if project_id.is_some() {
+                sql.push_str(" AND tool = ?2");
+            } else {
+                sql.push_str(" AND tool = ?1");
+            }
+        }
+        sql.push_str(" ORDER BY created_at DESC LIMIT ");
+        sql.push_str(&limit.to_string());
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Value> {
+            let result_ids: String = row.get(8)?;
+            let result_scopes: String = row.get(9)?;
+            Ok(json!({
+                "log_id": row.get::<_, String>(0)?,
+                "created_at": row.get::<_, String>(1)?,
+                "actor_kind": row.get::<_, String>(2)?,
+                "actor_id": row.get::<_, Option<String>>(3)?,
+                "project_id": row.get::<_, Option<String>>(4)?,
+                "knowledge_scope": row.get::<_, String>(5)?,
+                "tool": row.get::<_, String>(6)?,
+                "query": row.get::<_, Option<String>>(7)?,
+                "result_ids": serde_json::from_str::<Value>(&result_ids).unwrap_or(Value::Array(Vec::new())),
+                "result_scopes": serde_json::from_str::<Value>(&result_scopes).unwrap_or(Value::Array(Vec::new())),
+                "latency_ms": row.get::<_, i64>(10)?,
+                "pack_id": row.get::<_, Option<String>>(11)?,
+                "was_consumed": row.get::<_, i64>(12)? != 0,
+            }))
+        };
+
+        let rows: Vec<Value> = match (project_id, tool) {
+            (Some(p), Some(t)) => stmt
+                .query_map(params![p, t], mapper)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (Some(p), None) => stmt
+                .query_map(params![p], mapper)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, Some(t)) => stmt
+                .query_map(params![t], mapper)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, None) => stmt
+                .query_map([], mapper)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+
+        // Aggregate: consumption rate + mean latency over the returned
+        // window. Cheap and lets the UI render a one-line header.
+        let n = rows.len() as f64;
+        let consumed = rows
+            .iter()
+            .filter(|r| r.get("was_consumed").and_then(Value::as_bool).unwrap_or(false))
+            .count() as f64;
+        let mean_latency = if n > 0.0 {
+            rows.iter()
+                .filter_map(|r| r.get("latency_ms").and_then(Value::as_i64))
+                .sum::<i64>() as f64
+                / n
+        } else {
+            0.0
+        };
+        let consumption_rate = if n > 0.0 { consumed / n } else { 0.0 };
+
+        Ok(json!({
+            "rows": rows,
+            "n": rows.len(),
+            "consumption_rate": consumption_rate,
+            "mean_latency_ms": mean_latency,
+        }))
     }
 
     fn load_graph_records(&self) -> Result<(Vec<GraphNodeRecord>, Vec<GraphEdgeRecord>), BtError> {
@@ -16220,6 +17690,197 @@ mod scoped_knowledge_tests {
             }
         );
     }
+
+    #[test]
+    fn embedding_stats_empty_vault_returns_zero_total() {
+        let vault = temp_vault("embed-stats-empty");
+        let service = CoreService::new();
+        service.open_vault(&vault).unwrap();
+
+        let stats = service.vault_embedding_stats().unwrap();
+        assert_eq!(stats.get("total").and_then(Value::as_i64), Some(0));
+        let counts = stats
+            .get("model_counts")
+            .and_then(Value::as_object)
+            .expect("model_counts present");
+        assert!(counts.is_empty(), "expected no model rows, got {:?}", counts);
+
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn embedding_stats_counts_chunks_after_register() {
+        let vault = temp_vault("embed-stats-after-register");
+        let service = CoreService::new();
+        service.open_vault(&vault).unwrap();
+        let actor = ui_actor();
+
+        service
+            .knowledge_register(
+                &actor,
+                "Note one",
+                "Body that gets chunked and embedded.",
+                "global",
+                None,
+                None,
+                Some("topic"),
+                Some("knowledge"),
+                Some("user"),
+            )
+            .unwrap();
+
+        let stats = service.vault_embedding_stats().unwrap();
+        let total = stats.get("total").and_then(Value::as_i64).unwrap();
+        assert!(total > 0, "expected at least one chunk, got {}", total);
+        let counts = stats
+            .get("model_counts")
+            .and_then(Value::as_object)
+            .expect("model_counts present");
+        assert!(!counts.is_empty(), "expected at least one model bucket");
+
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn vault_ingest_path_creates_one_note_per_eligible_file() {
+        let vault = temp_vault("ingest-vault");
+        let source = temp_vault("ingest-source");
+        fs::create_dir_all(&source).unwrap();
+        // Two ingestible files + one skipped extension + one in a
+        // skip-listed dir + one too-large file.
+        fs::write(source.join("a.rs"), "fn a() {}").unwrap();
+        fs::write(source.join("b.md"), "# B").unwrap();
+        fs::write(source.join("c.bin"), "binary").unwrap();
+        fs::create_dir_all(source.join("node_modules/inner")).unwrap();
+        fs::write(source.join("node_modules/inner/skip.rs"), "skipped").unwrap();
+        let big = "x".repeat(513 * 1024);
+        fs::write(source.join("big.rs"), &big).unwrap();
+
+        let service = CoreService::new();
+        service.open_vault(&vault).unwrap();
+        let actor = ui_actor();
+
+        let result = service
+            .vault_ingest_path(
+                &actor,
+                &source,
+                Some("codebase"),
+                "global",
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(result.get("created").and_then(Value::as_i64), Some(2));
+        assert_eq!(result.get("capped").and_then(Value::as_bool), Some(false));
+        // Skipped: c.bin (extension), big.rs (size). node_modules is
+        // pruned before its files are visited so it doesn't count.
+        let skipped = result.get("skipped").and_then(Value::as_i64).unwrap();
+        assert!(skipped >= 2, "expected ≥2 skipped, got {}", skipped);
+
+        let _ = fs::remove_dir_all(&vault);
+        let _ = fs::remove_dir_all(&source);
+    }
+}
+
+/// Walk `root` like `vault_ingest_path` would, but only count files
+/// matching the same allow-list and dir-skip rules. Bounded by the
+/// same caps so a runaway tree (e.g., a symlink loop) can't freeze
+/// the UI before the real walk even starts. No DB writes, no embed.
+fn estimate_ingest_total(
+    root: &Path,
+    cap: usize,
+    allow_exts: &[&str],
+    skip_dirs: &[&str],
+) -> usize {
+    let mut count = 0usize;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    // Hard bound on directories visited so a symlink cycle bails out
+    // instead of spinning. 50K dirs is enormous for any sane source
+    // tree and still cheap (single readdir per dir).
+    let mut dirs_visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        dirs_visited += 1;
+        if dirs_visited > 50_000 {
+            break;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(it) => it,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                if skip_dirs.iter().any(|d| name.eq_ignore_ascii_case(d)) {
+                    continue;
+                }
+                stack.push(entry_path);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            let ext_ok = entry_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| allow_exts.iter().any(|a| a.eq_ignore_ascii_case(e)))
+                .unwrap_or(false);
+            if ext_ok {
+                count += 1;
+                if count >= cap {
+                    return count;
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Internal helper for `spawn_pack_recent_notes`. Bag of fields the
+/// SQLite mapper plucks out before being shaped into a
+/// `RecentNote`. Matches the column order of the underlying query.
+struct SpawnPackRow {
+    title: String,
+    updated_at: Option<String>,
+    created_at: Option<String>,
+    last_referenced_at: Option<String>,
+    superseded_by: Option<String>,
+}
+
+/// Parse an RFC3339 (or SQLite native `YYYY-MM-DD HH:MM:SS`) string
+/// into a UTC DateTime. Used by spawn-pack rendering — same parser
+/// the rerank's freshness scoring uses.
+fn parse_timestamp_field(s: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s?;
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&chrono::Utc));
+    }
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|n| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(n, chrono::Utc))
+}
+
+/// First 8 hex chars of a UUID string with dashes stripped, lowercase.
+/// Mirrors the Swift convention used by `DomeProjectMemory.topic` /
+/// `DomeContextPreamble`. Kept duplicate of `context::spawn_pack`'s
+/// equivalent so service.rs doesn't need to expose a private helper.
+fn short_project_topic(id: &str) -> String {
+    let mut out = String::with_capacity(8);
+    for c in id.chars() {
+        if c == '-' {
+            continue;
+        }
+        if out.len() >= 8 {
+            break;
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 fn parse_actor(params: &Value) -> Result<Actor, BtError> {
