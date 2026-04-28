@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-04-28
+
+The "operations docs lock-in" release. Phase 6 — the final phase
+of the Surface Coverage Pass — rewrites CLAUDE.md so a fresh
+agent reading it from scratch can operate the whole system end
+to end without external help. No new code, no new surfaces; the
+codebase already covers every backend feature with user-relevant
+semantics, this release just records *how* to operate it.
+
+### Added (CLAUDE.md only — no code changes)
+- **Rules section** — 10 discrete hard rules extracted from
+  Conventions: no watchdogs / atomic-store / additive migrations /
+  FFI ↔ UI parity / bootstrap-prompt freshness / byte-stable
+  spawn-pack / no new ACLs / destructive-action confirmation /
+  Rust-first for non-UI / full-system change discipline.
+- **Operations Runbook** — table of every in-process worker
+  (bt-core daemon, 4 enrichment workers, scheduler, status-line
+  snapshotter, EventBus + deliverers, EventsSocketBridge, run/
+  dispatch event watcher) with cadence + inspection surface; the
+  full migration procedure (additive only, idempotent, pre-backup
+  automatic, with the activation-marker pattern); the FFI
+  contract (Swift → Rust via shim, never reverse, naming
+  convention, cbindgen-driven header sync); a verification matrix
+  (compile + tests + live smoke); a recovery-procedures table
+  covering corrupt SwiftData cache, stuck WAL, lost socket,
+  accidental global ingestion, mid-flight migration abort, lost
+  token secrets, empty Cross-Run Browser.
+- **Memory section** — vault layout (on-disk tree), scope
+  hierarchy (5 levels with merge precedence), graph entity layer
+  (kind taxonomy + lifecycle columns), lifecycle primitives
+  (`dome_supersede` / `_verify` / `_decay`), rerank formula
+  (the explicit `combined_score × (0.5 + 0.5·freshness) ×
+  scope_match × confidence × supersede_penalty` math).
+- **Context Lifecycle section** — 9-step walkthrough from spawn
+  → preamble injection → MCP retrieval → consumption →
+  retrieval_log writeback → enrichment → supersede → audit →
+  eval. Single source of truth for "how does an agent get
+  context end to end".
+- **Execution section** — build matrix (every build command +
+  when to run it), test matrix (5 cargo invocations that must be
+  green before tag), live verification ritual (6-step manual
+  smoke for releases), rollback procedure (3 cases: cosmetic,
+  data corruption, compile blocker), release procedure summary
+  (bumped to top-level reference).
+
+### Changed
+- **Top-of-file version** bumped to v0.16.0.
+- **Release-history entries** for v0.11–v0.16 in chronological
+  order matching CHANGELOG.
+
+### Closed
+- The 22-category audit from v0.10 that drove the Surface
+  Coverage Pass. Every backend feature with user-relevant
+  semantics now has a designed surface; CLAUDE.md tells a fresh
+  agent how to operate all of it without further human guidance.
+
 ## [0.15.0] - 2026-04-28
 
 The "collaborative edits + clean shutdown" release. Phase 5 of

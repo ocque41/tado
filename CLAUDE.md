@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.15.0. It is grouped so you can
+This file is the canonical map of Tado at v0.16.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -13,16 +13,79 @@ to **Key Files** for the quickest "where do I edit?" answer.
 
 - [Build & Run](#build--run)
 - [What This Is](#what-this-is)
+- [Rules (the discrete checklist)](#rules-the-discrete-checklist)
 - [Conventions (foundation-v2 and beyond)](#conventions-foundation-v2-and-beyond)
 - [Architecture](#architecture)
+- [Operations Runbook](#operations-runbook)
 - [Persistence (settings / memory / events / Dome vault)](#persistence-settings--memory--events--dome-vault)
+- [Memory (vault layout, scope, lifecycle, rerank)](#memory-vault-layout-scope-lifecycle-rerank)
+- [Context Lifecycle (full agent journey)](#context-lifecycle-full-agent-journey)
 - [Knowledge & Memory (Dome second brain + spawn-time context)](#knowledge--memory-dome-second-brain--spawn-time-context)
 - [Tado A2A (CLI + MCP + real-time events)](#tado-a2a-cli--mcp--real-time-events)
 - [Bootstrapping a project (the four `Bootstrap …` actions)](#bootstrapping-a-project-the-four-bootstrap--actions)
 - [Extensions (Notifications, Dome, Cross-Run Browser)](#extensions-notifications-dome-cross-run-browser)
+- [Execution (build matrix, verification, rollback)](#execution-build-matrix-verification-rollback)
 - [Key Files](#key-files)
 - [Releasing ("release next version")](#releasing-release-next-version)
 - [Release history (one line per version)](#release-history-one-line-per-version)
+
+## Rules (the discrete checklist)
+
+The hard rules. Every PR / release must satisfy these. Listed
+explicitly because the audit pass that drove v0.11–v0.15 found
+backend features sitting orphaned for two releases — the FFI ↔ UI
+parity rule (rule 4) is the meta-fix that keeps that from
+happening again.
+
+1. **No watchdogs, retries, or timeouts on the dispatch chain.**
+   Eternal / Dispatch / agent spawn paths run unchecked. If
+   something fails, the failure is visible and audit-logged; you
+   diagnose and fix it. Do not paper over flakiness with a retry.
+2. **Atomic-store discipline.** Every disk write that lands in
+   `<storage-root>` goes through `AtomicStore` (Swift) or
+   `tado-settings::write_json` (Rust): temp → fsync → rename, with
+   a sidecar `.lock` flock. Never write a settings JSON directly.
+3. **Additive migrations only.** New schema versions add columns
+   / tables / indexes; they never drop or rename. Migrations are
+   idempotent (`IF NOT EXISTS` / guarded ALTERs). Pre-migration
+   tarball backup is automatic via `MigrationRunner`.
+4. **FFI ↔ UI parity.** Every new RPC method that has user-
+   relevant semantics must ship with both an FFI shim
+   (`tado_dome_<family>_<verb>`) AND a Swift binding (Codable +
+   `DomeRpcClient.<family><Verb>`) AND a surface that calls it,
+   in the **same release** that introduces it. PR review checks
+   `grep -r tado_dome_<symbol> Sources/Tado/` returns at least
+   one hit. The 22-category orphan inventory in v0.10 → v0.15 was
+   the consequence of not enforcing this.
+5. **Bootstrap prompts updated whenever a new agent-facing tool
+   ships.** `bootstrapPrompt`, `bootstrapTeamPrompt`,
+   `bootstrapAutoModePrompt`, `bootstrapKnowledgePrompt` in
+   `Services/ProcessSpawner.swift` are the four bootstraps. Old
+   projects rerun the relevant bootstrap to pick up the new
+   prose.
+6. **Byte-stable spawn-pack contract.** The
+   `<!-- tado:context:begin -->` / `<!-- tado:context:end -->`
+   markers and the fragment order between them are public API.
+   Both the Swift composer and the Rust `compose_spawn_preamble`
+   must produce byte-identical output for the same input. Test:
+   `bt-core/tests/spawn_pack_byte_equiv.rs` (4 fixtures).
+7. **No new ACLs.** Single-user laptop. Scope filters
+   (`owner_scope` + `project_id`) plus the write barrier are
+   sufficient. `retrieval_log` audit covers cross-scope visibility
+   for the threat model that exists.
+8. **Destructive actions need confirmation.** Every UI button
+   that deletes / revokes / purges / resets shows an `NSAlert`
+   with `alertStyle = .critical` and Cancel as the default
+   button. Pattern set by the v0.10 codebase-purge button and
+   followed by Phase 1–5 surfaces.
+9. **Rust-first for new non-UI logic.** Persistence, IPC, atomic
+   IO, settings merging, scheduling, retrieval — Rust in
+   `tado-core/`. Swift is views + thin bindings + AppKit glue.
+10. **Treat every feature change as a full-system change.** Don't
+   stop at the user-visible UI tweak. Trace and update window
+   wiring, state, settings precedence, Swift views, Rust services,
+   FFI, CRUD paths, filtering, tests. If you add a field, scope,
+   toggle, topic, or action, check the whole lifecycle.
 
 ## Build & Run
 
@@ -148,6 +211,111 @@ todo. One-shot: forwarding deactivates after one message.
 tiles). Tiles are positioned absolutely in a `ZStack` with `scaleEffect`
 + `offset` for zoom/pan. `Shift+scroll` zooms; plain scroll pans (unless
 a terminal is focused, then it's terminal scrollback).
+
+## Operations Runbook
+
+How Tado actually runs once the user clicks the dock icon, what
+each in-process worker does, when it fires, and how to inspect /
+recover when something goes wrong. Lives next to Persistence so
+you can correlate live state with on-disk artifacts.
+
+### In-process workers (everything runs inside the .app)
+
+There are **no separate daemons** to start; every long-running
+worker is a tokio task launched by `bt-core`'s startup hook.
+
+| Worker | Source | Cadence | What it does | Inspect via |
+|---|---|---|---|---|
+| **bt-core daemon** | `bt-core::rpc::run_daemon` | always (boot → quit) | Owns the SQLite vault, services every JSON-RPC call from CLIs / MCP / FFI | `Knowledge → System` "Vault status" + "Vault health" cards |
+| **Enrichment workers** (4: extract, link, dedupe, decay) | `bt-core::enrichment::worker::spawn_workers` | poll `pending_enrichment` every 2s; decayer every 15min | Auto-extract typed entities + edges from new docs; link stub references; dedupe on content hash; soft-archive expired rows | Backfill chip on `Knowledge → System` (visible while queued+running > 0) |
+| **Scheduler** | `bt-core::service::scheduler_tick` (no continuous task in v0.15; ticks fire on RPC + manual run-now) | manual + occurrence-driven | Materializes automation occurrences; runs the in-process executors | `Dome → Automation` (full CRUD) + `Knowledge → System` "Scheduler queue" card (queue depths + stale-lease count) |
+| **Status-line snapshotter** | Python script at `<vault>/.bt/status/claude/tado-statusline.py` | every ~5s while a Claude Code session is running anywhere on the machine | Writes `<vault>/.bt/status/claude/latest/<tado-session-id>.json` so the Knowledge → System "Claude Agents" panel can show what's running | `Knowledge → System` "Claude Agents" panel (`agent_status` envelope) |
+| **EventBus + deliverers** | `Events/EventBus.swift` + `Events/Deliverers/*.swift` | event-driven | Fans typed `TadoEvent`s to sound, dock badge, banner, NDJSON log, notifications history, real-time A2A socket | `tado-events` CLI; `Calendar → Ledger` mode; NDJSON tail at `<storage-root>/events/current.ndjson` |
+| **EventsSocketBridge** | `Services/EventsSocketBridge.swift` | event-driven | Mirrors `EventBus` to `/tmp/tado-ipc-<pid>/events.sock` for external consumers | `tado-events` CLI; any `nc`-style reader |
+| **Run / Dispatch event watcher** | `Events/RunEventWatcher.swift` | DispatchSource-debounced file watch | Diffs `state.json` / `phases/*.json` from active Eternal/Dispatch runs; emits typed events; mirrors retros into Dome | Cross-Run Browser extension; `Calendar` ledger |
+
+### Migration procedure (adding a new schema version)
+
+Every schema bump follows the same pattern. Source of truth is
+`bt-core/src/migrations.rs`; current `LATEST_SCHEMA_VERSION` lives
+at the top of that file.
+
+1. **Bump `LATEST_SCHEMA_VERSION`** to the next integer (e.g. v24
+   → v25).
+2. **Add `pub fn migration_<N>(conn: &Connection) -> Result<()>`**
+   that does additive DDL only — `CREATE TABLE IF NOT EXISTS`,
+   `CREATE INDEX IF NOT EXISTS`, guarded `ALTER TABLE` (read
+   `pragma table_info` first; only `ADD COLUMN` if absent). Never
+   drop, never rename.
+3. **Append the call** in `migrate(conn)` after the previous
+   migration's call. Migrations run in order; failures abort.
+4. **Pre-migration backup is automatic** — `MigrationRunner`
+   triggers `BackupManager.createBackup(reason: "pre-migration")`
+   before applying anything.
+5. **Add a unit test** in the same `migrations.rs` mirroring
+   existing patterns (`migration_22_creates_code_tables`,
+   `migration_23_adds_lifecycle_columns_and_log_tables`,
+   `migration_24_stamps_activation_log`).
+6. **Activation marker** — if the migration semantically
+   "activates" a feature (Phase 5 v24 did this for recipes), add
+   a `INSERT OR IGNORE INTO schema_activation_log` row. Surfaces
+   that need to wait for activation read this table.
+7. **Bump CLAUDE.md** in the Knowledge & Memory section's "Schema
+   is at version **N**" sentence.
+
+### FFI contract
+
+Direction matters. Three rules govern the Swift ↔ Rust boundary:
+
+1. **Swift calls Rust via FFI shim, not JSON-RPC.** Any Rust
+   capability the UI uses gets a `pub extern "C" fn
+   tado_dome_<family>_<verb>` shim in `dome_ffi.rs`, a matching C
+   declaration in `Sources/CTadoCore/include/tado_core.h`, and a
+   typed `DomeRpcClient.<family><Verb>` Swift facade. The Unix
+   socket is reserved for external callers (CLIs, MCP).
+2. **Rust never calls Swift.** Information flows back via FFI
+   return value (JSON string) or the `EventBus` (events the daemon
+   emits → Swift subscribers consume). No Rust-initiated callbacks.
+3. **Naming**:
+   - Rust: `tado_dome_<family>_<verb>` (snake_case), e.g.
+     `tado_dome_automation_run_now`, `tado_dome_recipe_apply`.
+   - Swift facade: `<family><Verb>` (camelCase) on
+     `DomeRpcClient`, e.g. `automationRunNow`, `recipeApply`.
+   - JSON keys match the bt-core `serde::Serialize` field names
+     (snake_case); Swift Codable uses `CodingKeys` to camelCase.
+4. **cbindgen syncs the C header.** `Sources/CTadoCore/include/
+   tado_core.h` is the public boundary; Rust additions to
+   `dome_ffi.rs` get a matching block in the header within the
+   same commit.
+
+### Verification matrix
+
+What MUST pass before a release ships. Listed in dependency order.
+
+| Gate | Command | Catches |
+|---|---|---|
+| Rust compile | `cargo build --release -p bt-core -p tado-core` | FFI shim drift, missing header sync |
+| Swift build | `cd /Users/miguel/Documents/tado && swift build` | C-header / Swift binding drift |
+| bt-core unit | `cargo test -p bt-core` | service.rs invariants, migration drift |
+| dome-eval lib | `cargo test -p dome-eval` | retrieval-quality regression (Phase 2 corpus) |
+| Spawn-pack contract | `cargo test -p bt-core --test spawn_pack_byte_equiv` | byte-stability of preamble (rule 6) |
+| Ingest scope contract | `cargo test -p bt-core --test ingest_scope_contract` | accidental global pollution rule |
+| Live smoke | manual: launch app → Knowledge → System renders without errors | wiring drift, daemon-down behavior |
+
+### Recovery procedures
+
+For when production state goes sideways. Each procedure is
+intended to be runnable cold by the operator without context.
+
+| Symptom | Recovery |
+|---|---|
+| **Corrupt SwiftData cache** (Tado won't open, "DataStore: bad signature" or similar) | `rm -rf ~/Library/Application\ Support/Tado/cache/`. SwiftData rebuilds from the canonical JSON files on next launch. |
+| **Stuck SQLite WAL** (vault file fine but daemon hangs) | Quit Tado (Cmd+Q) — v0.15 wires the `tado_dome_stop` checkpoint. If the WAL file is non-empty after exit, `sqlite3 ~/Library/Application\ Support/Tado/dome/.bt/index.sqlite "PRAGMA wal_checkpoint(TRUNCATE);"`. |
+| **Lost daemon socket** (`/tmp/tado-ipc-<pid>/events.sock` gone) | Sockets are pid-scoped; relaunching the app remints them. CLI tools fail loudly until the new socket exists. |
+| **Accidental global Dome ingestion** (the v0.10 "everything went to Global" foot-gun) | `Knowledge → System → Clear globally-ingested codebases (N)` — takes a backup snapshot first, then purges via `vault_purge_topic_scope` RPC. |
+| **Migration aborted mid-flight** (`version` file at lower-than-LATEST) | Restore from `<storage-root>/backups/tado-backup-<date>-pre-migration.tar.gz` via Settings → Storage → "Restore from backup". |
+| **Lost agent token secrets** | Secrets are hashed-only after issue; can't be recovered. Issue a new one via Settings → Agent tokens, copy at issue, revoke the old. |
+| **Cross-Run Browser shows nothing** | Verify Eternal/Dispatch runs have valid `state.json`. RunEventWatcher debounce-watches; manually relaunching the app re-walks. |
 
 ## Persistence (settings / memory / events / Dome vault)
 
@@ -359,6 +527,146 @@ Every Claude Code session anywhere on the user's machine writes
 The Knowledge → Agent System surface reads those files via
 `dome_agent_status` to show what's running.
 
+## Memory (vault layout, scope, lifecycle, rerank)
+
+Tado's "memory" is the in-process Dome vault — a SQLite + chunked-
+markdown store that holds every typed fact + retrieval signal the
+app accumulates. This section is the agent-facing reference for
+*where* memory lives and *how* it's ranked when an agent reads.
+
+### Vault layout (on disk)
+
+```
+<storage-root>/dome/                   # Dome vault root
+  .bt/
+    index.sqlite                       # SQLite state (schema v24)
+    bt-core.sock                       # Unix socket the daemon listens on
+    audit.log                          # NDJSON audit events (every write)
+    config.toml                        # Tokens + caps + feature flags
+    status/claude/latest/<sid>.json    # Per-session statusLine snapshots
+  topics/<topic>/<slug>/                # Doc folders (one per registered note)
+    user.md                             # Human-authored side
+    agent.md                            # Agent-authored side
+    meta.json                           # Tags + links_out + status
+  inbox/                                # Manual import drop zone
+```
+
+### Scope hierarchy (5 levels, highest wins on merge)
+
+`runtime > project-local > project-shared > user-global > built-in default`.
+
+- **runtime** — in-memory overrides set during a session.
+- **project-local** — `<project>/.tado/local.json` (gitignored).
+- **project-shared** — `<project>/.tado/config.json` (committed).
+- **user-global** — `<storage-root>/settings/global.json`.
+- **built-in default** — hard-coded in `GlobalSettings.swift` /
+  `tado-settings::Scope`.
+
+Implemented as `ScopedConfig` (Swift) and mirrored in Rust as
+`tado-settings::Scope`. Every read merges the chain on demand.
+
+### Graph entity layer
+
+Migrated to `graph_nodes` + `graph_edges` in v22; lifecycle
+columns added in v23 (Phase 3). Typed entities ride on top of
+plain "doc" nodes:
+
+| `graph_nodes.kind` | Meaning |
+|---|---|
+| `doc` | Generic note (one per doc) |
+| `decision` | `## Decision: …` heading extracted by the Phase-3 enricher |
+| `intent` | `## Intent: …` heading |
+| `outcome` | `## Outcome: …` |
+| `retro` | Eternal/Dispatch retro mirrored in by RunEventWatcher |
+| `note` / `topic` / `agent` / `brand` / `event` | Pre-existing entity nodes |
+
+Lifecycle columns (every node): `confidence` (default 0.7),
+`superseded_by` / `supersedes` (chain pointers), `expires_at`
+(TTL), `archived_at` (soft-delete), `content_hash` (dedup),
+`last_referenced_at` (read-time signal), `entity_version`.
+
+### Lifecycle primitives (Phase 3 MCP tools)
+
+Surfaced both via MCP and in the UI (Knowledge surfaces).
+
+- **`dome_supersede(old_id, new_id, reason?)`** — chains an old
+  fact to its replacement. Rerank then demotes the old row 0.3×
+  so retired facts stay visible for audit but never outrank
+  replacements.
+- **`dome_verify(node_id, verdict, agent_id?, reason?)`** — flips
+  `confidence` to ≥ 0.9 (`confirmed`) or ≤ 0.4 (`disputed`).
+- **`dome_decay(node_id, reason?)`** — soft-archives the node.
+
+### Rerank formula (v0.10+)
+
+Every hybrid_search hit goes through this ranker before the top
+N return:
+
+```
+combined_score
+  × (0.5 + 0.5 · freshness)
+  × scope_match
+  × confidence
+  × supersede_penalty
+```
+
+- **freshness** — exponential decay with 30-day half-life over
+  the most recent of `updated_at` / `last_referenced_at` /
+  `created_at`.
+- **scope_match** — 1.0× if the hit's scope matches the caller's
+  preferred scope, 0.6× otherwise.
+- **confidence** — read from `graph_nodes.confidence`. Defaults
+  to 1.0 when no typed entity exists.
+- **supersede_penalty** — 0.3× if the row's `superseded_by` is
+  set, 1.0× otherwise.
+
+Implemented in `bt-core/src/notes/search.rs::rerank`. Every
+`hybrid_search` call also writes one row to `retrieval_log` —
+that's the corpus `dome-eval replay` uses to score quality.
+
+## Context Lifecycle (full agent journey)
+
+End to end, here's what happens when a Tado tile spawns and
+runs an agent that consumes Dome context:
+
+1. **Spawn** — `MetalTerminalTileView` renders a new terminal,
+   prepends the spawn-pack preamble to the user prompt.
+2. **Pack composition** — `compose_spawn_preamble` (Rust, byte-
+   equivalent to Swift fallback) renders identity + project +
+   team + recent project notes + retrieval contract into the
+   `<!-- tado:context:begin -->`…`<!-- tado:context:end -->`
+   block. Cached in `context_packs` keyed by `(project_id,
+   agent_name)`, TTL 60s.
+3. **Preamble injection** — `ProcessSpawner` shells the prompt
+   into `claude` / `codex`. Agent sees the preamble first.
+4. **MCP retrieval** — Agent calls `dome_search` /
+   `dome_recipe_apply` / `dome_graph_query` via `dome-mcp`. Each
+   call writes a `retrieval_log` row with `tool`, `query`,
+   `result_ids`, `latency_ms`, `was_consumed=0`.
+5. **Consumption** — When the agent acts on a retrieval result
+   (cites it, edits the referenced doc, etc.), it calls
+   `agent_context_event(event_kind='agent_used_context')`. Bt-core
+   bumps `last_referenced_at` on the consumed node and flips
+   `was_consumed=1` on the matching `retrieval_log` row.
+6. **Enrichment** — On every `dome_note_write`, four jobs land in
+   `pending_enrichment`: extract (parse Markdown headings →
+   typed entities), link (resolve `dome://note/<id>` references),
+   dedupe (content-hash collisions), backfill if migrating.
+   Workers drain at 2-second intervals.
+7. **Supersede / verify / decay** — When a new fact replaces an
+   old one, the agent (or operator via `Dome → Knowledge → List`)
+   calls `dome_supersede`, which invalidates the spawn-pack cache
+   for the affected project so the next tile spawn picks up the
+   new authority.
+8. **Audit** — Every step lands a row in `audit.log` (NDJSON) +
+   bt-core's `audit` table. Operator can grep both via
+   `Knowledge → System → Audit log` (last 200 rows, prefix
+   filter).
+9. **Eval** — Periodically (or on-demand via `Knowledge → System
+   → Run eval`), `dome-eval replay` scores recent retrievals:
+   P@5, R@10, nDCG, mean latency, consumption rate. Regression
+   over 5% blocks the next release per the verification matrix.
+
 ## Tado A2A (CLI + MCP + real-time events)
 
 Tado exposes three coordinated A2A surfaces. They share data — every
@@ -523,6 +831,80 @@ Currently shipped:
   [CrossRunBrowserExtension.swift](Sources/Tado/Extensions/CrossRunBrowser/CrossRunBrowserExtension.swift)
   and [CrossRunBrowserView.swift](Sources/Tado/Extensions/CrossRunBrowser/CrossRunBrowserView.swift).
 
+## Execution (build matrix, verification, rollback)
+
+The complete dev → release loop. Use this when you need a single
+place to look up "how do I check that this PR is good".
+
+### Build matrix
+
+| Step | Command | When to run |
+|---|---|---|
+| Swift compile | `cd /Users/miguel/Documents/tado && swift build` | Every Swift edit |
+| Swift run | `swift run` | Quick sanity check (sub-2s relink) |
+| Rust core (debug) | `cd tado-core && cargo build -p tado-core` | Every Rust edit on the FFI side |
+| Rust core (release) | `cd tado-core && cargo build --release -p bt-core -p tado-core` | Before linking the Swift app, before any release tag |
+| MCP bridges | `make mcp` (= `cargo build --release -p dome-mcp -p tado-mcp`) | When agent-facing MCP shape changes |
+| Full dev loop | `make dev` | One-shot: cargo release + cbindgen header sync + swift run |
+
+### Test matrix
+
+Run all of these green before tagging:
+
+```bash
+cd tado-core
+cargo test -p bt-core                              # 132+ unit + integration
+cargo test -p bt-core --test spawn_pack_byte_equiv # spawn-pack contract (4 fixtures)
+cargo test -p bt-core --test ingest_scope_contract # ingest scope locked
+cargo test -p dome-eval                            # corpus regression
+cargo test -p tado-ipc -p tado-settings            # contract types + atomic IO
+```
+
+### Live verification ritual
+
+Manually check before every release:
+
+1. Launch the freshly-built app.
+2. Open `Dome → Knowledge → System`. Verify:
+   - "Vault status" card shows your vault path + non-zero doc count.
+   - "Vault health" card all green.
+   - "Scheduler queue" card shows queue depths.
+   - "Run eval" with `Last 24h` populates (or shows the empty-state hint).
+   - "Audit log" shows recent rows.
+3. `Dome → Automation`: card list renders if you have any automations; "+ New automation" sheet opens.
+4. `Dome → Recipes`: 3 baked defaults (architecture-review, completion-claim, team-handoff) appear in the left rail.
+5. `Settings → Agent tokens`: existing tokens listed; `Issue token` form works.
+6. Cmd+Q → relaunch → repeat 2 (state must persist).
+
+### Rollback procedure
+
+When a release breaks something:
+
+1. **Cosmetic / non-data bug** — fix forward in the next patch
+   release.
+2. **Data corruption / migration regression** — restore the most
+   recent `<storage-root>/backups/tado-backup-<date>-pre-migration.tar.gz`
+   via Settings → Storage → "Restore from backup". Then revert
+   the offending tag (`git revert v0.X.Y`) and ship a patch.
+3. **Compile-time blocker** — ship a hotfix from `master~1`. Do
+   NOT force-push the master branch.
+
+### Releasing ("release next version")
+
+The exact procedure (also documented in [Releasing](#releasing-release-next-version) below). Listed here so it's part of the Execution checklist:
+
+1. Read CHANGELOG → bump to next minor version.
+2. Audit: `git status`, `git log v<prev>..HEAD`.
+3. Verify: `swift build` + `make mcp` + the test matrix above.
+4. Keep `.tado/eternal/` / `.tado/dispatch/` / `.tado/memory/notes/` gitignored.
+5. Update CHANGELOG.md with `### Added / Changed / Fixed / Removed` sections.
+6. Stage explicitly by path; `git rm` for intentional deletions.
+7. Commit with `Release vX.Y.Z — <headline>` subject.
+8. Annotated tag: `git tag -a vX.Y.Z -m "..."`.
+9. Push: `git push origin master && git push origin vX.Y.Z`.
+10. Create GitHub release: `gh release create vX.Y.Z --title "X.Y.Z" --notes-file ...` (title is bare version, body is unaltered CHANGELOG section).
+11. Verify with `gh release view vX.Y.Z`.
+
 ## Key Files
 
 **Spawning + sessions**
@@ -637,6 +1019,19 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.16.0** (2026-04-28) — *Surface Coverage Pass, phase 6 —
+  CLAUDE.md operations rewrite.* Major doc upgrade: new **Rules**
+  checklist (10 hard rules including the FFI ↔ UI parity rule
+  that drove this whole pass), new **Operations Runbook** (every
+  in-process worker, the migration procedure, the FFI contract,
+  the verification matrix, recovery procedures), new **Memory**
+  section (vault layout, scope hierarchy, graph entity layer,
+  lifecycle primitives, rerank formula), new **Context Lifecycle**
+  walkthrough (the full agent-context journey from spawn → pack
+  → MCP retrieval → consumption → enrichment → supersede → audit
+  → eval), and new **Execution** section (build matrix, test
+  matrix, live verification ritual, rollback procedure). Closes
+  the Surface Coverage Pass.
 - **v0.15.0** (2026-04-28) — *Surface Coverage Pass, phase 5 —
   collaborative edits + clean shutdown.* Knowledge tab gains a
   **Suggestions** sub-page (lists pending / applied / rejected
