@@ -1447,6 +1447,108 @@ pub unsafe extern "C" fn tado_dome_automation_retry_occurrence(
     }
 }
 
+// ── v0.12 — system observability + audit + eval ───────────────────
+
+/// JSON shape: `{checks: [{name, ok, detail}, ...], db_ok, ...}`.
+/// The Knowledge → System surface renders one row per check.
+#[no_mangle]
+pub extern "C" fn tado_dome_system_health() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.system_health() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// JSON shape: `{queue_depth: {ready, scheduled, active}, stale_leases,
+/// workers: [...]}`. Used by the System surface "Scheduler" card.
+#[no_mangle]
+pub extern "C" fn tado_dome_system_automation_status() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.system_automation_status() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// JSON shape: `{ok: bool, ...}` — connectors, openclaw, and
+/// runtime-status helpers folded into one payload so the System
+/// surface gets everything in one round trip.
+#[no_mangle]
+pub extern "C" fn tado_dome_system_runtime_envelope() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let connectors = service.system_connector_status().ok();
+    let openclaw = service.system_openclaw_status().ok();
+    let runtime = service.system_runtime_status(None).ok();
+    let value = serde_json::json!({
+        "connectors": connectors,
+        "openclaw": openclaw,
+        "runtime": runtime,
+    });
+    to_cstr(value.to_string())
+}
+
+/// Tail the audit log. `since_cstr` may be null (= start from
+/// origin). `limit` clamped 1..1000.
+///
+/// Returns JSON `{"entries": [{action, actor_kind, actor_id,
+/// created_at, params, result, ...}, ...]}` or null on failure.
+///
+/// # Safety
+/// `since_cstr` may be null; non-null must be NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_audit_tail(
+    since_cstr: *const c_char,
+    limit: c_int,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let since = optional_cstr(since_cstr);
+    let limit = limit.clamp(1, 1000) as usize;
+    match service.audit_tail(since, limit) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Run `dome-eval replay` in-process. `vault_db_cstr` is the
+/// absolute path to `<vault>/.bt/index.sqlite` (Swift can resolve
+/// via `StorePaths`). `since_seconds <= 0` → every row.
+///
+/// Returns JSON serialization of the `ReplayReport` (window_start,
+/// window_end, n_rows, consumption_rate, mean_latency_ms,
+/// aggregate, rows). Caller frees with `tado_string_free`.
+///
+/// # Safety
+/// `vault_db_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_eval_replay(
+    vault_db_cstr: *const c_char,
+    since_seconds: i64,
+) -> *mut c_char {
+    if vault_db_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(path_str) = CStr::from_ptr(vault_db_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let path = std::path::Path::new(path_str);
+    match dome_eval::replay_for_vault(path, since_seconds) {
+        Ok(report) => match serde_json::to_string(&report) {
+            Ok(json) => to_cstr(json),
+            Err(_) => std::ptr::null_mut(),
+        },
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
 /// to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
 /// `build(for:)` once the Swift composer adopts the deterministic

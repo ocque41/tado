@@ -717,6 +717,30 @@ char *tado_dome_automation_occurrence_list(const char *automation_id_cstr,
 /** Retry a failed/cancelled occurrence. */
 char *tado_dome_automation_retry_occurrence(const char *occurrence_id_cstr);
 
+/* ── v0.12 — system observability + audit + eval ─────────────────── */
+
+/** Vault health checks (existence, sqlite open, audit log, …). */
+char *tado_dome_system_health(void);
+
+/** Scheduler queue depths + stale leases + worker cursors. */
+char *tado_dome_system_automation_status(void);
+
+/** Connectors + openclaw + runtime status folded into one payload. */
+char *tado_dome_system_runtime_envelope(void);
+
+/**
+ * Tail the audit log. `since_cstr` may be null. `limit` clamped 1..1000.
+ * Returns JSON `{entries: [...]}`.
+ */
+char *tado_dome_audit_tail(const char *since_cstr, int limit);
+
+/**
+ * In-process `dome-eval replay`. `vault_db_cstr` is the absolute
+ * path to `<vault>/.bt/index.sqlite`. `since_seconds <= 0` →
+ * every row. Returns JSON-serialized `ReplayReport`.
+ */
+char *tado_dome_eval_replay(const char *vault_db_cstr, long long since_seconds);
+
 /**
  * Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
  * to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s

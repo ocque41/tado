@@ -885,6 +885,17 @@ private struct KnowledgeSystemSurface: View {
     /// `queued + running` and hides when both are zero.
     @State private var queueDepth: DomeRpcClient.EnrichmentQueueDepth?
 
+    /// v0.12 — system observability + audit + eval. Each is fetched
+    /// alongside the existing `reload()` tick so the System surface
+    /// stays a single round trip (parallel awaits).
+    @State private var systemHealth: DomeRpcClient.SystemHealth?
+    @State private var automationStatus: DomeRpcClient.AutomationStatus?
+    @State private var auditRows: [DomeRpcClient.AuditRow] = []
+    @State private var auditFilter: String = ""
+    @State private var lastEvalReport: DomeRpcClient.EvalReplayReport?
+    @State private var evalRunning = false
+    @State private var evalWindowSeconds: Int = 86_400 // last 24h default
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             surfaceHeader(title: "Agent System", subtitle: "\(systemSubtitle) · \(domeScope.label)", isLoading: isLoading) {
@@ -896,11 +907,15 @@ private struct KnowledgeSystemSurface: View {
                     if let depth = queueDepth, !depth.idle {
                         backfillChip(depth)
                     }
+                    healthSection
+                    schedulerSection
+                    evalSection
                     statusSection
                     embeddingsSection
                     contextPackSection
                     retrievalLogSection
                     retrievalSection
+                    auditSection
                 }
                 .padding(20)
             }
@@ -908,6 +923,221 @@ private struct KnowledgeSystemSurface: View {
         .background(Palette.background)
         .task(id: domeScope.id) { await reload() }
         .task { embeddingStats = DomeRpcClient.embeddingStats() }
+    }
+
+    // MARK: - v0.12 System health
+
+    private var healthSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Vault health")
+            if let health = systemHealth {
+                ForEach(health.checks) { check in
+                    HStack(spacing: 10) {
+                        Image(systemName: check.ok ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(check.ok ? Palette.success : Palette.danger)
+                            .font(.system(size: 12))
+                        Text(check.name)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textPrimary)
+                        Spacer()
+                        if let detail = check.detail {
+                            Text(detail)
+                                .font(Typography.monoCaption)
+                                .foregroundStyle(Palette.textTertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                if !health.dbOk {
+                    Text("SQLite open failed — check daemon log + filesystem permissions.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.danger)
+                }
+            } else {
+                Text("Health snapshot pending — refresh to check.")
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textSecondary)
+            }
+        }
+    }
+
+    // MARK: - v0.12 Scheduler
+
+    private var schedulerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Scheduler queue")
+            if let s = automationStatus {
+                HStack(spacing: 18) {
+                    queueStat("Ready", value: s.queueDepth.ready, color: Palette.warning)
+                    queueStat("Scheduled", value: s.queueDepth.scheduled, color: Palette.textSecondary)
+                    queueStat("Active", value: s.queueDepth.active, color: Palette.accent)
+                    queueStat("Stale leases", value: s.staleLeases, color: s.staleLeases > 0 ? Palette.danger : Palette.textTertiary)
+                }
+                if s.staleLeases > 0 {
+                    Text("\(s.staleLeases) occurrences have lease_expires_at in the past — likely a worker crash. Check the audit log.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.danger)
+                }
+            } else {
+                Text("No scheduler snapshot yet.")
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textSecondary)
+            }
+        }
+    }
+
+    private func queueStat(_ label: String, value: Int, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(Typography.display)
+                .foregroundStyle(color)
+            Text(label)
+                .font(Typography.micro)
+                .foregroundStyle(Palette.textTertiary)
+        }
+    }
+
+    // MARK: - v0.12 dome-eval inline runner
+
+    private var evalSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                sectionTitle("Retrieval quality (dome-eval replay)")
+                Spacer()
+                Picker("Window", selection: $evalWindowSeconds) {
+                    Text("Last 1h").tag(3_600)
+                    Text("Last 24h").tag(86_400)
+                    Text("Last 7 days").tag(604_800)
+                    Text("All time").tag(0)
+                }
+                .pickerStyle(.menu)
+                .frame(width: 130)
+                .disabled(evalRunning)
+                Button(evalRunning ? "Running…" : "Run eval") {
+                    runEval()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(evalRunning)
+            }
+            if let report = lastEvalReport {
+                HStack(spacing: 18) {
+                    evalStat("P@5", value: String(format: "%.2f", report.aggregate.precisionAt5))
+                    evalStat("R@10", value: String(format: "%.2f", report.aggregate.recallAt10))
+                    evalStat("nDCG", value: String(format: "%.2f", report.aggregate.ndcgAt10))
+                    evalStat("Mean latency", value: "\(Int(report.meanLatencyMs)) ms")
+                    evalStat("Consumed", value: "\(Int(report.consumptionRate * 100))%")
+                    evalStat("Rows", value: "\(report.nRows)")
+                }
+                if report.nRows == 0 {
+                    Text("No retrieval-log rows in this window. Run dome_search a few times (or invoke a recipe) and rerun.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textTertiary)
+                }
+            } else {
+                Text("Click Run eval to score retrieval quality across the chosen window. P@5 / R@10 / nDCG come from the consumed-vs-not signal stored on every retrieval_log row.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+        }
+    }
+
+    private func evalStat(_ label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(Typography.title)
+                .foregroundStyle(Palette.textPrimary)
+            Text(label)
+                .font(Typography.micro)
+                .foregroundStyle(Palette.textTertiary)
+        }
+        .padding(8)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func runEval() {
+        evalRunning = true
+        let seconds = evalWindowSeconds
+        Task.detached {
+            let report = DomeRpcClient.evalReplay(sinceSeconds: seconds)
+            await MainActor.run {
+                evalRunning = false
+                lastEvalReport = report
+            }
+        }
+    }
+
+    // MARK: - v0.12 Audit log
+
+    private var auditSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                sectionTitle("Audit log")
+                Spacer()
+                TextField("Filter by action prefix", text: $auditFilter)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+                Text("\(filteredAudit.count) rows")
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+            if filteredAudit.isEmpty {
+                Text(auditRows.isEmpty
+                     ? "Audit log empty (or daemon hasn't loaded yet). Refresh to populate."
+                     : "No rows match the current filter.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+            } else {
+                ForEach(filteredAudit) { row in
+                    auditRowView(row)
+                }
+            }
+        }
+    }
+
+    private var filteredAudit: [DomeRpcClient.AuditRow] {
+        let prefix = auditFilter.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if prefix.isEmpty { return auditRows }
+        return auditRows.filter { $0.action.lowercased().hasPrefix(prefix) }
+    }
+
+    private func auditRowView(_ row: DomeRpcClient.AuditRow) -> some View {
+        let pillColor: Color = row.result == "ok" ? Palette.success : Palette.danger
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Text(row.action)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                Text(row.result)
+                    .font(Typography.micro)
+                    .foregroundStyle(pillColor)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Palette.surfaceAccentSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                Text("\(row.actorType):\(row.actorId)")
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+                Spacer()
+                Text(row.ts.prefix(19))
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+            if !row.detailsJSON.isEmpty, row.detailsJSON != "{}" {
+                Text(row.detailsJSON)
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private var statusSection: some View {
@@ -1377,9 +1607,23 @@ private struct KnowledgeSystemSurface: View {
         async let queueTask = Task.detached {
             DomeRpcClient.enrichmentQueueDepth()
         }.value
+        // v0.12 — system observability + audit. Each is independent
+        // so we kick them off in parallel with the existing reads.
+        async let healthTask = Task.detached {
+            DomeRpcClient.systemHealth()
+        }.value
+        async let schedulerTask = Task.detached {
+            DomeRpcClient.systemAutomationStatus()
+        }.value
+        async let auditTask = Task.detached {
+            DomeRpcClient.auditTail(since: nil, limit: 200)
+        }.value
         let fetched = await agentTask
         let log = await logTask
         queueDepth = await queueTask
+        systemHealth = await healthTask
+        automationStatus = await schedulerTask
+        auditRows = await auditTask
         if let fetched {
             envelope = fetched
             // After a Compact mints a new pack the old contextID is

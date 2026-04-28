@@ -48,6 +48,11 @@ tado-settings = { path = "../tado-settings" }
 # dep so its C-ABI re-exports land inside the unified libtado_core.a
 # that Package.swift links. See `dome_ffi` for the exported symbols.
 bt-core = { path = "../bt-core" }
+# dome-eval ships the retrieval-quality replay engine. v0.12+ exposes
+# its `replay_for_vault` lib helper through a tado_dome FFI shim so
+# the Knowledge → System surface can render P@5 / R@10 / nDCG / mean
+# latency without shelling out to the CLI binary.
+dome-eval = { path = "../dome-eval" }
 # Multi-threaded Tokio runtime needed by the Dome FFI entry; its
 # Unix-socket listener + scheduler task run inside a dedicated runtime
 # owned by the app process.

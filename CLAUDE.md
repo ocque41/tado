@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.11.0. It is grouped so you can
+This file is the canonical map of Tado at v0.12.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -637,6 +637,20 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.12.0** (2026-04-28) — *Surface Coverage Pass, phase 2 —
+  observability.* Knowledge → System surface gains: a **vault
+  health** card (every check from `system_health` rendered with
+  green/red pills); a **scheduler queue** card (ready / scheduled
+  / active counts + stale-lease count); an inline **dome-eval
+  runner** (window picker 1h/24h/7d/all + Run button → P@5/R@10/
+  nDCG/mean-latency/consumption-rate/row-count tiles, all
+  computed in-process via a new `replay_for_vault` lib helper —
+  no subprocess); and an **audit log** viewer with a filter-by-
+  prefix chip showing the last 200 rows + per-row JSON detail.
+  5 new FFI shims (`system_health`, `system_automation_status`,
+  `system_runtime_envelope`, `audit_tail`, `eval_replay`),
+  `StorePaths.domeIndexDB` accessor, dome-eval graduates to a
+  workspace dep of `tado-core`.
 - **v0.11.0** (2026-04-28) — *Surface Coverage Pass, phase 1.* Two
   big backend subsystems graduate to Dome tabs: the in-process
   **automation/scheduler** (full CRUD via the new

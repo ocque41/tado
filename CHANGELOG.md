@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-04-28
+
+The "see what the system is doing" release. Phase 2 of the
+Surface Coverage Pass adds full operator-facing observability —
+**vault health**, **scheduler queue**, **audit log**, and an
+inline **dome-eval** runner — to the existing Knowledge → System
+surface. After this release the user can answer "is the daemon
+healthy / what's queued / who did what / how good is retrieval
+quality" without leaving the app.
+
+### Added
+- **Vault health card.** New section at the top of the System
+  surface that renders every check from
+  `tado_dome_system_health` — vault root, topics dir, .bt dir,
+  sqlite file, audit log file, config.toml — with a green
+  checkmark or red triangle per row plus the resolved path. Calls
+  out a SQLite open failure with a one-liner pointing to the
+  daemon log.
+- **Scheduler queue card.** Reads `system_automation_status`
+  and shows queue depths (ready / scheduled / active) plus
+  stale-lease count as four big numerics. Stale-lease count > 0
+  triggers a red "likely a worker crash" callout.
+- **dome-eval inline runner.** New section on the System surface
+  with a window picker (1h / 24h / 7 days / All time) and a
+  **Run eval** button that calls the new `replay_for_vault` lib
+  helper in-process — no subprocess, no PATH dependency. Renders
+  P@5 / R@10 / nDCG / mean latency / consumed % / row count as a
+  single-row of stat tiles. The CLI binary still works for power
+  users.
+- **Audit log viewer.** New section at the bottom of the System
+  surface listing the last 200 audit rows. Per-row pill (ok/err),
+  actor (`user_ui:tado-ui`, agent token id, etc.), action name,
+  timestamp, and a flattened single-line JSON of `details`.
+  Filter chip lets you narrow by action prefix
+  (e.g. `automation.`, `vault.`, `recipe.`).
+- **5 new FFI shims**: `tado_dome_system_health`,
+  `tado_dome_system_automation_status`,
+  `tado_dome_system_runtime_envelope`,
+  `tado_dome_audit_tail`, and `tado_dome_eval_replay`. Plus
+  `dome-eval` exposes a new public `replay_for_vault(path,
+  since_seconds)` so the FFI can run replay in-process.
+- **`StorePaths.domeIndexDB`** — Swift accessor for the SQLite
+  path so any future surface that needs to point an external tool
+  at the vault DB has a single source of truth.
+
+### Changed
+- **`tado-core` (terminal crate)** now depends on the `dome-eval`
+  crate so the FFI shim can call into the eval lib without
+  spawning a subprocess. The CLI binary is unchanged.
+- **`KnowledgeSystemSurface.reload`** runs three more parallel
+  Task.detached fetches (health, scheduler, audit) alongside the
+  existing agent / retrieval-log / queue-depth reads. Total
+  reload latency unchanged in practice — they all hit the same
+  daemon.
+
 ## [0.11.0] - 2026-04-28
 
 The "every backend feature gets a UI" release, phase 1. Two

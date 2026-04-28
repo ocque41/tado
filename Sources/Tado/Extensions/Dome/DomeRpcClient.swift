@@ -1685,6 +1685,187 @@ enum DomeRpcClient {
         return decode(Envelope.self, from: json)?.occurrences ?? []
     }
 
+    // MARK: - v0.12 System health + Audit + Eval
+
+    /// One row from `tado_dome_system_health.checks`. Every row
+    /// renders as a status pill in the System surface.
+    struct SystemHealthCheck: Codable, Identifiable, Equatable {
+        let name: String
+        let ok: Bool
+        // `detail` can be a string (path) or an object — keep raw.
+        let detail: String?
+
+        var id: String { name }
+    }
+
+    /// Aggregate envelope returned by `tado_dome_system_health`.
+    /// `checks` mirrors bt-core's per-step list; `dbOk` is broken out
+    /// so the System card can render a single up-or-down pill.
+    struct SystemHealth: Codable, Equatable {
+        var checks: [SystemHealthCheck] = []
+        var dbOk: Bool = true
+
+        enum CodingKeys: String, CodingKey {
+            case checks
+            case dbOk = "db_ok"
+        }
+    }
+
+    static func systemHealth() -> SystemHealth? {
+        guard let raw = tado_dome_system_health() else { return nil }
+        defer { tado_string_free(raw) }
+        return decode(SystemHealth.self, from: String(cString: raw))
+    }
+
+    /// Scheduler queue depths. `ready` and `scheduled` count
+    /// occurrences waiting; `active` counts in-flight; `staleLeases`
+    /// counts running occurrences whose lease has expired.
+    struct AutomationStatus: Codable, Equatable {
+        struct QueueDepth: Codable, Equatable {
+            var ready: Int = 0
+            var scheduled: Int = 0
+            var active: Int = 0
+        }
+        let ok: Bool
+        let queueDepth: QueueDepth
+        let staleLeases: Int
+
+        enum CodingKeys: String, CodingKey {
+            case ok
+            case queueDepth = "queue_depth"
+            case staleLeases = "stale_leases"
+        }
+    }
+
+    static func systemAutomationStatus() -> AutomationStatus? {
+        guard let raw = tado_dome_system_automation_status() else { return nil }
+        defer { tado_string_free(raw) }
+        return decode(AutomationStatus.self, from: String(cString: raw))
+    }
+
+    /// One audit-log row. Shape mirrors `db::tail_audit` at
+    /// `crates/bt-core/src/db.rs:5293-5333`:
+    ///   `{ ts, actor_type, actor_id, action, args_hash, doc_id,
+    ///     run_id, result, details }`.
+    struct AuditRow: Identifiable, Equatable {
+        let ts: String
+        let actorType: String
+        let actorId: String
+        let action: String
+        let argsHash: String
+        let docId: String?
+        let runId: String?
+        let result: String
+        /// Re-serialized JSON of the `details` object (bt-core
+        /// stores it as a JSON column; we keep it as a single
+        /// string for the table view + detail panel).
+        let detailsJSON: String
+
+        var id: String { argsHash + ts }
+    }
+
+    /// Tail the audit log. Pass `since = nil` to start from origin.
+    /// Decodes manually because the `details` field is an arbitrary
+    /// JSON object (bt-core column type), not a typed shape.
+    static func auditTail(since: String? = nil, limit: Int = 200) -> [AuditRow] {
+        let raw = withOptionalCString(since) { sinceC -> String? in
+            guard let cstr = tado_dome_audit_tail(sinceC, Int32(limit)) else { return nil }
+            defer { tado_string_free(cstr) }
+            return String(cString: cstr)
+        }
+        guard let raw,
+              let data = raw.data(using: .utf8),
+              let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = envelope["entries"] as? [[String: Any]]
+        else {
+            return []
+        }
+        return entries.compactMap { dict -> AuditRow? in
+            guard let ts = dict["ts"] as? String,
+                  let actorType = dict["actor_type"] as? String,
+                  let actorId = dict["actor_id"] as? String,
+                  let action = dict["action"] as? String,
+                  let result = dict["result"] as? String
+            else { return nil }
+            let argsHash = (dict["args_hash"] as? String) ?? ""
+            let docId = dict["doc_id"] as? String
+            let runId = dict["run_id"] as? String
+            let details = dict["details"]
+            let detailsJSON: String
+            if let details {
+                if let bytes = try? JSONSerialization.data(withJSONObject: details, options: [.sortedKeys]),
+                   let str = String(data: bytes, encoding: .utf8) {
+                    detailsJSON = str
+                } else {
+                    detailsJSON = "{}"
+                }
+            } else {
+                detailsJSON = "{}"
+            }
+            return AuditRow(
+                ts: ts,
+                actorType: actorType,
+                actorId: actorId,
+                action: action,
+                argsHash: argsHash,
+                docId: docId,
+                runId: runId,
+                result: result,
+                detailsJSON: detailsJSON
+            )
+        }
+    }
+
+    /// Aggregate metrics from `dome-eval replay`. Mirrors the
+    /// `AggregateMetrics` struct in
+    /// `tado-core/crates/dome-eval/src/lib.rs`.
+    struct EvalAggregateMetrics: Codable, Equatable {
+        var precisionAt5: Double = 0
+        var precisionAt10: Double = 0
+        var recallAt10: Double = 0
+        var ndcgAt10: Double = 0
+        var meanFreshness: Double = 0
+
+        enum CodingKeys: String, CodingKey {
+            case precisionAt5 = "precision_at_5"
+            case precisionAt10 = "precision_at_10"
+            case recallAt10 = "recall_at_10"
+            case ndcgAt10 = "ndcg_at_10"
+            case meanFreshness = "mean_freshness"
+        }
+    }
+
+    /// Top-level `ReplayReport` envelope from dome-eval.
+    struct EvalReplayReport: Codable, Equatable {
+        let windowStart: String?
+        let windowEnd: String?
+        let nRows: Int
+        let consumptionRate: Double
+        let meanLatencyMs: Double
+        let aggregate: EvalAggregateMetrics
+
+        enum CodingKeys: String, CodingKey {
+            case windowStart = "window_start"
+            case windowEnd = "window_end"
+            case nRows = "n_rows"
+            case consumptionRate = "consumption_rate"
+            case meanLatencyMs = "mean_latency_ms"
+            case aggregate
+        }
+    }
+
+    /// Run `dome-eval replay` in-process against the live vault.
+    /// `sinceSeconds <= 0` means every row in `retrieval_log`.
+    static func evalReplay(sinceSeconds: Int = 0) -> EvalReplayReport? {
+        let path = StorePaths.domeIndexDB.path
+        let json = path.withCString { pathC -> String? in
+            guard let raw = tado_dome_eval_replay(pathC, Int64(sinceSeconds)) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        return decode(EvalReplayReport.self, from: json)
+    }
+
     /// Retry a failed occurrence. Returns the new retry occurrence
     /// or nil on conflict (retry limit exhausted).
     static func automationRetryOccurrence(occurrenceID: String) -> AutomationOccurrence? {

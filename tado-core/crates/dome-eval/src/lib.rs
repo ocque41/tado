@@ -55,6 +55,25 @@ pub fn open_vault_readonly(vault_db: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// In-process convenience entry for the v0.12+ `tado_dome_eval_replay`
+/// FFI shim. Opens the vault read-only, runs `replay::replay`, and
+/// returns the report — no subprocess, no PATH dependency, no extra
+/// Cargo binary on disk.
+///
+/// `since_seconds <= 0` → replay every row in `retrieval_log`.
+pub fn replay_for_vault(
+    vault_db: &Path,
+    since_seconds: i64,
+) -> Result<replay::ReplayReport> {
+    let conn = open_vault_readonly(vault_db)?;
+    let since = if since_seconds > 0 {
+        Some(chrono::Duration::seconds(since_seconds))
+    } else {
+        None
+    };
+    replay::replay(&conn, since)
+}
+
 /// Precision@k — fraction of the top-k results that are relevant.
 pub fn precision_at_k<T: Eq + std::hash::Hash>(retrieved: &[T], relevant: &HashSet<T>, k: usize) -> f64 {
     if k == 0 {

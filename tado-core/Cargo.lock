@@ -3155,6 +3155,7 @@ dependencies = [
  "chrono",
  "criterion",
  "crossbeam-channel",
+ "dome-eval",
  "parking_lot",
  "portable-pty",
  "serde_json",

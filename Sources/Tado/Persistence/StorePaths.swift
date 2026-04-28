@@ -25,6 +25,21 @@ enum StorePaths {
     static var eventsCurrent: URL { eventsDir.appendingPathComponent("current.ndjson") }
     static var versionFile: URL { root.appendingPathComponent("version") }
 
+    /// `<root>/dome` — vault root opened by bt-core. v0.12+
+    /// surfaces (`dome-eval` runner, audit log viewer) need the
+    /// path to compose the SQLite-file URL, so it lives here next
+    /// to the other storage-root accessors instead of in Dome
+    /// extension code.
+    static var domeVaultRoot: URL { sub("dome") }
+
+    /// `<root>/dome/.bt/index.sqlite` — the SQLite file bt-core
+    /// uses for its trusted-mutator state.
+    static var domeIndexDB: URL {
+        domeVaultRoot
+            .appendingPathComponent(".bt", isDirectory: true)
+            .appendingPathComponent("index.sqlite")
+    }
+
     static func projectTadoDir(projectRoot: URL) -> URL {
         projectRoot.appendingPathComponent(".tado", isDirectory: true)
     }
