@@ -33,7 +33,7 @@ private struct KnowledgeListSurface: View {
             }
             Divider().overlay(Palette.divider)
             if grouped.isEmpty {
-                empty(icon: "square.grid.3x2", text: "No notes in the vault yet.")
+                surfaceEmpty(icon: "square.grid.3x2", text: "No notes in the vault yet.")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
@@ -428,7 +428,7 @@ private struct KnowledgeGraphSurface: View {
                             }
                     )
                 } else {
-                    empty(icon: "point.3.connected.trianglepath.dotted", text: "No graph nodes match.")
+                    surfaceEmpty(icon: "point.3.connected.trianglepath.dotted", text: "No graph nodes match.")
                 }
             }
             .clipped()
@@ -869,6 +869,13 @@ private struct KnowledgeSystemSurface: View {
     @State private var lastIngest: DomeRpcClient.IngestResult?
     @State private var ingestProgress: DomeRpcClient.IngestProgress?
 
+    /// Operator cleanup state for the "Clear globally-ingested
+    /// codebases" button. `purgeGlobalCount` is refreshed on scope
+    /// changes + after every ingest/purge so the button label tracks
+    /// the live row count without manual reload.
+    @State private var purgeBusy = false
+    @State private var purgeGlobalCount: Int?
+
     /// Phase 2 — recent rows from `retrieval_log`. Refreshed on the
     /// same `reload` tick as the agent-status envelope.
     @State private var retrievalLog: DomeRpcClient.RetrievalLogEnvelope?
@@ -943,15 +950,15 @@ private struct KnowledgeSystemSurface: View {
                     runBootstrap()
                 }
                 .buttonStyle(.borderless)
-                .disabled(bootstrapBusy || ingestBusy)
+                .disabled(bootstrapBusy || ingestBusy || purgeBusy)
                 .help("Re-embed every existing note with the live Qwen3 model. Upgrades legacy noop@1 chunks.")
 
-                Button(ingestBusy ? ingestButtonLabel : "Ingest codebase") {
+                Button(ingestBusy ? ingestButtonLabel : "Ingest codebase → \(domeScope.label)") {
                     runIngest()
                 }
                 .buttonStyle(.borderless)
-                .disabled(bootstrapBusy || ingestBusy)
-                .help("Recursively ingest a directory's source files as searchable notes (capped at 5000 files).")
+                .disabled(bootstrapBusy || ingestBusy || purgeBusy)
+                .help("Walks a directory and registers each source file as a searchable note in the '\(domeScope.label)' scope. Capped at 5000 files.")
 
                 if ingestBusy {
                     Button("Cancel") {
@@ -960,6 +967,13 @@ private struct KnowledgeSystemSurface: View {
                     .buttonStyle(.borderless)
                     .help("Stop the in-flight ingest at the next file boundary. Files already created are kept.")
                 }
+            }
+            // Scope-target chip — visible when not ingesting so the
+            // operator knows where the next click will land.
+            if !ingestBusy {
+                Text(scopeTargetChipText)
+                    .font(Typography.micro)
+                    .foregroundStyle(domeScope.ownerScope == "global" ? Palette.warning : Palette.textTertiary)
             }
             if ingestBusy, let p = ingestProgress, p.total > 0 {
                 ProgressView(value: p.fraction)
@@ -974,8 +988,36 @@ private struct KnowledgeSystemSurface: View {
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
             }
+            // Operator cleanup — only relevant when there's at least
+            // one globally-ingested codebase doc to nuke. Hidden
+            // otherwise so the surface stays clean.
+            if let count = purgeGlobalCount, count > 0 {
+                Divider().overlay(Palette.divider).padding(.vertical, 2)
+                HStack(spacing: 10) {
+                    Button(purgeBusy ? "Clearing…" : "Clear globally-ingested codebases (\(count))") {
+                        runPurgeGlobalCodebases(count: count)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Palette.danger)
+                    .disabled(bootstrapBusy || ingestBusy || purgeBusy)
+                    .help("Permanently delete every doc with topic='codebase' and owner_scope='global'. A backup snapshot is taken first; restore via Settings → Storage if needed.")
+                }
+            }
         }
         .task(id: ingestBusy) { await pollIngestProgress() }
+        .task(id: domeScope.id) { refreshPurgeGlobalCount() }
+    }
+
+    /// One-line chip beneath the Ingest button explaining where the
+    /// files will land. Loud-on-Global because that's the historical
+    /// foot-gun.
+    private var scopeTargetChipText: String {
+        switch domeScope {
+        case .global:
+            return "Files will land in the Global scope (visible to every project)."
+        case .project(_, let name, _, _):
+            return "Files will land in project: \(name)."
+        }
     }
 
     /// "Ingesting… N / M" while a count is known, otherwise the bare
@@ -1016,11 +1058,33 @@ private struct KnowledgeSystemSurface: View {
     }
 
     private func runIngest() {
+        // Make accidental Global ingestion explicitly opt-in. The
+        // historical foot-gun is "open the System surface, click
+        // Ingest, pick a folder" — which silently lands files in the
+        // Global scope because that's the picker's default. Surface a
+        // confirm dialog so the operator knows what they're doing.
+        if domeScope.ownerScope == "global" {
+            let alert = NSAlert()
+            alert.messageText = "Ingest into the Global scope?"
+            alert.informativeText = "Files will be visible to every project. Switch the scope picker to a specific project first if you want this codebase scoped to one project."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Ingest globally anyway")
+            // Default button is the first one added → Cancel. The
+            // dangerous button is opt-in.
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
+
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Ingest"
+        // Pre-fill the panel with the project root when scoped — saves
+        // operator clicks and discourages cross-project ingestion.
+        if let projectRoot = domeScope.projectRoot {
+            panel.directoryURL = URL(fileURLWithPath: projectRoot)
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let scope = domeScope
         ingestBusy = true
@@ -1031,6 +1095,60 @@ private struct KnowledgeSystemSurface: View {
                 ingestBusy = false
                 lastIngest = result
                 embeddingStats = fresh
+                refreshPurgeGlobalCount()
+            }
+        }
+    }
+
+    /// Re-fetches the count of `(topic='codebase', owner_scope='global',
+    /// project_id NULL)` rows so the cleanup button label stays in sync.
+    /// Read-only, cheap (one COUNT(*) over an indexed column).
+    private func refreshPurgeGlobalCount() {
+        Task.detached {
+            let value = DomeRpcClient.purgeTopicScopeCount(
+                topic: "codebase", ownerScope: "global", projectID: nil
+            )
+            await MainActor.run {
+                purgeGlobalCount = value?.count
+            }
+        }
+    }
+
+    /// Confirm + snapshot + purge. Three guard rails:
+    /// 1. NSAlert with destructive style so the operator can't no-op
+    ///    through it accidentally.
+    /// 2. `BackupManager.createBackup(reason:)` before the purge so the
+    ///    work is recoverable from Settings → Storage → Backups.
+    /// 3. The actual call goes through the trusted-mutator daemon so
+    ///    the audit log records who did what.
+    private func runPurgeGlobalCodebases(count: Int) {
+        let alert = NSAlert()
+        alert.messageText = "Delete \(count) globally-ingested codebase files?"
+        alert.informativeText = "Removes every doc with topic='codebase' at the Global scope, plus their note chunks, graph nodes, edges, and on-disk folders. A backup snapshot is taken first — restore via Settings → Storage → Backups if needed."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Delete \(count) docs")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+
+        purgeBusy = true
+        Task.detached {
+            // Snapshot first; ignore failures so a stuck snapshot doesn't
+            // block the cleanup the operator is asking for. The snapshot
+            // is a nice-to-have safety net, not a hard precondition.
+            _ = BackupManager.createBackup(reason: "pre-codebase-purge")
+
+            let result = DomeRpcClient.purgeTopicScope(
+                topic: "codebase", ownerScope: "global", projectID: nil
+            )
+            let fresh = DomeRpcClient.embeddingStats()
+            await MainActor.run {
+                purgeBusy = false
+                embeddingStats = fresh
+                if let result {
+                    purgeGlobalCount = max(0, (purgeGlobalCount ?? result.purged) - result.purged)
+                } else {
+                    refreshPurgeGlobalCount()
+                }
             }
         }
     }
@@ -1388,39 +1506,7 @@ private struct KnowledgeSystemSurface: View {
     }
 }
 
-private func surfaceHeader(title: String, subtitle: String, isLoading: Bool, refresh: @escaping () -> Void) -> some View {
-    HStack {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(Typography.display)
-                .foregroundStyle(Palette.textPrimary)
-            Text(subtitle)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
-        }
-        Spacer()
-        Button(action: refresh) {
-            Image(systemName: isLoading ? "hourglass" : "arrow.clockwise")
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .buttonStyle(.plain)
-        .disabled(isLoading)
-        .help("Refresh")
-    }
-    .padding(.horizontal, 20)
-    .padding(.top, 20)
-    .padding(.bottom, 14)
-    .background(Palette.surface)
-}
-
-private func empty(icon: String, text: String) -> some View {
-    VStack(spacing: 8) {
-        Image(systemName: icon)
-            .font(.system(size: 28, weight: .light))
-            .foregroundStyle(Palette.textTertiary)
-        Text(text)
-            .font(Typography.body)
-            .foregroundStyle(Palette.textSecondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-}
+// surfaceHeader + empty helpers moved to SurfaceHelpers.swift in
+// v0.11 so AutomationSurface + RecipesSurface (and future
+// surfaces) can share them without copy-paste. The local `empty(…)`
+// callers were renamed to `surfaceEmpty(…)` at the same time.

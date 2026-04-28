@@ -893,6 +893,81 @@ enum DomeRpcClient {
         return decode(IngestResult.self, from: json)
     }
 
+    /// Read-only count of docs that `purgeTopicScope` would delete with
+    /// the same args. Surfaced in the "Clear …" confirmation dialog so
+    /// the operator sees the exact number before confirming.
+    struct PurgeTopicCount: Codable, Equatable {
+        let count: Int
+        let topic: String
+        let ownerScope: String
+
+        enum CodingKeys: String, CodingKey {
+            case count
+            case topic
+            case ownerScope = "owner_scope"
+        }
+    }
+
+    /// Result of `purgeTopicScope` — `purged` is the actual number of
+    /// rows removed (after cascade through note_chunks / graph_nodes /
+    /// graph_edges) and the on-disk `topics/<topic>/<slug>/` cleanup.
+    struct PurgeTopicResult: Codable, Equatable {
+        let purged: Int
+        let topic: String
+        let ownerScope: String
+
+        enum CodingKeys: String, CodingKey {
+            case purged
+            case topic
+            case ownerScope = "owner_scope"
+        }
+    }
+
+    /// Read-only doomed-row count for a given (topic, scope, project)
+    /// triple. Returns nil when the daemon isn't booted.
+    static func purgeTopicScopeCount(
+        topic: String,
+        ownerScope: String,
+        projectID: String? = nil
+    ) -> PurgeTopicCount? {
+        let json = topic.withCString { topicC in
+            ownerScope.withCString { scopeC -> String? in
+                withOptionalCString(projectID) { pidC -> String? in
+                    guard let raw = tado_dome_vault_purge_topic_scope_count(
+                        topicC, scopeC, pidC
+                    ) else { return nil }
+                    defer { tado_string_free(raw) }
+                    return String(cString: raw)
+                }
+            }
+        }
+        return decode(PurgeTopicCount.self, from: json)
+    }
+
+    /// Bulk-delete every doc matching `(topic, ownerScope, projectID?)`
+    /// plus cascaded `note_chunks` / `graph_nodes` / `graph_edges` rows
+    /// and the on-disk topic folders. Pass `projectID = nil` for the
+    /// global rows (the cleanup case for the v0.10 button).
+    @discardableResult
+    static func purgeTopicScope(
+        topic: String,
+        ownerScope: String,
+        projectID: String? = nil
+    ) -> PurgeTopicResult? {
+        let json = topic.withCString { topicC in
+            ownerScope.withCString { scopeC -> String? in
+                withOptionalCString(projectID) { pidC -> String? in
+                    guard let raw = tado_dome_vault_purge_topic_scope(
+                        topicC, scopeC, pidC
+                    ) else { return nil }
+                    defer { tado_string_free(raw) }
+                    return String(cString: raw)
+                }
+            }
+        }
+        return decode(PurgeTopicResult.self, from: json)
+    }
+
     /// Read live progress for the legacy `ingestPath` walk. Always
     /// returns a value when the daemon is up — `running == false`
     /// when no ingest is active.
@@ -1251,6 +1326,378 @@ enum DomeRpcClient {
             defer { tado_string_free(raw) }
             return decode(CodeIndexStatus.self, from: String(cString: raw))
         }
+    }
+
+    // MARK: - v0.11 Recipes (governed answers)
+
+    /// One row from `tado_dome_recipe_list`. The `policy` field is
+    /// kept as raw JSON so the surface can render it without
+    /// re-modeling every default helper (Tera-style fields evolve
+    /// faster than the Swift type would).
+    struct RetrievalRecipe: Codable, Identifiable, Equatable {
+        let recipeID: String
+        let intentKey: String
+        let scope: String
+        let projectID: String?
+        let title: String
+        let description: String
+        let templatePath: String
+        let policy: RetrievalPolicy
+        let enabled: Bool
+        let lastVerifiedAt: String?
+
+        var id: String { recipeID }
+
+        enum CodingKeys: String, CodingKey {
+            case recipeID = "recipe_id"
+            case intentKey = "intent_key"
+            case scope
+            case projectID = "project_id"
+            case title
+            case description
+            case templatePath = "template_path"
+            case policy
+            case enabled
+            case lastVerifiedAt = "last_verified_at"
+        }
+    }
+
+    /// Decoded shape of `RetrievalPolicy` from bt-core. Keys must
+    /// match `crates/bt-core/src/recipes/mod.rs`.
+    struct RetrievalPolicy: Codable, Equatable {
+        var topics: [String] = []
+        var knowledgeKinds: [String] = []
+        var knowledgeScope: String = "merged"
+        var freshnessDecayDays: Int = 60
+        var maxTokens: Int = 1200
+        var minCombinedScore: Double = 0.05
+        var topK: Int = 8
+
+        enum CodingKeys: String, CodingKey {
+            case topics
+            case knowledgeKinds = "knowledge_kinds"
+            case knowledgeScope = "knowledge_scope"
+            case freshnessDecayDays = "freshness_decay_days"
+            case maxTokens = "max_tokens"
+            case minCombinedScore = "min_combined_score"
+            case topK = "top_k"
+        }
+    }
+
+    /// Result of `recipe_apply` — the rendered governed answer.
+    struct GovernedAnswer: Codable, Equatable {
+        let intentKey: String
+        let answer: String
+        let citations: [Citation]
+        let missingAuthority: [String]
+        let policyApplied: RetrievalPolicy
+
+        enum CodingKeys: String, CodingKey {
+            case intentKey = "intent_key"
+            case answer
+            case citations
+            case missingAuthority = "missing_authority"
+            case policyApplied = "policy_applied"
+        }
+    }
+
+    struct Citation: Codable, Identifiable, Equatable {
+        let docID: String
+        let title: String
+        let topic: String
+        let scope: String
+        let confidence: Double
+        let freshness: Double
+
+        var id: String { docID }
+
+        enum CodingKeys: String, CodingKey {
+            case docID = "doc_id"
+            case title
+            case topic
+            case scope
+            case confidence
+            case freshness
+        }
+    }
+
+    /// List recipes, optionally scoped. Pass `scope = "global"` for
+    /// only baked defaults, `"project"` for project-scoped overrides.
+    static func recipeList(scope: String? = nil, projectID: String? = nil) -> [RetrievalRecipe] {
+        let json = withOptionalCString(scope) { scopeC in
+            withOptionalCString(projectID) { pidC -> String? in
+                guard let raw = tado_dome_recipe_list(scopeC, pidC) else { return nil }
+                defer { tado_string_free(raw) }
+                return String(cString: raw)
+            }
+        }
+        struct Envelope: Codable { let recipes: [RetrievalRecipe] }
+        return decode(Envelope.self, from: json)?.recipes ?? []
+    }
+
+    /// Apply a recipe — returns the rendered `GovernedAnswer` with
+    /// citations + `missing_authority` flags. nil on daemon error.
+    static func recipeApply(intentKey: String, projectID: String? = nil) -> GovernedAnswer? {
+        let json = intentKey.withCString { keyC in
+            withOptionalCString(projectID) { pidC -> String? in
+                guard let raw = tado_dome_recipe_apply(keyC, pidC) else { return nil }
+                defer { tado_string_free(raw) }
+                return String(cString: raw)
+            }
+        }
+        return decode(GovernedAnswer.self, from: json)
+    }
+
+    /// Idempotent — seed (or refresh) the three baked default
+    /// recipes at global scope. Called automatically at app launch
+    /// from `DomeExtension.onAppLaunch`. Manual surface in
+    /// `RecipesSurface` calls it again to recover from a deletion.
+    @discardableResult
+    static func recipeSeedDefaults() -> Int? {
+        guard let raw = tado_dome_recipe_seed_defaults() else { return nil }
+        defer { tado_string_free(raw) }
+        struct Envelope: Codable { let seeded: Int }
+        return decode(Envelope.self, from: String(cString: raw))?.seeded
+    }
+
+    // MARK: - v0.11 Automation surface
+
+    /// One row of `automations` table (model.rs:163). `payloadJSON`
+    /// kept raw because the executor-config shape varies by
+    /// `executorKind`.
+    struct Automation: Codable, Identifiable, Equatable {
+        let id: String
+        let executorKind: String
+        let title: String
+        let promptTemplate: String
+        let docID: String?
+        let scheduleKind: String
+        let concurrencyPolicy: String
+        let timezone: String
+        let enabled: Bool
+        let createdAt: Date
+        let updatedAt: Date
+        let pausedAt: Date?
+        let lastPlannedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case executorKind = "executor_kind"
+            case title
+            case promptTemplate = "prompt_template"
+            case docID = "doc_id"
+            case scheduleKind = "schedule_kind"
+            case concurrencyPolicy = "concurrency_policy"
+            case timezone
+            case enabled
+            case createdAt = "created_at"
+            case updatedAt = "updated_at"
+            case pausedAt = "paused_at"
+            case lastPlannedAt = "last_planned_at"
+        }
+    }
+
+    /// One row of `automation_occurrences` (model.rs:189). Status
+    /// strings: `ready`, `running`, `done`, `failed`, `cancelled`,
+    /// `retry_ready`.
+    struct AutomationOccurrence: Codable, Identifiable, Equatable {
+        let id: String
+        let automationID: String
+        let attempt: Int
+        let triggerReason: String
+        let plannedAt: Date
+        let readyAt: Date?
+        let startedAt: Date?
+        let finishedAt: Date?
+        let status: String
+        let runID: String?
+        let failureKind: String?
+        let failureMessage: String?
+        let retryCount: Int
+        let createdAt: Date
+        let updatedAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case automationID = "automation_id"
+            case attempt
+            case triggerReason = "trigger_reason"
+            case plannedAt = "planned_at"
+            case readyAt = "ready_at"
+            case startedAt = "started_at"
+            case finishedAt = "finished_at"
+            case status
+            case runID = "run_id"
+            case failureKind = "failure_kind"
+            case failureMessage = "failure_message"
+            case retryCount = "retry_count"
+            case createdAt = "created_at"
+            case updatedAt = "updated_at"
+        }
+    }
+
+    /// Filter for `automationList(enabledFilter:)`. `.all` skips the
+    /// SQL filter; `.enabled` and `.paused` map to 1 / 0 respectively.
+    enum AutomationEnabledFilter: Int {
+        case all = -1
+        case paused = 0
+        case enabled = 1
+    }
+
+    static func automationList(
+        enabledFilter: AutomationEnabledFilter = .all,
+        executorKind: String? = nil,
+        limit: Int = 200
+    ) -> [Automation] {
+        let json = withOptionalCString(executorKind) { kindC -> String? in
+            guard let raw = tado_dome_automation_list(
+                Int32(enabledFilter.rawValue), kindC, Int32(limit)
+            ) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let automations: [Automation] }
+        return decode(Envelope.self, from: json)?.automations ?? []
+    }
+
+    static func automationGet(id: String) -> Automation? {
+        let json = id.withCString { idC -> String? in
+            guard let raw = tado_dome_automation_get(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let automation: Automation }
+        return decode(Envelope.self, from: json)?.automation
+    }
+
+    /// Raw automation record as a JSON dictionary. Used by the edit
+    /// sheet to hydrate the `schedule_json` / `retry_policy_json` /
+    /// `executor_config_json` fields that the lean Codable
+    /// `Automation` deliberately omits (their shape varies per
+    /// executor and we keep them as opaque JSON envelopes).
+    static func automationGetRaw(id: String) -> [String: Any]? {
+        guard let raw = id.withCString({ idC -> String? in
+            guard let cstr = tado_dome_automation_get(idC) else { return nil }
+            defer { tado_string_free(cstr) }
+            return String(cString: cstr)
+        }), let data = raw.data(using: .utf8),
+              let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return envelope["automation"] as? [String: Any]
+    }
+
+    /// Create an automation. Pass any JSON-encodable dictionary that
+    /// matches bt-core's `build_automation_record` expectation.
+    static func automationCreate(input: [String: Any]) -> Automation? {
+        guard let data = try? JSONSerialization.data(withJSONObject: input),
+              let inputStr = String(data: data, encoding: .utf8)
+        else { return nil }
+        let json = inputStr.withCString { jsonC -> String? in
+            guard let raw = tado_dome_automation_create(jsonC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let automation: Automation }
+        return decode(Envelope.self, from: json)?.automation
+    }
+
+    /// Patch one or more fields on an existing automation.
+    static func automationUpdate(id: String, patch: [String: Any]) -> Automation? {
+        guard let data = try? JSONSerialization.data(withJSONObject: patch),
+              let patchStr = String(data: data, encoding: .utf8)
+        else { return nil }
+        let json = id.withCString { idC in
+            patchStr.withCString { patchC -> String? in
+                guard let raw = tado_dome_automation_update(idC, patchC) else { return nil }
+                defer { tado_string_free(raw) }
+                return String(cString: raw)
+            }
+        }
+        struct Envelope: Codable { let automation: Automation }
+        return decode(Envelope.self, from: json)?.automation
+    }
+
+    /// Hard-delete an automation. Returns `false` on conflict (active
+    /// occurrence) or daemon error — surface should suggest pausing
+    /// first when this returns false despite the automation existing.
+    @discardableResult
+    static func automationDelete(id: String) -> Bool {
+        let json = id.withCString { idC -> String? in
+            guard let raw = tado_dome_automation_delete(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let deleted: Bool }
+        return decode(Envelope.self, from: json)?.deleted ?? false
+    }
+
+    /// Pause / resume in one call. `paused == true` → calls
+    /// `automation_pause`; otherwise `automation_resume`.
+    static func automationSetPaused(id: String, paused: Bool) -> Automation? {
+        let json = id.withCString { idC -> String? in
+            guard let raw = tado_dome_automation_set_paused(idC, paused ? 1 : 0) else {
+                return nil
+            }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let automation: Automation }
+        return decode(Envelope.self, from: json)?.automation
+    }
+
+    /// "Run now" — manually enqueue a fresh occurrence right away.
+    /// Returns the new occurrence on success, nil on conflict
+    /// (serial automation already has an active occurrence).
+    static func automationRunNow(id: String) -> AutomationOccurrence? {
+        let json = id.withCString { idC -> String? in
+            guard let raw = tado_dome_automation_run_now(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let occurrence: AutomationOccurrence }
+        return decode(Envelope.self, from: json)?.occurrence
+    }
+
+    /// List occurrences. Pass `automationID = nil` for the global
+    /// ledger across every automation. Status filter is a literal
+    /// status string (`ready`, `running`, etc.).
+    static func automationOccurrenceList(
+        automationID: String? = nil,
+        status: String? = nil,
+        from: String? = nil,
+        toISO: String? = nil,
+        limit: Int = 100
+    ) -> [AutomationOccurrence] {
+        let json = withOptionalCString(automationID) { aidC in
+            withOptionalCString(status) { statusC in
+                withOptionalCString(from) { fromC in
+                    withOptionalCString(toISO) { toC -> String? in
+                        guard let raw = tado_dome_automation_occurrence_list(
+                            aidC, statusC, fromC, toC, Int32(limit)
+                        ) else { return nil }
+                        defer { tado_string_free(raw) }
+                        return String(cString: raw)
+                    }
+                }
+            }
+        }
+        struct Envelope: Codable { let occurrences: [AutomationOccurrence] }
+        return decode(Envelope.self, from: json)?.occurrences ?? []
+    }
+
+    /// Retry a failed occurrence. Returns the new retry occurrence
+    /// or nil on conflict (retry limit exhausted).
+    static func automationRetryOccurrence(occurrenceID: String) -> AutomationOccurrence? {
+        let json = occurrenceID.withCString { oidC -> String? in
+            guard let raw = tado_dome_automation_retry_occurrence(oidC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        // bt-core returns `{ "occurrence": <retry-occurrence> }`
+        // — same envelope shape as `automation_run_now`. See
+        // service.rs:9911 (`Ok(json!({ "occurrence": retry }))`).
+        struct Envelope: Codable { let occurrence: AutomationOccurrence }
+        return decode(Envelope.self, from: json)?.occurrence
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, from json: String?) -> T? {

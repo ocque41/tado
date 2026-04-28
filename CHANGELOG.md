@@ -5,6 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-04-28
+
+The "every backend feature gets a UI" release, phase 1. Two
+high-value backend subsystems that have been in-process inside
+`bt-core` since v0.9 but had no Swift surface — the in-process
+**automation/scheduler** and the Phase 5 **retrieval recipes** —
+graduate to first-class top-level Dome tabs. The audit that drove
+this release found 22 categories of orphaned backend capabilities;
+v0.11–v0.16 will land them all (see Surface Coverage Pass plan).
+
+### Added
+- **Automation tab.** New top-level `Dome → Automation` surface that
+  reads + writes the in-process scheduler. Card list of every
+  defined automation with status pill + last-run pill + scope chip,
+  inline create/edit sheet (title, executor kind, prompt template,
+  schedule kind + JSON, retry policy, executor config, concurrency,
+  timezone, enabled), `⋯` menu with Pause/Resume/Run-now/Edit/
+  Duplicate/Delete (destructive guard rails on Delete), and a
+  unified occurrence ledger across every automation showing recent
+  runs with a per-row expansion that shows status, planned/started/
+  finished timestamps, run id, failure kind/message, and a "Retry"
+  button on failed/cancelled rows. All actions go through
+  `swift_ui_actor()` so every operator action lands in the audit
+  log under `actor=user_ui`.
+- **Recipes tab.** New top-level `Dome → Recipes` surface that
+  browses every retrieval recipe in the active scope (3 baked
+  defaults — architecture-review, completion-claim, team-handoff —
+  plus any project-scoped overrides at `<project>/.tado/
+  verified-prompts/<intent>.md`). Left rail picks one; right pane
+  shows the recipe's full retrieval policy (topics, knowledge
+  kinds, scope, freshness decay, max tokens, min combined score,
+  top-K) and a **Run recipe** button that produces the
+  `GovernedAnswer`: rendered markdown, a citation table with
+  per-citation confidence + freshness, and explicit
+  *missing-authority* callouts. "Copy answer" / "Copy as
+  citation" / "Edit template" / "Reset to default" actions.
+- **11 new FFI shims** in `dome_ffi.rs` exposing the automation +
+  recipe service methods to Swift: `tado_dome_automation_list`,
+  `_get`, `_create`, `_update`, `_delete`, `_set_paused`,
+  `_run_now`, `_occurrence_list`, `_retry_occurrence`, plus
+  `tado_dome_recipe_list` and `tado_dome_recipe_apply`. Matching C
+  declarations land in `Sources/CTadoCore/include/tado_core.h`.
+- **Shared surface helpers** lifted out of `KnowledgeSurface.swift`
+  into `Surfaces/SurfaceHelpers.swift` (`surfaceHeader(...)` and
+  `surfaceEmpty(...)`) so future Dome surfaces — Automation,
+  Recipes, and the four upcoming surfaces in v0.12–v0.15 — share
+  the same header chrome and empty-state look without copy-paste.
+
+### Changed
+- **`DomeSurfaceTab` enum** gains `automation` and `recipes` cases.
+  Cmd+1..Cmd+7 hotkeys auto-extend to cover the new tabs because
+  the registrar reads `DomeSurfaceTab.allCases`. Existing tabs
+  keep their order so muscle memory isn't disturbed.
+- **`KnowledgeSurface.swift`** — internal `empty(...)` calls renamed
+  to `surfaceEmpty(...)` matching the lifted helper. No user-visible
+  change.
+
+### Also (rolled in from the v0.10.1 work that didn't ship as its own tag)
+- **Scope-aware Ingest button.** `Dome → Knowledge → System`'s
+  "Ingest codebase" button now reads `Ingest codebase → \(scope.label)`
+  with a chip below explaining where files will land, an `NSAlert`
+  warning when the scope is Global, and the file picker prefills
+  with `domeScope.projectRoot` when a project is selected. New
+  `Clear globally-ingested codebases (N)` button appears whenever
+  there are global codebase rows from prior accidental ingests —
+  takes a backup snapshot first, then purges via the new
+  `vault_purge_topic_scope` RPC.
+- **`vault_purge_topic_scope` RPC + FFI** — `tado_dome_vault_purge_topic_scope_count`
+  + `tado_dome_vault_purge_topic_scope` shims for the cleanup
+  button. Cascades through `graph_edges` → `graph_nodes` →
+  `note_chunks` → `doc_meta` → `fts_notes` → `docs` and removes
+  the on-disk `topics/<topic>/<slug>/` folders, dropping the parent
+  topic dir if empty. Audited as `vault.purge_topic_scope`.
+- **`bt-core/tests/ingest_scope_contract.rs`** — locks the contract
+  that `vault_ingest_path` persists `(owner_scope, project_id)`
+  exactly as passed and that `vault_purge_topic_scope` only
+  deletes the matching scope tuple.
+- **Linker tidy** — `linker.rs:90` lost the redundant parens that
+  triggered a `unused_parens` warning in `make dev`.
+
 ## [0.10.0] - 2026-04-25
 
 The "graph of knowledge embeds the entire codebase" release. v0.9.0

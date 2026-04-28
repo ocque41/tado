@@ -454,6 +454,8 @@ struct DomeRootView: View {
         case .agentNotes: AgentNotesSurface(domeScope: selectedScope)
         case .calendar: CalendarSurface(domeScope: selectedScope)
         case .knowledge: KnowledgeSurface(page: activeKnowledgePage, domeScope: selectedScope)
+        case .recipes: RecipesSurface(domeScope: selectedScope)
+        case .automation: AutomationSurface(domeScope: selectedScope)
         }
     }
 }

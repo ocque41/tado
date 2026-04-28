@@ -87,7 +87,7 @@ pub fn run(conn: &Connection, _job: &EnrichmentJob) -> Result<LinkReport, BtErro
             "UPDATE graph_edges SET source_id = ?1 WHERE source_id = ?2",
             params![canonical_id, stub_id],
         )?;
-        report.edges_redirected += (redirected_in + redirected_out);
+        report.edges_redirected += redirected_in + redirected_out;
 
         // Soft-archive the stub.
         tx.execute(

@@ -2178,6 +2178,168 @@ impl CoreService {
         was_running
     }
 
+    /// Read-only count for the Swift confirmation dialog. Mirrors the
+    /// SELECT in `vault_purge_topic_scope` — same WHERE clause so the
+    /// number shown to the user is the number that will actually be
+    /// deleted on confirm.
+    pub fn vault_purge_topic_scope_count(
+        &self,
+        topic: &str,
+        owner_scope: &str,
+        project_id: Option<&str>,
+    ) -> Result<Value, BtError> {
+        let _ = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let count: i64 = conn.query_row(
+            r#"SELECT COUNT(*) FROM docs
+                WHERE topic = ?1
+                  AND owner_scope = ?2
+                  AND COALESCE(project_id, '') = COALESCE(?3, '')"#,
+            rusqlite::params![topic, owner_scope, project_id],
+            |r| r.get(0),
+        )?;
+        Ok(json!({
+            "count": count,
+            "topic": topic,
+            "owner_scope": owner_scope,
+            "project_id": project_id,
+        }))
+    }
+
+    /// Bulk-delete every doc matching `(topic, owner_scope, project_id?)`
+    /// along with its `note_chunks`, `doc_meta`, `fts_notes`, and the
+    /// `graph_nodes` / `graph_edges` rows that reference it. Used by the
+    /// Knowledge → Agent System "Clear globally-ingested codebases"
+    /// button to undo a misclicked global ingestion in one shot.
+    ///
+    /// `project_id` semantics follow `docs.project_id` — pass `None` to
+    /// match the literal SQL NULL (which is how every owner_scope='global'
+    /// row is stored). `Some("uuid")` matches docs scoped to that project.
+    ///
+    /// Returns `{"purged": N, "topic": ..., "owner_scope": ...}`. When the
+    /// topic ends up empty after the purge, the on-disk `topics/<topic>/`
+    /// directory is removed too.
+    pub fn vault_purge_topic_scope(
+        &self,
+        actor: &Actor,
+        topic: &str,
+        owner_scope: &str,
+        project_id: Option<&str>,
+    ) -> Result<Value, BtError> {
+        self.apply_write(actor, WriteOperation::DeleteDocument)?;
+
+        let root = self.require_vault()?;
+        let conn = self.open_conn()?;
+
+        // Collect doc rows + slugs first — we need them for both the
+        // cascade and the on-disk directory cleanup.
+        let mut stmt = conn.prepare(
+            r#"SELECT id, slug FROM docs
+                WHERE topic = ?1
+                  AND owner_scope = ?2
+                  AND COALESCE(project_id, '') = COALESCE(?3, '')"#,
+        )?;
+        let doc_rows: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params![topic, owner_scope, project_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        if doc_rows.is_empty() {
+            return Ok(json!({
+                "purged": 0,
+                "topic": topic,
+                "owner_scope": owner_scope,
+                "project_id": project_id,
+            }));
+        }
+
+        let tx = conn.unchecked_transaction()?;
+        let mut purged: usize = 0;
+        for (doc_id, _slug) in &doc_rows {
+            // graph_edges that reference any graph_node carrying this
+            // doc id as ref_id (`kind='doc'`).
+            tx.execute(
+                r#"DELETE FROM graph_edges
+                    WHERE source_id IN (SELECT node_id FROM graph_nodes WHERE ref_id = ?1)
+                       OR target_id IN (SELECT node_id FROM graph_nodes WHERE ref_id = ?1)"#,
+                rusqlite::params![doc_id],
+            )?;
+            tx.execute(
+                "DELETE FROM graph_nodes WHERE ref_id = ?1",
+                rusqlite::params![doc_id],
+            )?;
+            tx.execute(
+                "DELETE FROM note_chunks WHERE doc_id = ?1",
+                rusqlite::params![doc_id],
+            )?;
+            tx.execute(
+                "DELETE FROM doc_meta WHERE doc_id = ?1",
+                rusqlite::params![doc_id],
+            )?;
+            // fts_notes is a virtual table — DELETE is best-effort. Old
+            // schemas may not carry it, but production v22+ does.
+            let _ = tx.execute(
+                "DELETE FROM fts_notes WHERE doc_id = ?1",
+                rusqlite::params![doc_id],
+            );
+            let removed = tx.execute("DELETE FROM docs WHERE id = ?1", rusqlite::params![doc_id])?;
+            if removed > 0 {
+                purged += 1;
+            }
+        }
+        tx.commit()?;
+
+        // On-disk cleanup. Each doc's directory lives under
+        // `<vault>/topics/<topic>/<slug>/`. Drop it if it still exists.
+        for (_doc_id, slug) in &doc_rows {
+            let doc_dir = root.join("topics").join(topic).join(slug);
+            if doc_dir.exists() {
+                let _ = fs::remove_dir_all(&doc_dir);
+            }
+        }
+        // If the whole topic is now empty (no docs left at any scope),
+        // remove the topic directory too. This keeps `topics/` from
+        // accumulating empty shells after operator cleanups.
+        let remaining: i64 = self.open_conn()?.query_row(
+            "SELECT COUNT(*) FROM docs WHERE topic = ?1",
+            rusqlite::params![topic],
+            |r| r.get(0),
+        )?;
+        if remaining == 0 {
+            let topic_dir = root.join("topics").join(topic);
+            if topic_dir.exists() {
+                let _ = fs::remove_dir_all(&topic_dir);
+            }
+        }
+
+        // Audit one row covering the bulk delete so the operator action
+        // is greppable in the audit log alongside individual doc.delete
+        // events.
+        let _ = self.audit_no_refresh(
+            actor,
+            "vault.purge_topic_scope",
+            &json!({
+                "topic": topic,
+                "owner_scope": owner_scope,
+                "project_id": project_id,
+            }),
+            None,
+            None,
+            "ok",
+            json!({ "purged": purged }),
+        );
+        let _ = self.maybe_refresh_graph_projection();
+
+        Ok(json!({
+            "purged": purged,
+            "topic": topic,
+            "owner_scope": owner_scope,
+            "project_id": project_id,
+        }))
+    }
+
     pub fn vault_bootstrap_starter(&self, actor: &Actor) -> Result<Value, BtError> {
         self.apply_write(actor, WriteOperation::CreateDocument)?;
         let conn = self.open_conn()?;
@@ -2610,6 +2772,19 @@ impl CoreService {
                     project_id,
                     project_root.map(Path::new),
                 )
+            }
+            "vault.purge_topic_scope" => {
+                let actor = parse_actor(&params)?;
+                let topic = required_str(&params, "topic")?;
+                let owner_scope = required_str(&params, "owner_scope")?;
+                let project_id = optional_str(&params, "project_id");
+                self.vault_purge_topic_scope(&actor, topic, owner_scope, project_id)
+            }
+            "vault.purge_topic_scope_count" => {
+                let topic = required_str(&params, "topic")?;
+                let owner_scope = required_str(&params, "owner_scope")?;
+                let project_id = optional_str(&params, "project_id");
+                self.vault_purge_topic_scope_count(topic, owner_scope, project_id)
             }
             "import.preview" => self.import_preview(optional_str(&params, "root_path")),
             "import.execute" => {
@@ -17779,6 +17954,159 @@ mod scoped_knowledge_tests {
 
         let _ = fs::remove_dir_all(&vault);
         let _ = fs::remove_dir_all(&source);
+    }
+
+    #[test]
+    fn vault_ingest_path_persists_owner_scope_and_project_id() {
+        let vault = temp_vault("ingest-scope-vault");
+        let source = temp_vault("ingest-scope-source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("a.rs"), "fn a() {}").unwrap();
+
+        let service = CoreService::new();
+        service.open_vault(&vault).unwrap();
+        let actor = ui_actor();
+
+        // Project scope — owner_scope='project', project_id='pid-123'.
+        let result = service
+            .vault_ingest_path(
+                &actor,
+                &source,
+                Some("codebase"),
+                "project",
+                Some("pid-123"),
+                Some(source.as_path()),
+            )
+            .unwrap();
+        assert_eq!(result.get("created").and_then(Value::as_i64), Some(1));
+
+        let conn = service.open_conn().unwrap();
+        let (scope, pid): (String, Option<String>) = conn
+            .query_row(
+                "SELECT owner_scope, project_id FROM docs WHERE topic='codebase' LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(scope, "project");
+        assert_eq!(pid.as_deref(), Some("pid-123"));
+        drop(conn);
+
+        // Global scope — owner_scope='global', project_id IS NULL.
+        // Re-using the same source dir; we just want a second insert
+        // with different scope. Use a different topic so we don't trip
+        // the unique slug guard.
+        let result = service
+            .vault_ingest_path(
+                &actor,
+                &source,
+                Some("codebase-global"),
+                "global",
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(result.get("created").and_then(Value::as_i64), Some(1));
+
+        let conn = service.open_conn().unwrap();
+        let (scope, pid): (String, Option<String>) = conn
+            .query_row(
+                "SELECT owner_scope, project_id FROM docs WHERE topic='codebase-global' LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(scope, "global");
+        assert!(pid.is_none(), "global scope must persist project_id as NULL");
+
+        let _ = fs::remove_dir_all(&vault);
+        let _ = fs::remove_dir_all(&source);
+    }
+
+    #[test]
+    fn vault_purge_topic_scope_removes_only_matching_rows() {
+        let vault = temp_vault("purge-vault");
+        let source_global = temp_vault("purge-source-global");
+        let source_project = temp_vault("purge-source-project");
+        fs::create_dir_all(&source_global).unwrap();
+        fs::create_dir_all(&source_project).unwrap();
+        // Distinct file names so the slug-based dir under topics/codebase/
+        // doesn't collide between the two ingests.
+        fs::write(source_global.join("g.rs"), "fn g() {}").unwrap();
+        fs::write(source_project.join("p.rs"), "fn p() {}").unwrap();
+
+        let service = CoreService::new();
+        service.open_vault(&vault).unwrap();
+        let actor = ui_actor();
+
+        // Two docs, two scopes, same topic.
+        service
+            .vault_ingest_path(
+                &actor,
+                &source_global,
+                Some("codebase"),
+                "global",
+                None,
+                None,
+            )
+            .unwrap();
+        service
+            .vault_ingest_path(
+                &actor,
+                &source_project,
+                Some("codebase"),
+                "project",
+                Some("pid-A"),
+                Some(source_project.as_path()),
+            )
+            .unwrap();
+
+        // Pre-count: 2 total, 1 global, 1 project.
+        let conn = service.open_conn().unwrap();
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM docs WHERE topic='codebase'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 2, "expected 2 docs before purge");
+        drop(conn);
+
+        // Read-only count helper agrees.
+        let count_value = service
+            .vault_purge_topic_scope_count("codebase", "global", None)
+            .unwrap();
+        assert_eq!(count_value.get("count").and_then(Value::as_i64), Some(1));
+
+        // Purge global only.
+        let result = service
+            .vault_purge_topic_scope(&actor, "codebase", "global", None)
+            .unwrap();
+        assert_eq!(result.get("purged").and_then(Value::as_i64), Some(1));
+
+        // Project doc survives.
+        let conn = service.open_conn().unwrap();
+        let surviving: Vec<(String, Option<String>)> = conn
+            .prepare("SELECT owner_scope, project_id FROM docs WHERE topic='codebase'")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(surviving.len(), 1);
+        assert_eq!(surviving[0].0, "project");
+        assert_eq!(surviving[0].1.as_deref(), Some("pid-A"));
+
+        // Empty case: re-running the same purge is a clean no-op.
+        let result = service
+            .vault_purge_topic_scope(&actor, "codebase", "global", None)
+            .unwrap();
+        assert_eq!(result.get("purged").and_then(Value::as_i64), Some(0));
+
+        let _ = fs::remove_dir_all(&vault);
+        let _ = fs::remove_dir_all(&source_global);
+        let _ = fs::remove_dir_all(&source_project);
     }
 }
 

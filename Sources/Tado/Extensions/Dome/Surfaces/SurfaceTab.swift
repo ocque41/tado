@@ -9,12 +9,16 @@ import SwiftUI
 /// - **Agent Notes** — read surface; agents write via the MCP server.
 /// - **Calendar** — timeline of events + automations.
 /// - **Knowledge** — tag/topic tree over all notes.
+/// - **Recipes** — v0.11 — browse + run governed-answer templates.
+/// - **Automation** — v0.11 — schedule + manage recurring agent runs.
 enum DomeSurfaceTab: String, CaseIterable, Identifiable {
     case search
     case userNotes
     case agentNotes
     case calendar
     case knowledge
+    case recipes
+    case automation
 
     var id: String { rawValue }
 
@@ -25,6 +29,8 @@ enum DomeSurfaceTab: String, CaseIterable, Identifiable {
         case .agentNotes: return "Agent Notes"
         case .calendar: return "Calendar"
         case .knowledge: return "Knowledge"
+        case .recipes: return "Recipes"
+        case .automation: return "Automation"
         }
     }
 
@@ -37,6 +43,8 @@ enum DomeSurfaceTab: String, CaseIterable, Identifiable {
         case .agentNotes: return "sparkles.rectangle.stack"
         case .calendar: return "calendar"
         case .knowledge: return "square.grid.3x2"
+        case .recipes: return "text.book.closed"
+        case .automation: return "clock.arrow.circlepath"
         }
     }
 }

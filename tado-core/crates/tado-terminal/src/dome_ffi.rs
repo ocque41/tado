@@ -1124,6 +1124,329 @@ pub extern "C" fn tado_dome_recipe_seed_defaults() -> *mut c_char {
     }
 }
 
+/// v0.11 — list every retrieval recipe in the given scope. Pass
+/// `scope_cstr = "global"` to see only baked defaults, `"project"`
+/// to see only project-scoped overrides for the supplied
+/// `project_id_cstr`. NULL `scope_cstr` means "all".
+///
+/// Returns JSON `{"recipes": [{recipe_id, intent_key, scope,
+/// project_id, title, description, template_path, policy, enabled,
+/// last_verified_at, ...}]}` or null on failure. Caller frees with
+/// `tado_string_free`.
+///
+/// # Safety
+/// Optional pointers may be null; non-null pointers must be valid
+/// NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_recipe_list(
+    scope_cstr: *const c_char,
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let scope = optional_cstr(scope_cstr);
+    let project_id = optional_cstr(project_id_cstr);
+    match service.recipe_list(scope, project_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// v0.11 — apply a recipe and return its `GovernedAnswer`.
+/// `intent_key_cstr` must match a recipe row (e.g.
+/// `"architecture-review"`). `project_id_cstr` may be null for
+/// global scope.
+///
+/// Returns JSON `{intent_key, answer, citations: [...],
+/// missing_authority: [...], policy_applied: {...}}` or null on
+/// failure. Caller frees with `tado_string_free`.
+///
+/// # Safety
+/// `intent_key_cstr` must be a non-null NUL-terminated UTF-8.
+/// `project_id_cstr` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_recipe_apply(
+    intent_key_cstr: *const c_char,
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if intent_key_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(intent_key) = CStr::from_ptr(intent_key_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let project_id = optional_cstr(project_id_cstr);
+    let actor = swift_ui_actor();
+    match service.recipe_apply(&actor, intent_key, project_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// ── v0.11 — automation surface ────────────────────────────────────
+//
+// Eight FFI shims that expose the in-process scheduler to the Swift
+// AutomationSurface. Every shim returns JSON or null — Swift decodes
+// via `DomeRpcClient.Automation` / `AutomationOccurrence`. The
+// service-side methods are `automation_*` at service.rs:9663+.
+//
+// Operator gate: `automation_*` mutators call
+// `require_operator_actor` which only blocks `Actor::Agent`.
+// `swift_ui_actor()` is `Actor::UserUi` so it's allowed.
+
+/// List every automation. Filters: `enabled_filter` (1 = only
+/// enabled, 0 = only paused, -1 = both), `executor_kind_cstr` (e.g.
+/// `"agent_run"`, null = all kinds), `limit` (clamped 1..500).
+///
+/// Returns JSON `{"automations": [...AutomationRecord]}` or null.
+/// Caller frees with `tado_string_free`.
+///
+/// # Safety
+/// `executor_kind_cstr` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_list(
+    enabled_filter: c_int,
+    executor_kind_cstr: *const c_char,
+    limit: c_int,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let enabled = match enabled_filter {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    };
+    let executor_kind = optional_cstr(executor_kind_cstr);
+    let limit = limit.clamp(1, 500) as usize;
+    match service.automation_list(enabled, executor_kind, limit) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Fetch one automation by id. Returns JSON `{"automation": {...}}`
+/// or null when missing.
+///
+/// # Safety
+/// `id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_get(id_cstr: *const c_char) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.automation_get(id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Create an automation. `json_input_cstr` must be a JSON object
+/// matching `automation.create`'s expected shape: at minimum
+/// `{title, executor_kind, executor_config, prompt_template,
+/// schedule_kind, schedule, ...}`.
+///
+/// Returns JSON `{"automation": {...}}` or null on failure.
+///
+/// # Safety
+/// `json_input_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_create(
+    json_input_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(input_str) = optional_cstr(json_input_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(input) = serde_json::from_str::<serde_json::Value>(input_str) else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.automation_create(&actor, input) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Update an automation. `json_patch_cstr` is a partial JSON body —
+/// only fields present override the existing record.
+///
+/// # Safety
+/// Both pointers must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_update(
+    id_cstr: *const c_char,
+    json_patch_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Some(patch_str) = optional_cstr(json_patch_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(patch) = serde_json::from_str::<serde_json::Value>(patch_str) else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.automation_update(&actor, id, patch) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Delete an automation. Errors with `Conflict` if the automation
+/// has an active occurrence — Swift should surface the error and
+/// suggest pausing first.
+///
+/// # Safety
+/// `id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_delete(id_cstr: *const c_char) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.automation_delete(&actor, id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Toggle pause state. `paused == 1` → calls `automation_pause`
+/// (sets enabled=false, stamps paused_at). `paused == 0` →
+/// `automation_resume` (sets enabled=true, clears paused_at).
+///
+/// # Safety
+/// `id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_set_paused(
+    id_cstr: *const c_char,
+    paused: c_int,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    let result = if paused != 0 {
+        service.automation_pause(&actor, id)
+    } else {
+        service.automation_resume(&actor, id)
+    };
+    match result {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Manually enqueue an occurrence right now (the "Run now" button).
+/// Returns JSON `{"occurrence": {...}}` or null on conflict (serial
+/// automation already has an active occurrence).
+///
+/// # Safety
+/// `id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_run_now(id_cstr: *const c_char) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.automation_enqueue_now(&actor, id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// List occurrences. Pass `automation_id_cstr` to scope to one
+/// automation, or null for the global ledger across all
+/// automations. `status_cstr` filters by status string (`ready`,
+/// `running`, `done`, `failed`, ...). `from_cstr`/`to_cstr` are
+/// optional RFC3339 timestamps.
+///
+/// # Safety
+/// All pointers may be null. `limit` clamped 1..500.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_occurrence_list(
+    automation_id_cstr: *const c_char,
+    status_cstr: *const c_char,
+    from_cstr: *const c_char,
+    to_iso_cstr: *const c_char,
+    limit: c_int,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let automation_id = optional_cstr(automation_id_cstr);
+    let status = optional_cstr(status_cstr);
+    let from = optional_cstr(from_cstr);
+    let to_iso = optional_cstr(to_iso_cstr);
+    let limit = limit.clamp(1, 500) as usize;
+    match service.automation_occurrence_list(automation_id, status, from, to_iso, limit) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Retry a failed/cancelled occurrence (the "Retry" button on a
+/// failed occurrence row).
+///
+/// # Safety
+/// `occurrence_id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_automation_retry_occurrence(
+    occurrence_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if occurrence_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(occurrence_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.automation_retry_occurrence(&actor, id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
 /// to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
 /// `build(for:)` once the Swift composer adopts the deterministic
@@ -1411,6 +1734,83 @@ pub unsafe extern "C" fn tado_dome_vault_ingest_path(
         project_id,
         project_root,
     ) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Read-only count of docs that `tado_dome_vault_purge_topic_scope`
+/// would delete. Used by the Swift confirmation dialog so the operator
+/// sees the exact number before confirming. Returns JSON
+/// `{"count": N, "topic": ..., "owner_scope": ..., "project_id": ...}`
+/// or null on failure.
+///
+/// # Safety
+/// `topic_cstr` and `owner_scope_cstr` must be NUL-terminated UTF-8.
+/// `project_id_cstr` may be null (matches docs.project_id IS NULL).
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_vault_purge_topic_scope_count(
+    topic_cstr: *const c_char,
+    owner_scope_cstr: *const c_char,
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if topic_cstr.is_null() || owner_scope_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(topic) = CStr::from_ptr(topic_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(owner_scope) = CStr::from_ptr(owner_scope_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let project_id = optional_cstr(project_id_cstr);
+
+    match service.vault_purge_topic_scope_count(topic, owner_scope, project_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Bulk-delete every doc matching `(topic, owner_scope, project_id?)`
+/// along with cascade rows (`note_chunks`, `doc_meta`, `fts_notes`,
+/// `graph_nodes`, `graph_edges`) and the on-disk `topics/<topic>/<slug>/`
+/// folders. Used by the Knowledge → Agent System "Clear globally-
+/// ingested codebases" button to undo a misclicked global ingestion in
+/// one shot.
+///
+/// `project_id_cstr` may be null — that matches `docs.project_id IS NULL`
+/// (every owner_scope='global' row stores NULL there).
+///
+/// Returns JSON `{"purged": N, "topic": ..., "owner_scope": ...,
+/// "project_id": ...}` or null on failure.
+///
+/// # Safety
+/// Same as `_count` above. Caller frees with `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_vault_purge_topic_scope(
+    topic_cstr: *const c_char,
+    owner_scope_cstr: *const c_char,
+    project_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if topic_cstr.is_null() || owner_scope_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(topic) = CStr::from_ptr(topic_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(owner_scope) = CStr::from_ptr(owner_scope_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let project_id = optional_cstr(project_id_cstr);
+    let actor = swift_ui_actor();
+
+    match service.vault_purge_topic_scope(&actor, topic, owner_scope, project_id) {
         Ok(value) => to_cstr(value.to_string()),
         Err(_) => std::ptr::null_mut(),
     }

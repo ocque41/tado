@@ -602,28 +602,18 @@ char *tado_dome_graph_node_get(const char *node_id_cstr);
 char *tado_dome_agent_status(int limit);
 
 /**
- * Fetch scoped Claude-agent operational status for Knowledge → System.
- */
-char *tado_dome_agent_status_scoped(int limit,
-                                    const char *knowledge_scope_cstr,
-                                    const char *project_id_cstr,
-                                    bool include_global);
-
-/**
- * Fetch recent retrieval_log rows for the Knowledge → System surface.
- * Optional filters: `project_id_cstr` (null = all projects),
+ * Fetch recent `retrieval_log` rows for the Knowledge → System
+ * surface. Optional filters: `project_id_cstr` (null = all projects),
  * `tool_cstr` (null = all tools, e.g. "dome_search"). Returns the
  * JSON envelope `{ rows, n, consumption_rate, mean_latency_ms }`.
  * Caller frees with `tado_string_free`.
  */
-char *tado_dome_retrieval_log_recent(int limit,
-                                     const char *project_id_cstr,
-                                     const char *tool_cstr);
+char *tado_dome_retrieval_log_recent(int limit, const char *project_id_cstr, const char *tool_cstr);
 
 /**
- * Phase 3 — supersede `old_id` with `new_id`. Returns
- * `{ old_id, new_id, reason }` JSON on success, NULL on failure.
- * Caller frees with `tado_string_free`.
+ * Phase 3 — supersede `old_id` with `new_id`. UI-side actor. Returns
+ * the JSON envelope `{ old_id, new_id, reason }` on success, null on
+ * error. Caller frees with `tado_string_free`.
  */
 char *tado_dome_node_supersede(const char *old_id_cstr,
                                const char *new_id_cstr,
@@ -631,7 +621,7 @@ char *tado_dome_node_supersede(const char *old_id_cstr,
 
 /**
  * Phase 3 — confirm or dispute a graph_node. `verdict` must be
- * 'confirmed' or 'disputed'. Caller frees with `tado_string_free`.
+ * `'confirmed'` or `'disputed'`. Caller frees with `tado_string_free`.
  */
 char *tado_dome_node_verify(const char *node_id_cstr,
                             const char *verdict_cstr,
@@ -642,34 +632,127 @@ char *tado_dome_node_verify(const char *node_id_cstr,
  * Phase 3 — soft-archive a graph_node. Caller frees with
  * `tado_string_free`.
  */
-char *tado_dome_node_decay(const char *node_id_cstr,
-                           const char *reason_cstr);
+char *tado_dome_node_decay(const char *node_id_cstr, const char *reason_cstr);
 
 /**
- * Phase 3 — read enrichment queue depth for the Knowledge → System
- * backfill chip. Returns `{ queued, running, done, failed }` JSON.
- * Caller frees with `tado_string_free`.
+ * Phase 5 — seed the three default retrieval recipes
+ * (architecture-review, completion-claim, team-handoff) at global
+ * scope. Idempotent — re-running upserts the latest baked
+ * templates without disturbing user-edited project overrides.
+ * Returns the count of recipes seeded as a JSON int, or null on
+ * daemon failure. Caller frees with `tado_string_free`.
  */
-char *tado_dome_enrichment_queue_depth(void);
+char *tado_dome_recipe_seed_defaults(void);
+
+/**
+ * v0.11 — list every retrieval recipe in the given scope. Pass
+ * `scope_cstr = "global"` to see only baked defaults, `"project"`
+ * to see only project-scoped overrides for the supplied
+ * `project_id_cstr`. NULL `scope_cstr` means "all".
+ *
+ * Returns JSON `{"recipes": [{recipe_id, intent_key, scope,
+ * project_id, title, description, template_path, policy, enabled,
+ * last_verified_at, ...}]}` or null on failure. Caller frees with
+ * `tado_string_free`.
+ */
+char *tado_dome_recipe_list(const char *scope_cstr,
+                            const char *project_id_cstr);
+
+/**
+ * v0.11 — apply a recipe and return its `GovernedAnswer`.
+ * `intent_key_cstr` must match a recipe row (e.g.
+ * `"architecture-review"`). `project_id_cstr` may be null for
+ * global scope.
+ */
+char *tado_dome_recipe_apply(const char *intent_key_cstr,
+                             const char *project_id_cstr);
+
+/* ── v0.11 — automation surface ───────────────────────────────── */
+
+/**
+ * List every automation. `enabled_filter`: 1 = only enabled, 0 =
+ * only paused, anything else = both. `executor_kind_cstr` may be
+ * null. `limit` clamped 1..500.
+ */
+char *tado_dome_automation_list(int enabled_filter,
+                                const char *executor_kind_cstr,
+                                int limit);
+
+/** Fetch one automation by id. Returns null when missing. */
+char *tado_dome_automation_get(const char *id_cstr);
+
+/** Create an automation. `json_input_cstr` is a JSON object body. */
+char *tado_dome_automation_create(const char *json_input_cstr);
+
+/** Update an automation. `json_patch_cstr` is a partial JSON object. */
+char *tado_dome_automation_update(const char *id_cstr,
+                                  const char *json_patch_cstr);
+
+/**
+ * Delete an automation. Errors with Conflict if the automation has
+ * an active occurrence — Swift should surface and suggest pausing.
+ */
+char *tado_dome_automation_delete(const char *id_cstr);
+
+/**
+ * Toggle paused state. `paused != 0` calls `automation_pause`,
+ * `paused == 0` calls `automation_resume`.
+ */
+char *tado_dome_automation_set_paused(const char *id_cstr, int paused);
+
+/** Manually enqueue a "right now" occurrence (the Run-now button). */
+char *tado_dome_automation_run_now(const char *id_cstr);
+
+/**
+ * List occurrences. `automation_id_cstr` null = global ledger.
+ * `status_cstr` filters by status string. `from_cstr` and
+ * `to_iso_cstr` are optional RFC3339 timestamps.
+ */
+char *tado_dome_automation_occurrence_list(const char *automation_id_cstr,
+                                           const char *status_cstr,
+                                           const char *from_cstr,
+                                           const char *to_iso_cstr,
+                                           int limit);
+
+/** Retry a failed/cancelled occurrence. */
+char *tado_dome_automation_retry_occurrence(const char *occurrence_id_cstr);
 
 /**
  * Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
- * to `DomeContextPreamble.build(for:)` once the Swift composer adopts
- * the deterministic relative-time formatter. JSON args shape:
- *   { "agent_name", "project_name", "project_id", "project_root",
- *     "team_name", "teammates": ["..."] }
- * Returns the rendered preamble or NULL if nothing to render.
- * Caller frees with `tado_string_free`.
+ * to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
+ * `build(for:)` once the Swift composer adopts the deterministic
+ * relative-time formatter. JSON request body shape:
+ *
+ * ```json
+ * {
+ *   "agent_name":   "backend",
+ *   "project_name": "Tado",
+ *   "project_id":   "11111111-…",
+ *   "project_root": "/Users/miguel/Documents/tado",
+ *   "team_name":    "core",
+ *   "teammates":    ["frontend"]
+ * }
+ * ```
+ *
+ * Returns the rendered preamble as a heap-allocated UTF-8 string, or
+ * null when there's nothing to render. Caller frees with
+ * `tado_string_free`.
  */
 char *tado_dome_compose_spawn_preamble(const char *json_args_cstr);
 
 /**
- * Phase 5 — seed the three default retrieval recipes at global scope
- * (architecture-review, completion-claim, team-handoff). Idempotent.
- * Returns `{ "seeded": N }` JSON or NULL on failure.
- * Caller frees with `tado_string_free`.
+ * Phase 3 — read enrichment queue depth for the Knowledge → System
+ * backfill chip. Returns `{ queued, running, done, failed }` JSON.
  */
-char *tado_dome_recipe_seed_defaults(void);
+char *tado_dome_enrichment_queue_depth(void);
+
+/**
+ * Fetch scoped Claude-agent operational status for Knowledge → System.
+ */
+char *tado_dome_agent_status_scoped(int limit,
+                                    const char *knowledge_scope_cstr,
+                                    const char *project_id_cstr,
+                                    bool include_global);
 
 /**
  * Resolve the latest context pack for a brand/session/doc tuple.
@@ -743,6 +826,39 @@ char *tado_dome_vault_ingest_path(const char *path_cstr,
                                   const char *owner_scope_cstr,
                                   const char *project_id_cstr,
                                   const char *project_root_cstr);
+
+/**
+ * Read-only count of docs that `tado_dome_vault_purge_topic_scope`
+ * would delete. Used by the Swift confirmation dialog so the operator
+ * sees the exact number before confirming. Returns JSON
+ * `{"count": N, "topic": ..., "owner_scope": ..., "project_id": ...}`
+ * or null on failure.
+ *
+ * # Safety
+ * `topic_cstr` and `owner_scope_cstr` must be NUL-terminated UTF-8.
+ * `project_id_cstr` may be null (matches docs.project_id IS NULL).
+ */
+char *tado_dome_vault_purge_topic_scope_count(const char *topic_cstr,
+                                              const char *owner_scope_cstr,
+                                              const char *project_id_cstr);
+
+/**
+ * Bulk-delete every doc matching `(topic, owner_scope, project_id?)`
+ * along with cascade rows (`note_chunks`, `doc_meta`, `fts_notes`,
+ * `graph_nodes`, `graph_edges`) and the on-disk `topics/<topic>/<slug>/`
+ * folders. Used by the Knowledge → Agent System "Clear globally-
+ * ingested codebases" button to undo a misclicked global ingestion in
+ * one shot.
+ *
+ * `project_id_cstr` may be null — that matches `docs.project_id IS NULL`
+ * (every owner_scope='global' row stores NULL there).
+ *
+ * Returns JSON `{"purged": N, "topic": ..., "owner_scope": ...,
+ * "project_id": ...}` or null on failure.
+ */
+char *tado_dome_vault_purge_topic_scope(const char *topic_cstr,
+                                        const char *owner_scope_cstr,
+                                        const char *project_id_cstr);
 
 /**
  * Live snapshot of legacy `vault_ingest_path` progress. Caller frees

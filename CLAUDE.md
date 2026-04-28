@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.9.0. It is grouped so you can
+This file is the canonical map of Tado at v0.11.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -258,10 +258,29 @@ threshold) and a markdown template at
 `hybrid_search` with rerank, separates hits into citations vs
 `missing_authority`, and renders the template into a
 `GovernedAnswer`. No LLM — synthesis is deterministic substitution
-(`{{ var }}` + `{{ list | bullets(N) }}`). Two new MCP tools:
+(`{{ var }}` + `{{ list | bullets(N) }}`). Two MCP tools:
 `dome_recipe_list` and `dome_recipe_apply`. Per-project overrides
 land at `<project>/.tado/verified-prompts/<intent>.md`. Schema is
-at version **24** (Phase 5 activation marker).
+at version **24** (Phase 5 activation marker). **v0.11+** adds a
+human surface: `Dome → Recipes` lists every recipe in the active
+scope, shows the policy summary, runs the recipe with one click,
+and renders the `GovernedAnswer` with citations + missing-authority
+callouts. FFI: `tado_dome_recipe_list`, `tado_dome_recipe_apply`,
+`tado_dome_recipe_seed_defaults`.
+
+**Automation (v0.11+)** — bt-core has shipped an in-process scheduler
+since v0.9 (`automation_*` methods in `service.rs:9663+`,
+`scheduler_tick` at `service.rs:10985`). v0.11 adds the operator UI
+that's been missing: `Dome → Automation`. Card list of every
+defined automation, an inline create/edit sheet, a `⋯` menu with
+Pause/Resume/Run-now/Edit/Duplicate/Delete (destructive guard rails
+on Delete via `NSAlert`), and a unified occurrence ledger across
+every automation showing planned/started/finished/run-id/failure
+fields with a "Retry" button on failed/cancelled rows. All actions
+go through `swift_ui_actor()` so every operator move lands in the
+audit log under `actor=user_ui`. FFI: 9 new shims under
+`tado_dome_automation_*` (`list/get/create/update/delete/
+set_paused/run_now/occurrence_list/retry_occurrence`).
 
 **Spawn-pack engine v2 (Phase 4, v0.10+)** — the Rust pack engine
 at `tado-core/crates/bt-core/src/context/` produces the
@@ -618,6 +637,27 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.11.0** (2026-04-28) — *Surface Coverage Pass, phase 1.* Two
+  big backend subsystems graduate to Dome tabs: the in-process
+  **automation/scheduler** (full CRUD via the new
+  `Dome → Automation` surface — schedule, pause/resume, run-now,
+  retry, delete, with a unified occurrence ledger across every
+  automation) and the Phase 5 **retrieval recipes** (new
+  `Dome → Recipes` surface — browse the 3 baked defaults plus
+  project-scoped overrides, run them with one click, see the
+  `GovernedAnswer` with citations + missing-authority callouts,
+  edit per-project templates). 11 new FFI shims, 1 lifted
+  surface-helpers file (`SurfaceHelpers.swift`), shared by every
+  current and future Dome surface.
+- **v0.10.0** (2026-04-27) — *Knowledge Catalog overlay.* Schema
+  v22→v24 (entity layer + provenance + retrieval log + pending
+  enrichment + retrieval recipes + activation marker), heuristic
+  hybrid-search rerank, four tokio enrichment workers, byte-stable
+  Rust spawn-pack engine (Phase 4 dual-path with Swift fallback),
+  three baked retrieval recipes + governed answers (Phase 5),
+  `dome-eval` CLI as 9th workspace crate. Plus a v0.10.1-style
+  follow-up that scoped the codebase Ingest button to Project vs
+  Global with a one-shot purge for the historical global pollution.
 - **v0.9.0** (2026-04-25) — *foundation-v2 bundle.* Cargo workspace
   promoted to eight crates, in-process Dome second brain (bt-core
   fused, 21 migrations, Qwen3-Embedding-0.6B replaces hash-noop),
