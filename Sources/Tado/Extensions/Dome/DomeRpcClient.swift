@@ -1866,6 +1866,203 @@ enum DomeRpcClient {
         return decode(EvalReplayReport.self, from: json)
     }
 
+    // MARK: - v0.13 Vault status, imports, tokens
+
+    /// Vault status snapshot — paths + doc count + topics count.
+    /// Mirrors `service.status()` at `crates/bt-core/src/service.rs:592`.
+    struct VaultStatus: Codable, Equatable {
+        let vaultPath: String
+        let docCount: Int
+        let topicsCount: Int
+        let socketPath: String
+        let tasksFile: String
+
+        enum CodingKeys: String, CodingKey {
+            case vaultPath = "vault_path"
+            case docCount = "doc_count"
+            case topicsCount = "topics_count"
+            case socketPath = "socket_path"
+            case tasksFile = "tasks_file"
+        }
+    }
+
+    static func vaultStatus() -> VaultStatus? {
+        guard let raw = tado_dome_vault_status() else { return nil }
+        defer { tado_string_free(raw) }
+        return decode(VaultStatus.self, from: String(cString: raw))
+    }
+
+    /// One file the import wizard discovered. `mode` is `note_text`
+    /// (markdown / txt → note) or `attachment` (everything else →
+    /// attached binary).
+    struct ImportItem: Codable, Identifiable, Equatable {
+        let sourcePath: String
+        let relativePath: String
+        let topic: String
+        let title: String
+        let slug: String
+        let mode: String
+
+        var id: String { sourcePath }
+
+        enum CodingKeys: String, CodingKey {
+            case sourcePath = "source_path"
+            case relativePath = "relative_path"
+            case topic
+            case title
+            case slug
+            case mode
+        }
+    }
+
+    /// Skipped row — `path` (relative) + `reason`. Currently
+    /// emitted only for `.DS_Store` and reserved-zone files.
+    struct ImportSkipped: Codable, Equatable {
+        let path: String
+        let reason: String
+    }
+
+    struct ImportPreviewResult: Codable, Equatable {
+        let rootPath: String
+        let items: [ImportItem]
+        let count: Int
+        let skipped: [ImportSkipped]
+
+        enum CodingKeys: String, CodingKey {
+            case rootPath = "root_path"
+            case items
+            case count
+            case skipped
+        }
+    }
+
+    static func importPreview(rootPath: String? = nil) -> ImportPreviewResult? {
+        let json = withOptionalCString(rootPath) { pathC -> String? in
+            guard let raw = tado_dome_import_preview(pathC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        return decode(ImportPreviewResult.self, from: json)
+    }
+
+    /// `imported` carries one entry per successfully imported file
+    /// — `relative_path` + minted `doc_id`. `failures` carries the
+    /// rejects with their reason.
+    struct ImportExecuteResult: Codable, Equatable {
+        struct Imported: Codable, Equatable {
+            let relativePath: String
+            let docId: String?
+
+            enum CodingKeys: String, CodingKey {
+                case relativePath = "relative_path"
+                case docId = "doc_id"
+            }
+        }
+        struct Failure: Codable, Equatable {
+            let relativePath: String?
+            let reason: String
+
+            enum CodingKeys: String, CodingKey {
+                case relativePath = "relative_path"
+                case reason
+            }
+        }
+        let imported: [Imported]
+        let failures: [Failure]
+        let count: Int
+    }
+
+    static func importExecute(items: [ImportItem]) -> ImportExecuteResult? {
+        guard let data = try? JSONEncoder().encode(items),
+              let str = String(data: data, encoding: .utf8)
+        else { return nil }
+        let json = str.withCString { jsonC -> String? in
+            guard let raw = tado_dome_import_execute(jsonC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        return decode(ImportExecuteResult.self, from: json)
+    }
+
+    /// One row of the agent-token table. `token` (the raw secret)
+    /// is only present in the response of `tokenCreate` /
+    /// `tokenRotate` — list calls return token_id + metadata only.
+    struct AgentToken: Codable, Identifiable, Equatable {
+        let tokenId: String
+        let agentName: String
+        let caps: [String]
+        let createdAt: String?
+        let lastUsedAt: String?
+        let revoked: Bool
+
+        var id: String { tokenId }
+
+        enum CodingKeys: String, CodingKey {
+            case tokenId = "token_id"
+            case agentName = "agent_name"
+            case caps
+            case createdAt = "created_at"
+            case lastUsedAt = "last_used_at"
+            case revoked
+        }
+    }
+
+    static func tokenList() -> [AgentToken] {
+        guard let raw = tado_dome_token_list() else { return [] }
+        defer { tado_string_free(raw) }
+        struct Envelope: Codable { let tokens: [AgentToken] }
+        return decode(Envelope.self, from: String(cString: raw))?.tokens ?? []
+    }
+
+    /// Result of `tokenCreate` / `tokenRotate` — includes the raw
+    /// secret in `token`, which is the only place it's ever
+    /// surfaced (config stores only the hash).
+    struct TokenSecret: Codable, Equatable {
+        let token: String
+        let tokenId: String
+        let agentName: String?
+        let caps: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case token
+            case tokenId = "token_id"
+            case agentName = "agent_name"
+            case caps
+        }
+    }
+
+    static func tokenCreate(agentName: String, caps: [String]) -> TokenSecret? {
+        let csv = caps.joined(separator: ",")
+        let json = agentName.withCString { nameC in
+            csv.withCString { capsC -> String? in
+                guard let raw = tado_dome_token_create(nameC, capsC) else { return nil }
+                defer { tado_string_free(raw) }
+                return String(cString: raw)
+            }
+        }
+        return decode(TokenSecret.self, from: json)
+    }
+
+    static func tokenRotate(tokenID: String) -> TokenSecret? {
+        let json = tokenID.withCString { tokenC -> String? in
+            guard let raw = tado_dome_token_rotate(tokenC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        return decode(TokenSecret.self, from: json)
+    }
+
+    @discardableResult
+    static func tokenRevoke(tokenID: String) -> Bool {
+        let json = tokenID.withCString { tokenC -> String? in
+            guard let raw = tado_dome_token_revoke(tokenC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let revoked: Bool }
+        return decode(Envelope.self, from: json)?.revoked ?? false
+    }
+
     /// Retry a failed occurrence. Returns the new retry occurrence
     /// or nil on conflict (retry limit exhausted).
     static func automationRetryOccurrence(occurrenceID: String) -> AutomationOccurrence? {

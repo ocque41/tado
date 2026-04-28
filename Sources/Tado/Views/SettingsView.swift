@@ -317,6 +317,8 @@ struct SettingsView: View {
 
                 CodeIndexingSection()
 
+                AgentTokensSection()
+
                 Section("Shortcuts") {
                     LabeledContent("Cycle pages", value: "Ctrl + Tab")
                     LabeledContent("Projects", value: "Cmd + P")
@@ -655,6 +657,219 @@ private struct CodeIndexingSection: View {
                 .font(Typography.monoMicro)
                 .foregroundStyle(Palette.textTertiary)
                 .lineLimit(3)
+        }
+    }
+}
+
+/// v0.13 — issue + revoke + rotate Dome agent tokens.
+///
+/// Tokens authenticate non-Tado MCP clients (e.g. Claude Desktop)
+/// against the local Dome daemon. The raw secret is shown ONCE
+/// when the token is created or rotated — config stores only the
+/// hash. Revoking flips a flag, keeping the row for the audit
+/// trail; future authentication attempts fail with `Forbidden`.
+private struct AgentTokensSection: View {
+    @State private var tokens: [DomeRpcClient.AgentToken] = []
+    @State private var showCreate = false
+    @State private var newAgentName = ""
+    @State private var newCaps: Set<String> = ["search", "read"]
+    @State private var lastSecret: DomeRpcClient.TokenSecret?
+    @State private var working = false
+
+    private static let knownCaps: [String] = [
+        "search", "read", "note", "schedule",
+        "graph", "context", "supersede", "verify", "decay", "recipe",
+    ]
+
+    var body: some View {
+        Section("Agent tokens") {
+            HStack {
+                Text("Tokens authenticate non-Tado MCP clients (Claude Desktop, etc.) against the local Dome daemon.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                Spacer()
+                Button(showCreate ? "Hide form" : "Issue token") {
+                    showCreate.toggle()
+                    if !showCreate { lastSecret = nil }
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if showCreate {
+                createForm
+            }
+            if let secret = lastSecret {
+                secretBanner(secret)
+            }
+
+            if tokens.isEmpty {
+                Text("No tokens issued yet.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+            } else {
+                ForEach(tokens) { token in
+                    tokenRow(token)
+                }
+            }
+        }
+        .task { await reload() }
+    }
+
+    private var createForm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                TextField("Agent label", text: $newAgentName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 240)
+                Spacer()
+                Button(working ? "Issuing…" : "Issue") {
+                    runCreate()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(working || newAgentName.isEmpty || newCaps.isEmpty)
+            }
+            HStack(spacing: 6) {
+                ForEach(Self.knownCaps, id: \.self) { cap in
+                    Button {
+                        if newCaps.contains(cap) { newCaps.remove(cap) }
+                        else { newCaps.insert(cap) }
+                    } label: {
+                        Text(cap)
+                            .font(Typography.monoCaption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(newCaps.contains(cap) ? Palette.surfaceAccentSoft : Palette.surface)
+                            .foregroundStyle(newCaps.contains(cap) ? Palette.accent : Palette.textSecondary)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(8)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func secretBanner(_ secret: DomeRpcClient.TokenSecret) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Copy this secret now — it's only shown once.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.warning)
+                Spacer()
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(secret.token, forType: .string)
+                }
+                .buttonStyle(.borderless)
+                Button("Dismiss") { lastSecret = nil }
+                    .buttonStyle(.borderless)
+            }
+            Text(secret.token)
+                .font(Typography.monoCaption)
+                .textSelection(.enabled)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Palette.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .padding(8)
+        .background(Palette.surfaceAccentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func tokenRow(_ token: DomeRpcClient.AgentToken) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: token.revoked ? "xmark.circle" : "key.fill")
+                .foregroundStyle(token.revoked ? Palette.textTertiary : Palette.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(token.agentName)
+                    .font(Typography.body)
+                    .foregroundStyle(token.revoked ? Palette.textTertiary : Palette.textPrimary)
+                HStack(spacing: 4) {
+                    Text(token.tokenId)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textTertiary)
+                    Text(token.caps.joined(separator: ", "))
+                        .font(Typography.micro)
+                        .foregroundStyle(Palette.textTertiary)
+                }
+            }
+            Spacer()
+            if !token.revoked {
+                Button("Rotate") { runRotate(token: token) }
+                    .buttonStyle(.borderless)
+                    .disabled(working)
+                Button("Revoke") { confirmRevoke(token: token) }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Palette.danger)
+                    .disabled(working)
+            } else {
+                Text("Revoked")
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func reload() async {
+        let fetched = await Task.detached { DomeRpcClient.tokenList() }.value
+        await MainActor.run { tokens = fetched }
+    }
+
+    private func runCreate() {
+        let name = newAgentName
+        let caps = Array(newCaps).sorted()
+        working = true
+        Task.detached {
+            let secret = DomeRpcClient.tokenCreate(agentName: name, caps: caps)
+            await MainActor.run {
+                working = false
+                if let secret {
+                    lastSecret = secret
+                    newAgentName = ""
+                }
+            }
+            await reload()
+        }
+    }
+
+    private func runRotate(token: DomeRpcClient.AgentToken) {
+        let alert = NSAlert()
+        alert.messageText = "Rotate token for \"\(token.agentName)\"?"
+        alert.informativeText = "The old secret stops working immediately. Make sure no agent is still relying on it before confirming."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Rotate")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        let id = token.tokenId
+        working = true
+        Task.detached {
+            let secret = DomeRpcClient.tokenRotate(tokenID: id)
+            await MainActor.run {
+                working = false
+                if let secret { lastSecret = secret }
+            }
+            await reload()
+        }
+    }
+
+    private func confirmRevoke(token: DomeRpcClient.AgentToken) {
+        let alert = NSAlert()
+        alert.messageText = "Revoke token for \"\(token.agentName)\"?"
+        alert.informativeText = "Authentication with this token will fail afterward. The row stays in the config for the audit trail."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Revoke")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        let id = token.tokenId
+        working = true
+        Task.detached {
+            _ = DomeRpcClient.tokenRevoke(tokenID: id)
+            await MainActor.run { working = false }
+            await reload()
         }
     }
 }

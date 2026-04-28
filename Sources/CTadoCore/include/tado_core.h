@@ -741,6 +741,42 @@ char *tado_dome_audit_tail(const char *since_cstr, int limit);
  */
 char *tado_dome_eval_replay(const char *vault_db_cstr, long long since_seconds);
 
+/* ── v0.13 — bulk import + vault status + tokens ─────────────────── */
+
+/** Vault status snapshot — paths + doc count + topics count. */
+char *tado_dome_vault_status(void);
+
+/**
+ * Walk `root_path_cstr` (must be inside the vault; null = entire
+ * vault root) and return importable items. Used by the Knowledge
+ * → Imports wizard step 1.
+ */
+char *tado_dome_import_preview(const char *root_path_cstr);
+
+/**
+ * Execute the import. `items_json_cstr` is a JSON array of the
+ * `import_preview.items` shape — pass back whatever subset the
+ * user confirmed. Returns JSON `{imported, failures, count}`.
+ */
+char *tado_dome_import_execute(const char *items_json_cstr);
+
+/** List every issued agent token (revoked ones included). */
+char *tado_dome_token_list(void);
+
+/**
+ * Issue a token. `caps_csv_cstr` is a comma-separated list of
+ * capabilities. Returns JSON `{token, token_id, agent_name,
+ * caps}` — the `token` field is the one-time secret.
+ */
+char *tado_dome_token_create(const char *agent_name_cstr,
+                             const char *caps_csv_cstr);
+
+/** Rotate a token's secret. Old secret stops working immediately. */
+char *tado_dome_token_rotate(const char *token_id_cstr);
+
+/** Revoke a token. Authentication fails afterward. */
+char *tado_dome_token_revoke(const char *token_id_cstr);
+
 /**
  * Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
  * to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s

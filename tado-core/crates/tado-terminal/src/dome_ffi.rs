@@ -1549,6 +1549,172 @@ pub unsafe extern "C" fn tado_dome_eval_replay(
     }
 }
 
+// ── v0.13 — bulk import + vault status + tokens ───────────────────
+
+/// Vault status snapshot — `vault_path`, `doc_count`,
+/// `topics_count`, `socket_path`, `tasks_file`. Used by the
+/// Knowledge → System "Vault status" header card.
+#[no_mangle]
+pub extern "C" fn tado_dome_vault_status() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.status() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Walk `root_path` (must already live inside the vault) and list
+/// every importable file. `root_path_cstr = null` → scan the whole
+/// vault root. Returns JSON `{root_path, items: [...], count,
+/// skipped: [...]}` mirroring `service.import_preview`.
+///
+/// # Safety
+/// `root_path_cstr` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_import_preview(
+    root_path_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let root_path = optional_cstr(root_path_cstr);
+    match service.import_preview(root_path) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Execute the import. `items_json_cstr` is a JSON array of
+/// `ImportPreviewItem` shapes (the Swift wizard echoes back
+/// whatever subset of `import_preview.items` the user checked).
+///
+/// Returns JSON `{imported: [...], failures: [...], count}` or
+/// null on failure.
+///
+/// # Safety
+/// `items_json_cstr` must be non-null NUL-terminated UTF-8 holding
+/// a JSON array.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_import_execute(
+    items_json_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let Some(json_str) = optional_cstr(items_json_cstr) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(items): Result<Vec<bt_core::service::ImportPreviewItem>, _> =
+        serde_json::from_str(json_str)
+    else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.import_execute(&actor, &items) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// List every issued agent token. Returns JSON `{tokens: [{token_id,
+/// agent_name, caps, created_at, last_used_at, revoked}, ...]}`.
+#[no_mangle]
+pub extern "C" fn tado_dome_token_list() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.token_list() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Issue a new token. `caps_csv_cstr` is a comma-separated list
+/// of capability names (`search,read,note,schedule,recipe,...`).
+/// Returns JSON `{token, token_id, agent_name, caps}` — the
+/// `token` field is the one-time secret the operator must copy
+/// before closing the dialog.
+///
+/// # Safety
+/// Both pointers must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_token_create(
+    agent_name_cstr: *const c_char,
+    caps_csv_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if agent_name_cstr.is_null() || caps_csv_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(agent_name) = CStr::from_ptr(agent_name_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(caps_csv) = CStr::from_ptr(caps_csv_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let caps: Vec<String> = caps_csv
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    match service.token_create(agent_name, caps) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Rotate a token's secret. Returns the new raw secret and the
+/// token_id; old secret is invalidated immediately.
+///
+/// # Safety
+/// `token_id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_token_rotate(
+    token_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if token_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(token_id) = CStr::from_ptr(token_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.token_rotate(token_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Revoke a token. The token row stays in the config (audit trail)
+/// but `revoked = true` so authentication fails.
+///
+/// # Safety
+/// `token_id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_token_revoke(
+    token_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if token_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(token_id) = CStr::from_ptr(token_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.token_revoke(token_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
 /// to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
 /// `build(for:)` once the Swift composer adopts the deterministic

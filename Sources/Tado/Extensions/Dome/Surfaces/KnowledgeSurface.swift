@@ -896,6 +896,10 @@ private struct KnowledgeSystemSurface: View {
     @State private var evalRunning = false
     @State private var evalWindowSeconds: Int = 86_400 // last 24h default
 
+    /// v0.13 — vault status snapshot + import wizard sheet state.
+    @State private var vaultStatus: DomeRpcClient.VaultStatus?
+    @State private var showImportWizard = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             surfaceHeader(title: "Agent System", subtitle: "\(systemSubtitle) · \(domeScope.label)", isLoading: isLoading) {
@@ -907,6 +911,7 @@ private struct KnowledgeSystemSurface: View {
                     if let depth = queueDepth, !depth.idle {
                         backfillChip(depth)
                     }
+                    vaultStatusSection
                     healthSection
                     schedulerSection
                     evalSection
@@ -923,6 +928,80 @@ private struct KnowledgeSystemSurface: View {
         .background(Palette.background)
         .task(id: domeScope.id) { await reload() }
         .task { embeddingStats = DomeRpcClient.embeddingStats() }
+    }
+
+    // MARK: - v0.13 Vault status
+
+    private var vaultStatusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                sectionTitle("Vault status")
+                Spacer()
+                Button("Open in Finder") {
+                    if let path = vaultStatus?.vaultPath {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(vaultStatus == nil)
+
+                Button("Snapshot vault") {
+                    Task.detached {
+                        _ = BackupManager.createBackup(reason: "manual-from-system")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("Tarball snapshot of the entire vault to <root>/backups/. Restore via Settings → Storage.")
+
+                Button("Bulk import…") {
+                    showImportWizard = true
+                }
+                .buttonStyle(.borderless)
+                .help("Walk a folder inside the vault and turn its files into Dome notes / attachments.")
+            }
+            if let s = vaultStatus {
+                HStack(spacing: 18) {
+                    metaTag("Docs", value: "\(s.docCount)")
+                    metaTag("Topics", value: "\(s.topicsCount)")
+                    metaTag("Vault", value: shortenPath(s.vaultPath))
+                    metaTag("Socket", value: shortenPath(s.socketPath))
+                }
+            } else {
+                Text("Vault status pending — click refresh to populate.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+        }
+        .sheet(isPresented: $showImportWizard) {
+            ImportWizard(
+                domeScope: domeScope,
+                onClose: {
+                    showImportWizard = false
+                    Task { await reload() }
+                }
+            )
+        }
+    }
+
+    private func metaTag(_ label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(Typography.micro)
+                .foregroundStyle(Palette.textTertiary)
+            Text(value)
+                .font(Typography.monoCaption)
+                .foregroundStyle(Palette.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private func shortenPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 
     // MARK: - v0.12 System health
@@ -1618,12 +1697,16 @@ private struct KnowledgeSystemSurface: View {
         async let auditTask = Task.detached {
             DomeRpcClient.auditTail(since: nil, limit: 200)
         }.value
+        async let vaultStatusTask = Task.detached {
+            DomeRpcClient.vaultStatus()
+        }.value
         let fetched = await agentTask
         let log = await logTask
         queueDepth = await queueTask
         systemHealth = await healthTask
         automationStatus = await schedulerTask
         auditRows = await auditTask
+        vaultStatus = await vaultStatusTask
         if let fetched {
             envelope = fetched
             // After a Compact mints a new pack the old contextID is

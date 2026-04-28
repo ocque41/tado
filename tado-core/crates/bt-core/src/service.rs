@@ -322,13 +322,13 @@ struct DomeCraftshipPlanAssignment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ImportPreviewItem {
-    source_path: String,
-    relative_path: String,
-    topic: String,
-    title: String,
-    slug: String,
-    mode: String,
+pub struct ImportPreviewItem {
+    pub source_path: String,
+    pub relative_path: String,
+    pub topic: String,
+    pub title: String,
+    pub slug: String,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2582,7 +2582,7 @@ impl CoreService {
         }))
     }
 
-    fn import_execute(&self, actor: &Actor, items: &[ImportPreviewItem]) -> Result<Value, BtError> {
+    pub fn import_execute(&self, actor: &Actor, items: &[ImportPreviewItem]) -> Result<Value, BtError> {
         self.apply_write(actor, WriteOperation::CreateDocument)?;
         let vault_root = self.require_vault()?;
 

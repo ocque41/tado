@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-04-28
+
+The "operator setup + teardown" release. Phase 3 of the Surface
+Coverage Pass adds the **vault status** card, the **bulk import
+wizard**, and the **agent tokens** tab to Settings. After this
+release the user can see what's in the vault, import an external
+markdown tree in one go, and issue / rotate / revoke tokens for
+non-Tado MCP clients without touching `<vault>/.bt/config.toml`
+by hand.
+
+### Added
+- **Vault status card** at the top of Knowledge → System. Shows
+  doc count, topic count, vault path, socket path, plus three
+  actions: "Open in Finder" (jumps to the vault root), "Snapshot
+  vault" (kicks `BackupManager.createBackup(reason:)`), "Bulk
+  import…" (opens the new wizard).
+- **Bulk import wizard** (`ImportWizard.swift`) — three-step sheet:
+  pick folder → review tree with per-file checkboxes + filter
+  chips (Notes only / Attachments only / Select all / Clear) →
+  confirm. Calls `tado_dome_import_preview` then
+  `tado_dome_import_execute`. Surfaces the daemon's "must be
+  inside the vault" constraint with a clear error message that
+  points the user at `<vault>/inbox/`.
+- **Agent tokens settings tab.** New `Settings → Agent tokens`
+  section. Issue form with a label + a chip-grid of capabilities
+  (`search/read/note/schedule/graph/context/supersede/verify/
+  decay/recipe`). Issued / rotated tokens show the raw secret
+  exactly once in a copyable banner with a one-time "Copy" button.
+  Per-row `Rotate` (warning dialog) and `Revoke` (critical
+  dialog) actions. Revoked rows stay visible (audit trail) but
+  greyed out with a "Revoked" pill.
+- **8 new FFI shims**: `tado_dome_vault_status`,
+  `tado_dome_import_preview`, `tado_dome_import_execute`,
+  `tado_dome_token_list`, `tado_dome_token_create`,
+  `tado_dome_token_rotate`, `tado_dome_token_revoke`. Matching
+  Swift bindings as Codable structs on `DomeRpcClient`.
+
+### Changed
+- **`bt_core::service::ImportPreviewItem`** + `import_execute`
+  promoted from private to `pub` so the Phase 3 FFI shim can
+  call them directly. JSON shape unchanged — already
+  Serialize/Deserialize-derived.
+
 ## [0.12.0] - 2026-04-28
 
 The "see what the system is doing" release. Phase 2 of the

@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.12.0. It is grouped so you can
+This file is the canonical map of Tado at v0.13.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -637,6 +637,17 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.13.0** (2026-04-28) — *Surface Coverage Pass, phase 3 —
+  operator setup + teardown.* New **Vault status** card on
+  Knowledge → System (doc count, topic count, paths, Open in
+  Finder / Snapshot / Bulk import buttons), new **Bulk import
+  wizard** (3-step sheet → preview → review with checkboxes +
+  filter chips → import), new **Agent tokens** settings tab
+  (issue / rotate / revoke with one-time secret display + cap
+  picker, destructive `NSAlert` guard rails). 8 new FFI shims
+  (`vault_status`, `import_preview`, `import_execute`,
+  `token_list/create/rotate/revoke`); `ImportPreviewItem` +
+  `import_execute` promoted to `pub` in bt-core.
 - **v0.12.0** (2026-04-28) — *Surface Coverage Pass, phase 2 —
   observability.* Knowledge → System surface gains: a **vault
   health** card (every check from `system_health` rendered with
