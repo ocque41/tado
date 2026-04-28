@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.14.0. It is grouped so you can
+This file is the canonical map of Tado at v0.15.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -637,6 +637,15 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.15.0** (2026-04-28) — *Surface Coverage Pass, phase 5 —
+  collaborative edits + clean shutdown.* Knowledge tab gains a
+  **Suggestions** sub-page (lists pending / applied / rejected
+  suggestions, Accept button with confirmation alert) and the
+  long-stubbed `tado_dome_stop` FFI is finally wired to
+  `NSApplication.willTerminateNotification` so Cmd+Q triggers a
+  clean WAL checkpoint instead of relying on kernel teardown. 2
+  new FFI shims (`suggestion_list/apply`); Tools inspector
+  deferred to v0.16 (needs a real `tools.list` backing method).
 - **v0.14.0** (2026-04-28) — *Surface Coverage Pass, phase 4 —
   browse what the daemon knows.* Knowledge tab gains **Topics**
   and **Packs** sub-pages (authoritative topic listing via

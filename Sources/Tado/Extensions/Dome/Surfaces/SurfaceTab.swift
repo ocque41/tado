@@ -55,6 +55,7 @@ enum DomeKnowledgePage: String, CaseIterable, Identifiable {
     case system
     case topics
     case packs
+    case suggestions
 
     var id: String { rawValue }
 
@@ -65,6 +66,7 @@ enum DomeKnowledgePage: String, CaseIterable, Identifiable {
         case .system: return "System"
         case .topics: return "Topics"
         case .packs: return "Packs"
+        case .suggestions: return "Suggestions"
         }
     }
 
@@ -75,6 +77,7 @@ enum DomeKnowledgePage: String, CaseIterable, Identifiable {
         case .system: return "waveform.path.ecg.rectangle"
         case .topics: return "tag"
         case .packs: return "shippingbox"
+        case .suggestions: return "pencil.and.list.clipboard"
         }
     }
 }

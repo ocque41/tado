@@ -809,6 +809,15 @@ char *tado_dome_context_list(const char *brand_cstr,
 /** Fetch one context pack by id with manifest + summary + sources. */
 char *tado_dome_context_get(const char *context_id_cstr);
 
+/* ── v0.15 — suggestions surface ──────────────────────────────── */
+
+/** List suggestions. Both filters optional. */
+char *tado_dome_suggestion_list(const char *doc_id_cstr,
+                                const char *status_cstr);
+
+/** Accept a pending suggestion (applies patch). */
+char *tado_dome_suggestion_apply(const char *id_cstr);
+
 /**
  * Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
  * to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s

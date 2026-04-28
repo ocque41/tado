@@ -122,6 +122,22 @@ struct TadoApp: App {
         // tado-mcp isn't a UI extension — it's a stdio tool Claude
         // spawns on demand.
         TadoMcpAutoRegister.kickoff()
+
+        // v0.15 — clean shutdown for the in-process bt-core daemon.
+        // The Phase-2 stub `tado_dome_stop` is finally wired: when
+        // the OS posts `willTerminateNotification`, we ask bt-core
+        // to flush its WAL + close its socket cleanly. Without this
+        // hook the daemon was just being torn down by the kernel,
+        // leaving the WAL file at a non-checkpointed boundary on
+        // every quit. `DomeRpcClient.domeStop` wraps the FFI shim
+        // so TadoApp doesn't need to import CTadoCore directly.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            DomeRpcClient.domeStop()
+        }
     }
 
     var body: some Scene {

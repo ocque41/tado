@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-04-28
+
+The "collaborative edits + clean shutdown" release. Phase 5 of
+the Surface Coverage Pass adds the **Suggestions surface** so
+agent-authored edit proposals are visible and acceptable from the
+UI, plus wires the long-stubbed **`applicationWillTerminate` →
+`tado_dome_stop`** hook so quitting the app no longer leaves the
+SQLite WAL at a non-checkpointed boundary.
+
+### Added
+- **Knowledge → Suggestions** sub-page. Lists every suggestion
+  in the vault grouped by status filter chip
+  (`pending` / `applied` / `rejected` / all). Pending rows show
+  an `Accept` button (with confirmation alert) that calls
+  `suggestion_apply` to land the patch + flip status. Each card
+  shows the doc id, format, summary, author, and relative
+  timestamp; rejected rows are greyed out for the audit trail.
+- **applicationWillTerminate hook.** `TadoApp.init` registers a
+  one-shot `NSApplication.willTerminateNotification` observer
+  that fires `DomeRpcClient.domeStop()` (wrapping the long-
+  shipped `tado_dome_stop` FFI). Daemon WAL gets a clean
+  checkpoint on every Cmd+Q from now on.
+- **2 new FFI shims**: `tado_dome_suggestion_list`,
+  `tado_dome_suggestion_apply`. Plus `DomeRpcClient.domeStop`
+  Swift wrapper for the existing `tado_dome_stop` symbol so
+  TadoApp doesn't need to import CTadoCore directly.
+
+### Notes
+- Reject is intentionally absent from this surface until bt-core
+  grows a `suggestion_reject` method — accept is the only
+  documented mutator. Rows whose status flipped to `rejected`
+  via direct daemon write are still listed for completeness.
+- Tools inspector (originally planned for this phase) deferred
+  to v0.16 — it depends on `tools.list` having a real backing
+  method, which currently doesn't exist (`tools.list` is just a
+  string in `system_health`'s expected-routes list). v0.16 either
+  adds the method or reframes the surface.
+
 ## [0.14.0] - 2026-04-28
 
 The "browse what the daemon knows" release. Phase 4 of the

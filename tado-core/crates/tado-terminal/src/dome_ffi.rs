@@ -1842,6 +1842,52 @@ pub unsafe extern "C" fn tado_dome_context_get(
     }
 }
 
+// ── v0.15 — suggestions surface ────────────────────────────────────
+
+/// List pending / applied / rejected suggestions. Both filters
+/// optional (null = all). Returns `{suggestions: [...]}`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_suggestion_list(
+    doc_id_cstr: *const c_char,
+    status_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let doc_id = optional_cstr(doc_id_cstr);
+    let status = optional_cstr(status_cstr);
+    match service.suggestion_list(doc_id, status) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Accept a pending suggestion — applies the patch + flips status
+/// to `applied`. Errors with Conflict if the suggestion isn't
+/// `pending` anymore.
+///
+/// # Safety
+/// `id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_suggestion_apply(
+    id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let actor = swift_ui_actor();
+    match service.suggestion_apply(&actor, id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
 /// to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
 /// `build(for:)` once the Swift composer adopts the deterministic

@@ -18,6 +18,8 @@ struct KnowledgeSurface: View {
             KnowledgeTopicsSurface(domeScope: domeScope)
         case .packs:
             KnowledgePacksSurface(domeScope: domeScope)
+        case .suggestions:
+            SuggestionsSurface(domeScope: domeScope)
         }
     }
 }

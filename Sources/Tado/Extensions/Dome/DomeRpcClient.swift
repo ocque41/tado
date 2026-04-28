@@ -2247,6 +2247,71 @@ enum DomeRpcClient {
         let entries: [CalendarEntry]
     }
 
+    // MARK: - v0.15 Suggestions
+
+    /// One pending / applied / rejected suggestion. `patchJSON` is
+    /// the raw patch envelope (`{type, value, ...}`); the surface
+    /// shows the `summary` line + a "Show patch" disclosure with the
+    /// raw JSON for power users.
+    struct Suggestion: Codable, Identifiable, Equatable {
+        let id: String
+        let docId: String
+        let format: String
+        let summary: String
+        let status: String
+        let createdBy: String
+        let createdAt: Date?
+        let appliedAt: Date?
+        let rejectedAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case docId = "doc_id"
+            case format
+            case summary
+            case status
+            case createdBy = "created_by"
+            case createdAt = "created_at"
+            case appliedAt = "applied_at"
+            case rejectedAt = "rejected_at"
+        }
+    }
+
+    static func suggestionList(docID: String? = nil, status: String? = nil) -> [Suggestion] {
+        let json = withOptionalCString(docID) { didC in
+            withOptionalCString(status) { statusC -> String? in
+                guard let raw = tado_dome_suggestion_list(didC, statusC) else { return nil }
+                defer { tado_string_free(raw) }
+                return String(cString: raw)
+            }
+        }
+        struct Envelope: Codable { let suggestions: [Suggestion] }
+        return decode(Envelope.self, from: json)?.suggestions ?? []
+    }
+
+    /// v0.15 — fire bt-core's graceful shutdown. Wired to
+    /// `NSApplication.willTerminateNotification` from `TadoApp.init`.
+    /// Best-effort — if the daemon never booted, the FFI call
+    /// returns immediately. Without this hook the daemon was just
+    /// being torn down by the kernel, leaving a non-checkpointed
+    /// SQLite WAL on every Cmd+Q.
+    static func domeStop() {
+        tado_dome_stop()
+    }
+
+    /// Accept a pending suggestion. Returns the updated
+    /// `Suggestion` (with `status = "applied"`) or nil on conflict
+    /// (the suggestion was already non-pending).
+    static func suggestionApply(id: String) -> Suggestion? {
+        let json = id.withCString { idC -> String? in
+            guard let raw = tado_dome_suggestion_apply(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let suggestion: Suggestion }
+        return decode(Envelope.self, from: json)?.suggestion
+    }
+
     static func calendarRange(
         from: String,
         to: String,
