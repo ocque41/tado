@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-04-28
+
+The "browse what the daemon knows" release. Phase 4 of the
+Surface Coverage Pass adds **Topics** + **Packs** pages to
+Knowledge, plus a **Daemon-backed calendar** mode on Calendar.
+After this release the user can browse every topic, every cached
+context pack, and every daemon-emitted calendar event without
+guessing what's hidden.
+
+### Added
+- **Knowledge → Topics** page. Authoritative topic browser fed
+  by `topic_list` (every dir under `<vault>/topics/`) plus a
+  per-topic doc count from the existing `listNotes`. New topic
+  field + Create button at the top.
+- **Knowledge → Packs** page. Browse every cached context pack
+  (`context_list`) with a left rail listing pack id / agent /
+  brand / last-referenced-at; click a row → right pane renders
+  the pack's `summary` (markdown), `manifest` (compact JSON),
+  and source-reference list via `context_get`.
+- **Calendar → Daemon** mode. Reads `tado_dome_calendar_range`
+  for the selected window (7 / 14 / 30 / 90 days). Each entry
+  shows kind icon + title + agent + status pill in the right
+  color (green = done/ok, red = failed, blue = running, amber =
+  ready). Window picker reloads automatically.
+- **5 new FFI shims**: `tado_dome_calendar_range`,
+  `tado_dome_topic_list`, `tado_dome_graph_links`,
+  `tado_dome_context_list`, `tado_dome_context_get`. Matching
+  Swift bindings on `DomeRpcClient` (Codable structs for
+  `CalendarEntry`, `GraphLink`, `ContextPackRow`,
+  `ContextPackDetail`).
+
+### Changed
+- **`DomeKnowledgePage` enum** gains `topics` and `packs` cases
+  with `tag` and `shippingbox` SF Symbols. The existing
+  `KnowledgeListSurface` keeps working unchanged — Topics is
+  additive, not a replacement.
+
 ## [0.13.0] - 2026-04-28
 
 The "operator setup + teardown" release. Phase 3 of the Surface

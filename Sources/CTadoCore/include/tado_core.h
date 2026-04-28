@@ -777,6 +777,38 @@ char *tado_dome_token_rotate(const char *token_id_cstr);
 /** Revoke a token. Authentication fails afterward. */
 char *tado_dome_token_revoke(const char *token_id_cstr);
 
+/* ── v0.14 — calendar daemon mode + topic browser + graph + packs ──── */
+
+/**
+ * Daemon-backed calendar feed. Returns the bt-core
+ * `calendar_range` envelope. `from_cstr`, `to_iso_cstr`,
+ * `timezone_cstr` non-null. `agent_cstr` and `status_cstr` may be
+ * null.
+ */
+char *tado_dome_calendar_range(const char *from_cstr,
+                               const char *to_iso_cstr,
+                               const char *timezone_cstr,
+                               const char *agent_cstr,
+                               const char *status_cstr);
+
+/** List every topic dir under `<vault>/topics/`. */
+char *tado_dome_topic_list(void);
+
+/** All graph edges touching a single doc. */
+char *tado_dome_graph_links(const char *doc_id_cstr);
+
+/**
+ * List context packs. All filter args optional. `limit` clamped
+ * 1..500.
+ */
+char *tado_dome_context_list(const char *brand_cstr,
+                             const char *session_id_cstr,
+                             const char *doc_id_cstr,
+                             int limit);
+
+/** Fetch one context pack by id with manifest + summary + sources. */
+char *tado_dome_context_get(const char *context_id_cstr);
+
 /**
  * Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
  * to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s

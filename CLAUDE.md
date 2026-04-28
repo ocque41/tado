@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.13.0. It is grouped so you can
+This file is the canonical map of Tado at v0.14.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -637,6 +637,15 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.14.0** (2026-04-28) — *Surface Coverage Pass, phase 4 —
+  browse what the daemon knows.* Knowledge tab gains **Topics**
+  and **Packs** sub-pages (authoritative topic listing via
+  `topic_list`, full context-pack browser via `context_list` /
+  `context_get`); Calendar tab gains a **Daemon** mode that
+  renders `calendar_range` entries with kind icons + status
+  pills. 5 new FFI shims (`calendar_range`, `topic_list`,
+  `graph_links`, `context_list`, `context_get`) + Swift Codable
+  bindings.
 - **v0.13.0** (2026-04-28) — *Surface Coverage Pass, phase 3 —
   operator setup + teardown.* New **Vault status** card on
   Knowledge → System (doc count, topic count, paths, Open in

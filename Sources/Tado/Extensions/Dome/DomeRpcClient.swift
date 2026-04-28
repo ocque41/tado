@@ -2063,6 +2063,261 @@ enum DomeRpcClient {
         return decode(Envelope.self, from: json)?.revoked ?? false
     }
 
+    // MARK: - v0.14 Calendar / topics / graph links / context packs
+
+    /// List every topic dir under `<vault>/topics/`. Bt-core returns
+    /// just the names; we count docs per topic separately if needed.
+    static func topicList() -> [String] {
+        guard let raw = tado_dome_topic_list() else { return [] }
+        defer { tado_string_free(raw) }
+        struct Envelope: Codable { let topics: [String] }
+        return decode(Envelope.self, from: String(cString: raw))?.topics ?? []
+    }
+
+    /// One row from `tado_dome_graph_links`. Bt-core keeps the
+    /// `direction` ("in" / "out") so the surface can render
+    /// inbound vs outbound edges separately.
+    struct GraphLink: Codable, Equatable {
+        let edgeId: String?
+        let kind: String?
+        let docId: String?
+        let title: String?
+        let direction: String?
+        let confidence: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case edgeId = "edge_id"
+            case kind
+            case docId = "doc_id"
+            case title
+            case direction
+            case confidence = "signal_confidence"
+        }
+    }
+
+    static func graphLinks(docID: String) -> [GraphLink] {
+        let json = docID.withCString { idC -> String? in
+            guard let raw = tado_dome_graph_links(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        struct Envelope: Codable { let links: [GraphLink] }
+        return decode(Envelope.self, from: json)?.links ?? []
+    }
+
+    /// One row of the context_packs table. `policyJSON` is the
+    /// retrieval policy applied when the pack was minted; surfaced
+    /// raw so the browser can show it without re-modeling every
+    /// future policy field.
+    struct ContextPackRow: Codable, Identifiable, Equatable {
+        let contextId: String
+        let brand: String?
+        let agentName: String?
+        let sessionId: String?
+        let docId: String?
+        let intentKey: String?
+        let summaryPath: String?
+        let manifestPath: String?
+        let createdAt: String?
+        let updatedAt: String?
+        let lastReferencedAt: String?
+
+        var id: String { contextId }
+
+        enum CodingKeys: String, CodingKey {
+            case contextId = "context_id"
+            case brand
+            case agentName = "agent_name"
+            case sessionId = "session_id"
+            case docId = "doc_id"
+            case intentKey = "intent_key"
+            case summaryPath = "summary_path"
+            case manifestPath = "manifest_path"
+            case createdAt = "created_at"
+            case updatedAt = "updated_at"
+            case lastReferencedAt = "last_referenced_at"
+        }
+    }
+
+    static func contextList(
+        brand: String? = nil,
+        sessionID: String? = nil,
+        docID: String? = nil,
+        limit: Int = 200
+    ) -> [ContextPackRow] {
+        let json = withOptionalCString(brand) { brandC in
+            withOptionalCString(sessionID) { sidC in
+                withOptionalCString(docID) { didC -> String? in
+                    guard let raw = tado_dome_context_list(brandC, sidC, didC, Int32(limit)) else {
+                        return nil
+                    }
+                    defer { tado_string_free(raw) }
+                    return String(cString: raw)
+                }
+            }
+        }
+        struct Envelope: Codable { let contextPacks: [ContextPackRow]
+            enum CodingKeys: String, CodingKey { case contextPacks = "context_packs" }
+        }
+        return decode(Envelope.self, from: json)?.contextPacks ?? []
+    }
+
+    /// Full pack envelope returned by `context_get`. `summary` is
+    /// the rendered markdown body (read from `summary_path`),
+    /// `manifestJSON` is the on-disk manifest re-serialized as a
+    /// compact string for inline display.
+    struct ContextPackDetail: Codable, Equatable {
+        let contextPack: ContextPackRow
+        let summary: String?
+        let manifestJSON: String?
+        let sourceReferences: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case contextPack = "context_pack"
+            case summary
+            case manifestJSON = "manifest"
+            case sourceReferences = "source_references"
+        }
+
+        // Custom decode because `manifest` arrives as a JSON object;
+        // we re-serialize to a string for display.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            contextPack = try c.decode(ContextPackRow.self, forKey: .contextPack)
+            summary = try c.decodeIfPresent(String.self, forKey: .summary)
+            sourceReferences = try? c.decodeIfPresent([String].self, forKey: .sourceReferences)
+            if let value = try? c.decodeIfPresent(JSONAny.self, forKey: .manifestJSON),
+               let bytes = try? JSONEncoder().encode(value),
+               let str = String(data: bytes, encoding: .utf8) {
+                manifestJSON = str
+            } else {
+                manifestJSON = nil
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(contextPack, forKey: .contextPack)
+            try c.encodeIfPresent(summary, forKey: .summary)
+            try c.encodeIfPresent(manifestJSON, forKey: .manifestJSON)
+            try c.encodeIfPresent(sourceReferences, forKey: .sourceReferences)
+        }
+    }
+
+    static func contextGet(contextID: String) -> ContextPackDetail? {
+        let json = contextID.withCString { idC -> String? in
+            guard let raw = tado_dome_context_get(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
+        }
+        return decode(ContextPackDetail.self, from: json)
+    }
+
+    /// One entry on the daemon calendar feed. Mirrors bt-core's
+    /// `calendar_range.entries` shape.
+    struct CalendarEntry: Codable, Identifiable, Equatable {
+        let id: String
+        let kind: String
+        let title: String?
+        let startedAt: String?
+        let finishedAt: String?
+        let plannedAt: String?
+        let status: String?
+        let agent: String?
+        let runId: String?
+        let docId: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case kind
+            case title
+            case startedAt = "started_at"
+            case finishedAt = "finished_at"
+            case plannedAt = "planned_at"
+            case status
+            case agent
+            case runId = "run_id"
+            case docId = "doc_id"
+        }
+    }
+
+    /// Result of `calendar_range`. We keep totals raw because the
+    /// bt-core shape evolves.
+    struct CalendarRangeResult: Codable, Equatable {
+        let entries: [CalendarEntry]
+    }
+
+    static func calendarRange(
+        from: String,
+        to: String,
+        timezone: String = "UTC",
+        agent: String? = nil,
+        status: String? = nil
+    ) -> CalendarRangeResult? {
+        let json = from.withCString { fromC in
+            to.withCString { toC in
+                timezone.withCString { tzC in
+                    withOptionalCString(agent) { agentC in
+                        withOptionalCString(status) { statusC -> String? in
+                            guard let raw = tado_dome_calendar_range(fromC, toC, tzC, agentC, statusC) else {
+                                return nil
+                            }
+                            defer { tado_string_free(raw) }
+                            return String(cString: raw)
+                        }
+                    }
+                }
+            }
+        }
+        return decode(CalendarRangeResult.self, from: json)
+    }
+
+    /// Helper: decode JSON of unknown shape so `manifestJSON`
+    /// re-serialize works.
+    fileprivate enum JSONAny: Codable {
+        case string(String)
+        case int(Int)
+        case double(Double)
+        case bool(Bool)
+        case array([JSONAny])
+        case object([String: JSONAny])
+        case null
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if c.decodeNil() {
+                self = .null
+            } else if let v = try? c.decode(Bool.self) {
+                self = .bool(v)
+            } else if let v = try? c.decode(Int.self) {
+                self = .int(v)
+            } else if let v = try? c.decode(Double.self) {
+                self = .double(v)
+            } else if let v = try? c.decode(String.self) {
+                self = .string(v)
+            } else if let v = try? c.decode([JSONAny].self) {
+                self = .array(v)
+            } else if let v = try? c.decode([String: JSONAny].self) {
+                self = .object(v)
+            } else {
+                throw DecodingError.dataCorruptedError(in: c, debugDescription: "Unknown JSON value")
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .null: try c.encodeNil()
+            case .bool(let v): try c.encode(v)
+            case .int(let v): try c.encode(v)
+            case .double(let v): try c.encode(v)
+            case .string(let v): try c.encode(v)
+            case .array(let v): try c.encode(v)
+            case .object(let v): try c.encode(v)
+            }
+        }
+    }
+
     /// Retry a failed occurrence. Returns the new retry occurrence
     /// or nil on conflict (retry limit exhausted).
     static func automationRetryOccurrence(occurrenceID: String) -> AutomationOccurrence? {

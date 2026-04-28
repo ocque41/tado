@@ -1715,6 +1715,133 @@ pub unsafe extern "C" fn tado_dome_token_revoke(
     }
 }
 
+// ── v0.14 — calendar daemon mode + topic browser + graph links + context packs ──
+
+/// Daemon-backed calendar feed. `from_cstr` and `to_cstr` are RFC3339
+/// timestamps, `timezone_cstr` is an IANA tz name (e.g. "UTC",
+/// "America/New_York"). Optional `agent_cstr` / `status_cstr`
+/// filter chips. Returns the bt-core `calendar_range` envelope:
+/// `{entries: [...], totals: {succeeded, failed, active, ...}}`.
+///
+/// # Safety
+/// `from`, `to`, `timezone` must be non-null NUL-terminated UTF-8.
+/// `agent`, `status` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_calendar_range(
+    from_cstr: *const c_char,
+    to_iso_cstr: *const c_char,
+    timezone_cstr: *const c_char,
+    agent_cstr: *const c_char,
+    status_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if from_cstr.is_null() || to_iso_cstr.is_null() || timezone_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(from) = CStr::from_ptr(from_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(to_iso) = CStr::from_ptr(to_iso_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let Ok(tz) = CStr::from_ptr(timezone_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let agent = optional_cstr(agent_cstr);
+    let status = optional_cstr(status_cstr);
+    match service.calendar_range(from, to_iso, tz, agent, status) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// List every topic dir under `<vault>/topics/`. Returns
+/// `{topics: ["topic-a", "topic-b", ...]}`.
+#[no_mangle]
+pub extern "C" fn tado_dome_topic_list() -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    match service.topic_list() {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// All graph edges touching one doc. Returns `{doc_id, links: [...]}`.
+///
+/// # Safety
+/// `doc_id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_graph_links(
+    doc_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if doc_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(doc_id) = CStr::from_ptr(doc_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.graph_links(doc_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// List context packs. All filter args optional (null skips them).
+/// `limit` clamped 1..500.
+///
+/// # Safety
+/// All pointers may be null.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_context_list(
+    brand_cstr: *const c_char,
+    session_id_cstr: *const c_char,
+    doc_id_cstr: *const c_char,
+    limit: c_int,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    let brand = optional_cstr(brand_cstr);
+    let session_id = optional_cstr(session_id_cstr);
+    let doc_id = optional_cstr(doc_id_cstr);
+    let limit = limit.clamp(1, 500) as usize;
+    match service.context_list(brand, session_id, doc_id, limit) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Fetch one context pack by id, including manifest + summary +
+/// source references.
+///
+/// # Safety
+/// `context_id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_context_get(
+    context_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if context_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(context_id) = CStr::from_ptr(context_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.context_get(context_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Phase 4 — compose the spawn-time preamble in Rust. Byte-equivalent
 /// to `Sources/Tado/Extensions/Dome/DomeContextPreamble.swift`'s
 /// `build(for:)` once the Swift composer adopts the deterministic

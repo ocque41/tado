@@ -14,6 +14,271 @@ struct KnowledgeSurface: View {
             KnowledgeGraphSurface(domeScope: domeScope)
         case .system:
             KnowledgeSystemSurface(domeScope: domeScope)
+        case .topics:
+            KnowledgeTopicsSurface(domeScope: domeScope)
+        case .packs:
+            KnowledgePacksSurface(domeScope: domeScope)
+        }
+    }
+}
+
+// MARK: - v0.14 Topics + Packs
+
+/// Authoritative topic browser. Reads `tado_dome_topic_list` (every
+/// dir under `<vault>/topics/`) plus a per-topic doc count derived
+/// from `listNotes`. Click a row → drills into the existing
+/// `KnowledgeListSurface` filtered to that topic via a sheet.
+private struct KnowledgeTopicsSurface: View {
+    let domeScope: DomeScopeSelection
+
+    @State private var topics: [String] = []
+    @State private var notes: [DomeRpcClient.NoteSummary] = []
+    @State private var newTopic: String = ""
+    @State private var creating = false
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            surfaceHeader(title: "Topics", subtitle: "\(topics.count) topics · \(domeScope.label)", isLoading: isLoading) {
+                Task { await reload() }
+            }
+            Divider().overlay(Palette.divider)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        TextField("New topic name (slug)", text: $newTopic)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 320)
+                        Button(creating ? "Creating…" : "Create topic") {
+                            runCreate()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(creating || newTopic.isEmpty)
+                        Spacer()
+                    }
+                    if topics.isEmpty {
+                        surfaceEmpty(icon: "tag", text: "No topics yet — create one above to organize notes.")
+                    } else {
+                        ForEach(topics, id: \.self) { topic in
+                            topicCard(topic)
+                        }
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .background(Palette.background)
+        .task(id: domeScope.id) { await reload() }
+    }
+
+    private func topicCard(_ topic: String) -> some View {
+        let count = notes.filter { $0.topic == topic }.count
+        return HStack(spacing: 10) {
+            Image(systemName: "tag")
+                .foregroundStyle(Palette.textSecondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(topic)
+                    .font(Typography.title)
+                    .foregroundStyle(Palette.textPrimary)
+                Text("\(count) doc\(count == 1 ? "" : "s")")
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func reload() async {
+        isLoading = true
+        defer { isLoading = false }
+        let scope = domeScope
+        async let topicsTask = Task.detached { DomeRpcClient.topicList() }.value
+        async let notesTask = Task.detached {
+            DomeRpcClient.listNotes(topic: nil, limit: 1000, domeScope: scope)
+        }.value
+        topics = await topicsTask
+        if let fetchedNotes = await notesTask {
+            notes = fetchedNotes
+        }
+    }
+
+    private func runCreate() {
+        let name = newTopic
+        creating = true
+        Task.detached {
+            _ = DomeRpcClient.createTopic(name)
+            await MainActor.run {
+                creating = false
+                newTopic = ""
+            }
+            await reload()
+        }
+    }
+}
+
+/// Browse every cached context pack. v0.14 — lets the user inspect
+/// what's been compiled into a session pack without spelunking
+/// through the daemon directly.
+private struct KnowledgePacksSurface: View {
+    let domeScope: DomeScopeSelection
+
+    @State private var packs: [DomeRpcClient.ContextPackRow] = []
+    @State private var selectedID: String?
+    @State private var detail: DomeRpcClient.ContextPackDetail?
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            surfaceHeader(title: "Context Packs", subtitle: "\(packs.count) packs · \(domeScope.label)", isLoading: isLoading) {
+                Task { await reload() }
+            }
+            Divider().overlay(Palette.divider)
+            HStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if packs.isEmpty {
+                            surfaceEmpty(icon: "shippingbox", text: "No context packs cached yet — packs are minted by spawn-pack and `dome_context_compact`.")
+                        } else {
+                            ForEach(packs) { pack in
+                                packRow(pack)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+                .background(Palette.surface)
+                Divider().overlay(Palette.divider)
+                packDetail
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Palette.background)
+        .task(id: domeScope.id) { await reload() }
+    }
+
+    private func packRow(_ pack: DomeRpcClient.ContextPackRow) -> some View {
+        let isSelected = selectedID == pack.id
+        return Button(action: {
+            selectedID = pack.id
+            loadDetail(pack)
+        }) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(pack.contextId)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(isSelected ? Palette.accent : Palette.textPrimary)
+                        .lineLimit(1)
+                    Spacer()
+                    if let intent = pack.intentKey, !intent.isEmpty {
+                        Text(intent)
+                            .font(Typography.micro)
+                            .foregroundStyle(Palette.textTertiary)
+                    }
+                }
+                HStack(spacing: 6) {
+                    if let agent = pack.agentName {
+                        Text(agent)
+                            .font(Typography.micro)
+                            .foregroundStyle(Palette.textSecondary)
+                    }
+                    if let brand = pack.brand {
+                        Text(brand)
+                            .font(Typography.micro)
+                            .foregroundStyle(Palette.textTertiary)
+                    }
+                    Spacer()
+                    if let last = pack.lastReferencedAt {
+                        Text(last.prefix(19))
+                            .font(Typography.micro)
+                            .foregroundStyle(Palette.textTertiary)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? Palette.surfaceAccentSoft : Color.clear)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var packDetail: some View {
+        if let detail {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(detail.contextPack.contextId)
+                        .font(Typography.display)
+                        .foregroundStyle(Palette.textPrimary)
+                    if let summary = detail.summary, !summary.isEmpty {
+                        Text("Summary")
+                            .font(Typography.title)
+                            .foregroundStyle(Palette.textPrimary)
+                        Text(summary)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textPrimary)
+                            .textSelection(.enabled)
+                            .padding(12)
+                            .background(Palette.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    if let json = detail.manifestJSON, json != "null" {
+                        Text("Manifest")
+                            .font(Typography.title)
+                            .foregroundStyle(Palette.textPrimary)
+                        ScrollView(.horizontal) {
+                            Text(json)
+                                .font(Typography.monoCaption)
+                                .foregroundStyle(Palette.textSecondary)
+                                .textSelection(.enabled)
+                                .padding(8)
+                        }
+                        .background(Palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    if let sources = detail.sourceReferences, !sources.isEmpty {
+                        Text("Sources (\(sources.count))")
+                            .font(Typography.title)
+                            .foregroundStyle(Palette.textPrimary)
+                        ForEach(sources, id: \.self) { src in
+                            Text(src)
+                                .font(Typography.monoCaption)
+                                .foregroundStyle(Palette.textSecondary)
+                        }
+                    }
+                }
+                .padding(20)
+            }
+        } else {
+            Text("Pick a pack on the left to see its summary + manifest + sources.")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textTertiary)
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func reload() async {
+        isLoading = true
+        defer { isLoading = false }
+        let fetched = await Task.detached { () -> [DomeRpcClient.ContextPackRow] in
+            DomeRpcClient.contextList(limit: 200)
+        }.value
+        packs = fetched
+        if let id = selectedID, let pack = fetched.first(where: { $0.id == id }) {
+            loadDetail(pack)
+        }
+    }
+
+    private func loadDetail(_ pack: DomeRpcClient.ContextPackRow) {
+        let id = pack.id
+        Task.detached {
+            let result = DomeRpcClient.contextGet(contextID: id)
+            await MainActor.run { detail = result }
         }
     }
 }

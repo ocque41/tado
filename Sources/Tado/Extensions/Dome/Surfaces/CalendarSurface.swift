@@ -29,14 +29,24 @@ struct CalendarSurface: View {
     enum Mode: String, CaseIterable, Identifiable {
         case ledger
         case month
+        case daemon
         var id: String { rawValue }
         var label: String {
             switch self {
             case .ledger: return "Ledger"
             case .month: return "Month"
+            case .daemon: return "Daemon"
             }
         }
     }
+
+    /// v0.14 — daemon-backed calendar feed. Lazily fetched when the
+    /// user picks the Daemon mode for the first time, then refreshed
+    /// when they hit the Reload button. Stays in-memory only — the
+    /// surface is read-only.
+    @State private var daemonEntries: [DomeRpcClient.CalendarEntry] = []
+    @State private var daemonRangeDays: Int = 14
+    @State private var daemonLoading: Bool = false
 
     private var eventBus: EventBus { EventBus.shared }
 
@@ -192,14 +202,140 @@ struct CalendarSurface: View {
 
     @ViewBuilder
     private var content: some View {
-        if eventBus.recent.isEmpty {
-            empty
-        } else {
-            switch mode {
-            case .ledger: ledger
-            case .month: month
+        switch mode {
+        case .ledger:
+            if eventBus.recent.isEmpty { empty } else { ledger }
+        case .month:
+            if eventBus.recent.isEmpty { empty } else { month }
+        case .daemon:
+            daemonView
+        }
+    }
+
+    // MARK: - v0.14 Daemon-backed calendar feed
+
+    private var daemonView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Picker("Range", selection: $daemonRangeDays) {
+                    Text("Last 7 days").tag(7)
+                    Text("Last 14 days").tag(14)
+                    Text("Last 30 days").tag(30)
+                    Text("Last 90 days").tag(90)
+                }
+                .pickerStyle(.menu)
+                .frame(width: 160)
+                .onChange(of: daemonRangeDays) { _, _ in
+                    Task { await reloadDaemon() }
+                }
+                Button(daemonLoading ? "Loading…" : "Reload") {
+                    Task { await reloadDaemon() }
+                }
+                .disabled(daemonLoading)
+                .buttonStyle(.borderless)
+                Spacer()
+                Text("\(daemonEntries.count) entries")
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            Divider().overlay(Palette.divider)
+            if daemonEntries.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 28, weight: .light))
+                        .foregroundStyle(Palette.textTertiary)
+                    Text(daemonLoading ? "Querying daemon…" : "No daemon entries in this range. Run an automation or wait for retros to land.")
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 480)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(daemonEntries) { entry in
+                            daemonRow(entry)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
             }
         }
+        .task(id: domeScope.id) { await reloadDaemon() }
+    }
+
+    private func daemonRow(_ entry: DomeRpcClient.CalendarEntry) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconForKind(entry.kind))
+                .foregroundStyle(colorForStatus(entry.status))
+                .font(.system(size: 12))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.title ?? entry.kind)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(entry.kind)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(Palette.textTertiary)
+                    if let agent = entry.agent {
+                        Text(agent)
+                            .font(Typography.micro)
+                            .foregroundStyle(Palette.textTertiary)
+                    }
+                    if let status = entry.status {
+                        Text(status)
+                            .font(Typography.micro)
+                            .foregroundStyle(colorForStatus(status))
+                    }
+                }
+            }
+            Spacer()
+            if let ts = entry.startedAt ?? entry.plannedAt {
+                Text(ts.prefix(19))
+                    .font(Typography.micro)
+                    .foregroundStyle(Palette.textTertiary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func iconForKind(_ kind: String) -> String {
+        switch kind {
+        case "automation_occurrence": return "clock.arrow.circlepath"
+        case "run": return "play.rectangle"
+        case "retro": return "doc.text.magnifyingglass"
+        default: return "circle"
+        }
+    }
+
+    private func colorForStatus(_ status: String?) -> Color {
+        switch status {
+        case "done", "ok", "succeeded": return Palette.success
+        case "failed", "cancelled", "error": return Palette.danger
+        case "running", "active": return Palette.accent
+        case "ready", "scheduled": return Palette.warning
+        default: return Palette.textSecondary
+        }
+    }
+
+    private func reloadDaemon() async {
+        daemonLoading = true
+        defer { daemonLoading = false }
+        let now = Date()
+        let from = ISO8601DateFormatter().string(from: now.addingTimeInterval(-Double(daemonRangeDays * 86_400)))
+        let to = ISO8601DateFormatter().string(from: now)
+        let result = await Task.detached {
+            DomeRpcClient.calendarRange(from: from, to: to, timezone: TimeZone.current.identifier)
+        }.value
+        daemonEntries = result?.entries ?? []
     }
 
     private var empty: some View {
