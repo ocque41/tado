@@ -725,8 +725,9 @@ char *tado_dome_system_health(void);
 /** Scheduler queue depths + stale leases + worker cursors. */
 char *tado_dome_system_automation_status(void);
 
-/** Connectors + openclaw + runtime status folded into one payload. */
-char *tado_dome_system_runtime_envelope(void);
+/* tado_dome_system_runtime_envelope removed in v0.16.1 — was added
+ * in v0.12 but never gained a Swift caller. The health + scheduler
+ * cards already cover what operators need. */
 
 /**
  * Tail the audit log. `since_cstr` may be null. `limit` clamped 1..1000.

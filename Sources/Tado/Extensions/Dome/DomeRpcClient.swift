@@ -2074,25 +2074,18 @@ enum DomeRpcClient {
         return decode(Envelope.self, from: String(cString: raw))?.topics ?? []
     }
 
-    /// One row from `tado_dome_graph_links`. Bt-core keeps the
-    /// `direction` ("in" / "out") so the surface can render
-    /// inbound vs outbound edges separately.
+    /// Row shape for `tado_dome_graph_links`. The function operates
+    /// on the legacy `links` table (pre-graph_edges, from migration
+    /// v5), which returns `{to, kind}` outbound-only. The modern
+    /// graph projection lives in `graph_nodes` / `graph_edges`
+    /// surfaced by `graph_snapshot` — that's what the Knowledge →
+    /// Graph view uses. This binding is kept for parity with the
+    /// FFI export but production vaults typically return [] because
+    /// `links` is no longer written to. v0.16.1 fixes the field
+    /// shape (was `{edge_id, doc_id, …}` which never decoded).
     struct GraphLink: Codable, Equatable {
-        let edgeId: String?
-        let kind: String?
-        let docId: String?
-        let title: String?
-        let direction: String?
-        let confidence: Double?
-
-        enum CodingKeys: String, CodingKey {
-            case edgeId = "edge_id"
-            case kind
-            case docId = "doc_id"
-            case title
-            case direction
-            case confidence = "signal_confidence"
-        }
+        let to: String
+        let kind: String
     }
 
     static func graphLinks(docID: String) -> [GraphLink] {

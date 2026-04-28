@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.16.0. It is grouped so you can
+This file is the canonical map of Tado at v0.16.1. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -1019,6 +1019,15 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
+- **v0.16.1** (2026-04-28) — *Hardening pass.* Four bugs / gaps
+  fixed: `tado_dome_stop` actually runs `PRAGMA wal_checkpoint
+  (TRUNCATE)` now (was a no-op stub despite v0.15's CHANGELOG
+  claim); `graphLinks` Swift binding shape corrected to match
+  bt-core's `{to, kind}` legacy-table return; orphan
+  `tado_dome_system_runtime_envelope` FFI shim removed (no
+  Swift caller); new **Settings → MCP tools inspector**
+  shipping a static reference list of all 30 dome-mcp +
+  tado-mcp tools with filter-by-prefix.
 - **v0.16.0** (2026-04-28) — *Surface Coverage Pass, phase 6 —
   CLAUDE.md operations rewrite.* Major doc upgrade: new **Rules**
   checklist (10 hard rules including the FFI ↔ UI parity rule

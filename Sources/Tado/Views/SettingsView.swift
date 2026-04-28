@@ -319,6 +319,8 @@ struct SettingsView: View {
 
                 AgentTokensSection()
 
+                ToolsInspectorSection()
+
                 Section("Shortcuts") {
                     LabeledContent("Cycle pages", value: "Ctrl + Tab")
                     LabeledContent("Projects", value: "Cmd + P")
@@ -870,6 +872,114 @@ private struct AgentTokensSection: View {
             _ = DomeRpcClient.tokenRevoke(tokenID: id)
             await MainActor.run { working = false }
             await reload()
+        }
+    }
+}
+
+/// v0.16.1 — read-only inspector for every MCP tool exposed by
+/// `dome-mcp` and `tado-mcp`. Static list (mirrors the source-of-truth
+/// `tool_definitions()` in each Rust [[bin]]) — kept in Swift so it
+/// renders even when the daemon is offline. When you ship a new MCP
+/// tool, update this list AND the matching tool_definitions().
+private struct ToolsInspectorSection: View {
+    private struct McpTool: Identifiable {
+        let bridge: String
+        let name: String
+        let description: String
+        var id: String { "\(bridge):\(name)" }
+    }
+
+    @State private var query: String = ""
+    @State private var expandedBridge: String? = "dome-mcp"
+
+    private static let tools: [McpTool] = [
+        // dome-mcp (canonical inventory at
+        // `tado-core/crates/dome-mcp/src/main.rs::tool_definitions`).
+        .init(bridge: "dome-mcp", name: "dome_search",            description: "Search Dome notes + knowledge. Returns ranked hits with snippets."),
+        .init(bridge: "dome-mcp", name: "dome_read",              description: "Fetch the full body + metadata of a Dome note by id."),
+        .init(bridge: "dome-mcp", name: "dome_note",              description: "Append an agent note. Scope is always agent — propose user-note changes via suggestion.create."),
+        .init(bridge: "dome-mcp", name: "dome_schedule",          description: "Create a calendar automation (once / cron / interval / manual / heartbeat)."),
+        .init(bridge: "dome-mcp", name: "dome_graph_query",       description: "Query the Dome graph projection by node ids / kinds."),
+        .init(bridge: "dome-mcp", name: "dome_context_resolve",   description: "Resolve a context pack to its citations + summary."),
+        .init(bridge: "dome-mcp", name: "dome_context_compact",   description: "Compact / refresh a context pack."),
+        .init(bridge: "dome-mcp", name: "dome_agent_status",      description: "Tail the agent status-line snapshots."),
+        .init(bridge: "dome-mcp", name: "dome_code_search",       description: "Hybrid search across registered project codebases."),
+        .init(bridge: "dome-mcp", name: "dome_code_status",       description: "Indexing status for one project."),
+        .init(bridge: "dome-mcp", name: "dome_code_watch",        description: "Start the codebase watcher for a project."),
+        .init(bridge: "dome-mcp", name: "dome_code_unwatch",      description: "Stop the codebase watcher for a project."),
+        .init(bridge: "dome-mcp", name: "dome_code_watch_list",   description: "List active codebase watchers."),
+        .init(bridge: "dome-mcp", name: "dome_supersede",         description: "Chain an old fact to its replacement (Phase 3 lifecycle)."),
+        .init(bridge: "dome-mcp", name: "dome_verify",            description: "Confirm or dispute a typed entity (Phase 3 lifecycle)."),
+        .init(bridge: "dome-mcp", name: "dome_decay",             description: "Soft-archive a typed entity (Phase 3 lifecycle)."),
+        .init(bridge: "dome-mcp", name: "dome_recipe_list",       description: "List every retrieval recipe in the active scope."),
+        .init(bridge: "dome-mcp", name: "dome_recipe_apply",      description: "Apply a recipe → return its GovernedAnswer with citations."),
+
+        // tado-mcp (canonical inventory at
+        // `tado-core/crates/tado-mcp/src/main.rs::tool_definitions`).
+        .init(bridge: "tado-mcp", name: "tado_list",              description: "List every active Tado terminal session."),
+        .init(bridge: "tado-mcp", name: "tado_send",              description: "Send a message to another Tado terminal session."),
+        .init(bridge: "tado-mcp", name: "tado_notify",            description: "Publish a user-broadcast event to Tado's global event log."),
+        .init(bridge: "tado-mcp", name: "tado_events_query",      description: "Tail Tado's event log with filters."),
+        .init(bridge: "tado-mcp", name: "tado_read",              description: "Read a Tado session's terminal output log."),
+        .init(bridge: "tado-mcp", name: "tado_broadcast",         description: "Send the same message to every session in a project and/or team."),
+        .init(bridge: "tado-mcp", name: "tado_config_get",        description: "Read a config value from the scoped settings hierarchy."),
+        .init(bridge: "tado-mcp", name: "tado_config_set",        description: "Write a config value at a chosen scope."),
+        .init(bridge: "tado-mcp", name: "tado_config_list",       description: "List every config key visible at the current scope."),
+        .init(bridge: "tado-mcp", name: "tado_memory_read",       description: "Read user / project memory markdown."),
+        .init(bridge: "tado-mcp", name: "tado_memory_append",     description: "Append to user / project memory markdown."),
+        .init(bridge: "tado-mcp", name: "tado_memory_search",     description: "Search user / project memory markdown."),
+    ]
+
+    private var filtered: [McpTool] {
+        let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty { return Self.tools }
+        return Self.tools.filter {
+            $0.name.lowercased().contains(q) || $0.description.lowercased().contains(q)
+        }
+    }
+
+    private var groups: [(String, [McpTool])] {
+        Dictionary(grouping: filtered, by: \.bridge)
+            .sorted { $0.key < $1.key }
+            .map { ($0.key, $0.value.sorted { $0.name < $1.name }) }
+    }
+
+    var body: some View {
+        Section("MCP tools (developer)") {
+            HStack {
+                Text("Every MCP tool exposed by Tado's two stdio bridges. Reference only — invocation happens through the agent client (Claude Desktop, claude-code, etc.).")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                Spacer()
+            }
+            TextField("Filter by name or description", text: $query)
+                .textFieldStyle(.roundedBorder)
+            ForEach(groups, id: \.0) { bridge, list in
+                DisclosureGroup(
+                    isExpanded: Binding(
+                        get: { expandedBridge == bridge || !query.isEmpty },
+                        set: { _ in expandedBridge = expandedBridge == bridge ? nil : bridge }
+                    )
+                ) {
+                    ForEach(list) { tool in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tool.name)
+                                .font(Typography.monoCaption)
+                                .foregroundStyle(Palette.textPrimary)
+                                .textSelection(.enabled)
+                            Text(tool.description)
+                                .font(Typography.micro)
+                                .foregroundStyle(Palette.textSecondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } label: {
+                    HStack {
+                        Text(bridge).font(Typography.title)
+                        Text("\(list.count) tools").font(Typography.micro).foregroundStyle(Palette.textTertiary)
+                    }
+                }
+            }
         }
     }
 }

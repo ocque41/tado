@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-04-28
+
+Hardening pass for v0.11–v0.16. Audit of every FFI shim, Swift
+binding, and surface call site uncovered four real gaps; each
+fixed below. Tests still green (132 unit + 2 ingest contract +
+4 spawn-pack byte-equiv + 16 enrichment).
+
+### Fixed
+- **`tado_dome_stop` actually checkpoints WAL now.** v0.15 wired
+  `NSApplication.willTerminateNotification` to this FFI, but the
+  shim itself was a Phase-2 stub returning 0 unconditionally —
+  the CHANGELOG promise of "clean WAL checkpoint on every Cmd+Q"
+  was unsatisfied. The shim now opens a fresh connection and
+  runs `PRAGMA wal_checkpoint(TRUNCATE)`, which is what makes
+  the on-disk `<vault>/.bt/index.sqlite-wal` file actually empty
+  after exit. Best-effort — daemon-not-booted still returns 0.
+- **`graphLinks` Swift binding shape was wrong.** v0.14 added
+  the binding with fields `{edge_id, doc_id, title, direction,
+  signal_confidence}` — but bt-core's `graph_links` actually
+  returns the legacy `links` table shape `{to, kind}`. Fixed
+  the Codable struct + added a comment noting that the function
+  operates on a legacy table that's empty in modern vaults.
+  No UI consumer was added because the modern graph projection
+  (powering Knowledge → Graph) lives in `graph_nodes` /
+  `graph_edges` and is already accessible via `graph_snapshot`.
+
+### Removed
+- **`tado_dome_system_runtime_envelope` FFI shim** removed.
+  Added in v0.12 but never gained a Swift caller — the existing
+  `system_health` + `system_automation_status` cards already
+  cover the operator's "is the daemon healthy" need. The
+  underlying service methods (`system_connector_status`,
+  `system_openclaw_status`, `system_runtime_status`) remain
+  callable via JSON-RPC.
+
+### Added
+- **Settings → MCP tools inspector.** Static reference list of
+  every tool exposed by `dome-mcp` (18 tools: search, read, note,
+  schedule, graph_query, context_resolve/compact, agent_status,
+  code_*, supersede, verify, decay, recipe_*) and `tado-mcp`
+  (12 tools: list, send, notify, events_query, read, broadcast,
+  config_*, memory_*). Filter by name or description; tools
+  grouped by bridge with disclosure. Source of truth lives next
+  to the Rust `tool_definitions()` functions — when a new MCP
+  tool ships, both lists update together.
+
 ## [0.16.0] - 2026-04-28
 
 The "operations docs lock-in" release. Phase 6 — the final phase

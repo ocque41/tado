@@ -429,15 +429,44 @@ pub unsafe extern "C" fn tado_dome_model_set_path(path_cstr: *const c_char) -> c
     }
 }
 
-/// Shut down the Dome daemon.
+/// Best-effort graceful shutdown — flushes the SQLite WAL.
 ///
-/// Phase-2 stub: the OS reclaims the runtime on app exit and the
-/// socket file is removed on next start (bt-core unlinks before
-/// bind). A real graceful-shutdown implementation would signal the
-/// RPC loop to stop accepting + drain in-flight handlers, but that's
-/// not needed for Phase-2 verification.
+/// v0.15 wires this to `NSApplication.willTerminateNotification` so
+/// every Cmd+Q triggers a `PRAGMA wal_checkpoint(TRUNCATE)` against
+/// the live vault. Without this hook the WAL file accumulated
+/// committed-but-uncheckpointed pages on every quit and the
+/// CLAUDE.md "Stuck SQLite WAL" recovery procedure required the
+/// operator to run `wal_checkpoint(TRUNCATE)` by hand.
+///
+/// Returns:
+/// - 0 — checkpoint requested (or daemon not booted, which is a no-op).
+/// - 1 — checkpoint failed (logged via stderr).
+///
+/// We deliberately do NOT signal the RPC loop or drop the keepalive
+/// connection here. The OS reclaims the process state in the next
+/// few millis after this returns; trying to cleanly drain in-flight
+/// handlers would race the kernel teardown. The WAL flush is the
+/// only artifact we care about.
 #[no_mangle]
 pub extern "C" fn tado_dome_stop() -> c_int {
+    let Some(service) = DOME_SERVICE.get() else {
+        // Daemon never booted (e.g. headless test harness or the
+        // user quit before vault open). Nothing to flush.
+        return 0;
+    };
+    let conn = match service.open_conn_for_ffi() {
+        Ok(conn) => conn,
+        Err(_) => return 0,
+    };
+    // TRUNCATE is the strongest checkpoint mode: it waits for any
+    // in-flight writers to finish, then truncates `<db>-wal` to
+    // zero so the operator-visible artifact is empty. We swallow
+    // the result — the worst case is a lingering WAL, not data
+    // loss.
+    if let Err(err) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        eprintln!("[bt-core] tado_dome_stop wal_checkpoint failed: {err}");
+        return 1;
+    }
     0
 }
 
@@ -1475,24 +1504,13 @@ pub extern "C" fn tado_dome_system_automation_status() -> *mut c_char {
     }
 }
 
-/// JSON shape: `{ok: bool, ...}` — connectors, openclaw, and
-/// runtime-status helpers folded into one payload so the System
-/// surface gets everything in one round trip.
-#[no_mangle]
-pub extern "C" fn tado_dome_system_runtime_envelope() -> *mut c_char {
-    let Some(service) = DOME_SERVICE.get() else {
-        return std::ptr::null_mut();
-    };
-    let connectors = service.system_connector_status().ok();
-    let openclaw = service.system_openclaw_status().ok();
-    let runtime = service.system_runtime_status(None).ok();
-    let value = serde_json::json!({
-        "connectors": connectors,
-        "openclaw": openclaw,
-        "runtime": runtime,
-    });
-    to_cstr(value.to_string())
-}
+// `tado_dome_system_runtime_envelope` was added in v0.12 but never
+// gained a Swift caller — the System surface's health + scheduler
+// cards already cover the operator's "is the daemon healthy" need.
+// Removed in v0.16.1 to keep the FFI surface honest. The underlying
+// service methods (`system_connector_status`, `system_openclaw_status`,
+// `system_runtime_status`) are still callable via JSON-RPC if a CLI
+// or external client wants them.
 
 /// Tail the audit log. `since_cstr` may be null (= start from
 /// origin). `limit` clamped 1..1000.
