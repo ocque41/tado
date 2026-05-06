@@ -37,6 +37,7 @@ members = [
     "crates/tado-cli",
     "crates/dome-eval",
     "crates/perf-suite",
+    "crates/sprint-suite",
 ]
 resolver = "2"
 

@@ -67,6 +67,17 @@ struct EternalState: Codable, Equatable {
     /// breakdown, and for the Dome retro mirror to cite.
     var lastPerfReportPath: String?
 
+    // MARK: - Sprint step (kind == "sprint")
+    //
+    // Mirror of the Performance step fields above, scoped to the
+    // SprintSuccessScore optimization loop. Populated only when the
+    // run was created with `EternalRun.kind == "sprint"`.
+
+    var sprintCycles: Int = 0
+    var lastSprintScore: Double?
+    var sprintRegressionDelta: Double?
+    var lastSprintReportPath: String?
+
     /// Runtime derived from `startedAt`. Zero while the eternal hasn't started.
     var runtime: TimeInterval {
         guard startedAt > 0 else { return 0 }
@@ -95,6 +106,7 @@ struct EternalState: Codable, Equatable {
     enum PhaseKind: String {
         case working, evaluating, compacting, idle, completed, stopped, failed
         case perfPending, perfRegressed
+        case sprintPending, sprintRegressed
         case unknown
     }
 

@@ -1,0 +1,71 @@
+# sprint-suite — measurable sprint-methodology evaluation for the
+# Tado Eternal Sprint step.
+#
+# Modeled after `perf-suite`. Where perf-suite scores application
+# *performance*, sprint-suite scores sprint *outcomes* — turning a
+# vibes-based retrospective ("we sort of had a good sprint") into an
+# engineering discipline ("we hit SprintSuccessScore = 124.3 vs 117.0
+# last week, ratchet locked").
+#
+# Inputs: a `sprint-data.json` file with one object per measured
+# sprint, each carrying:
+#   tickets_completed, points_completed, total_points_planned,
+#   bugs_found_after_sprint, code_review_passes,
+#   developer_satisfaction_score, optional `weights` override.
+#
+# Output: a single `SprintSuccessScore` per sprint plus a composite
+# (mean-of-recent-N) that gets ratcheted into the per-project
+# baseline at `.tado/sprint-baselines/<project>.json`.
+#
+# The CLI is invoked from `.tado/eternal/hooks/sprint-gate.sh`,
+# which is called by Eternal workers in the EVAL phase (sprint mode)
+# or as a pre-marker step (mega mode) when `EternalRun.kind ==
+# "sprint"`. The gate blocks `[SPRINT-DONE]` / `ETERNAL-DONE` until
+# the suite either PASSes or the worker reverts the offending diff
+# in the same turn.
+#
+# Three contracts kept stable across releases:
+#   1. `score` subcommand stdout is exactly ONE line:
+#        "SCORE: PASS composite=<n>"
+#        "SCORE: REGRESSION delta=<d> hot=<sub>"
+#        "SCORE: BASELINE-INIT composite=<n>"
+#        "SCORE: NO-DATA-DETECTED"
+#      The `[SCORE-OK] composite=<n>` marker is printed by the bash
+#      hook after consuming this line — the suite itself never prints
+#      the marker.
+#   2. Composite is unbounded above (any positive number is
+#      possible since the formula is additive) but per-sprint scores
+#      are capped to `[-200, 500]` to stop a single garbage row from
+#      dominating the running mean.
+#   3. The per-component minimum guard requires that
+#      `code_review_passes >= baseline.code_review_passes` AND
+#      `bugs_found_after_sprint <= baseline.bugs_found_after_sprint`
+#      after smoothing. A composite above baseline with bugs spiking
+#      still REGRESSES.
+#
+# All atomic file IO routes through `tado-settings::write_json` so
+# the project-wide write barrier (temp + fsync + rename) is preserved.
+# The crate never writes outside the project root or the per-run dir.
+
+[package]
+name = "sprint-suite"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Measurable sprint-methodology evaluation harness for Tado's Eternal Sprint step."
+
+[[bin]]
+name = "sprint-suite"
+path = "src/main.rs"
+
+[lib]
+name = "sprint_suite"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tado-settings = { path = "../tado-settings" }
