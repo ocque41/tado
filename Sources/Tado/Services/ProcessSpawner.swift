@@ -1752,6 +1752,9 @@ enum ProcessSpawner {
         if perfMode {
             env["TADO_PERF_MODE"] = "1"
         }
+        if sprintMode {
+            env["TADO_SPRINT_MODE"] = "1"
+        }
         if let modelID, !modelID.isEmpty {
             env["TADO_MODEL"] = modelID
         }
