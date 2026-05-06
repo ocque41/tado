@@ -2277,8 +2277,10 @@ enum ProcessSpawner {
     ) -> String {
         let isSprint = (mode == "sprint")
         let isPerf = (kind == "perf")
+        let isSprintKind = (kind == "sprint")
         let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
         let perfBriefAddendum = isPerf ? eternalPerfArchitectAddendum(projectName: projectName, projectRoot: projectRoot, runDir: runDir, isSprint: isSprint) : ""
+        let sprintBriefAddendum = isSprintKind ? eternalSprintArchitectAddendum(projectName: projectName, projectRoot: projectRoot, runDir: runDir, isSprintMode: isSprint) : ""
 
         let modeSectionSprint = """
 
@@ -2394,6 +2396,7 @@ enum ProcessSpawner {
         history exists, not blocked by its absence.
 
         \(perfBriefAddendum)
+        \(sprintBriefAddendum)
         ═══════════════════════════════════════════════════════════
         STEP 1 — DESIGN THE SPECIFICATION
         ═══════════════════════════════════════════════════════════
