@@ -43,15 +43,15 @@ The canvas:
 ```
 The second brain:
 
-• Qwen3 embeddings, in-process, on Metal
-• Hybrid search — vector + FTS, reranked by freshness, scope, supersede
-• Tree-sitter codebase indexing with a live file watcher
-• Knowledge graph — decisions, intents, retros — all auto-extracted
+• Qwen3 embeddings, in-process on Metal
+• Hybrid search — vector + FTS, reranked by freshness and scope
+• Tree-sitter code indexing with a live file watcher
+• Knowledge graph — decisions, intents, retros — auto-extracted
 
 Every spawn wakes up oriented.
 ```
 
-(279 chars.)
+(271 chars.)
 
 ---
 
@@ -61,33 +61,56 @@ Every spawn wakes up oriented.
 For long-running work:
 
 • Eternal — sprint or mega loops, normal or continuous
-• Dispatch — write a brief, an architect designs the multi-phase plan
-• Performance step — a same-turn pay-back gate with 8 device-independent metrics and a per-project ratcheting baseline
+• Dispatch — write a brief, an architect plans the phases
+• Perf step — a same-turn pay-back gate, 8 device-independent metrics, ratcheting baseline
 
 It refuses to ship a regression.
 ```
 
-(279 chars.)
+(261 chars.)
 
 ---
 
-## Post 5 / 5  (the foundation)
+## Post 5 / 5  (Tado Use + Tado Pets — newest in 1.0.0)
 
 ```
-Underneath:
+Two more landing in 1.0.0:
 
-• 10 Rust crates, one libtado_core.a
-• 30 MCP tools auto-registered into Claude Code
-• Atomic JSON persistence, 5-scope config
-• Real-time A2A event socket
-• libc::killpg clean shutdown — no orphan processes
+Tado Use — Cmd+Shift+U opens a chat drawer. A headless Claude agent drives the app via 65+ MCP and bridge tools. You talk, Tado moves.
 
-Built end to end on top of itself.
+Tado Pets — a pixel-art companion floats over every Space, mirroring agent state.
 
 https://github.com/ocque41/tado
 ```
 
 (278 chars including the URL.)
+
+### Feature breakdown — Tado Use
+
+- Cmd+Shift+U opens a left-edge slide-in chat drawer
+- Headless `claude -p` agent in the loop, no terminal tile needed
+- Calls all 30 dome-mcp + tado-mcp tools plus 35+ in-process bridge tools
+- Streams turns with a per-token live row + throttled auto-scroll
+  (~6 Hz, suppressed when you scroll away from the bottom)
+- Inherits the live engine / model / effort / permission-mode
+  from the same `AppSettings` row canvas tiles spawn from
+- Body font follows your terminal-font setting; chrome stays
+  on Plus Jakarta Sans
+- Auto-registers a stdio bridge so the agent can read app state
+  and dispatch commands without going through a PTY
+
+### Feature breakdown — Tado Pets
+
+- Animated pixel-art companion on a borderless `NSPanel`
+- Always-on-top, floats across every macOS Space
+- Mirrors live state of sessions, Eternal runs, Dispatch runs,
+  the perf gate — busiest-state-wins resolution
+- Click-to-expand popover: per-project, per-feature breakdown
+- `/pet` slash command toggles visibility
+- `/hatch <prompt>` opens the hatch sheet pre-filled
+- Sprite-sheet importer (`Import pet from folder…`) auto-slices
+  frames and registers the new pet via `tado_pets_register`
+- Dedicated settings window from the Extensions page
 
 ---
 
