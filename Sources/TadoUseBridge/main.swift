@@ -412,7 +412,7 @@ let toolList: [[String: Any]] = [
     // ─── Eternal — autonomous ────────────────────────────────────
     [
         "name": "tado_use_eternal_start",
-        "description": "AUTONOMOUS: kick off an Eternal run end-to-end. Creates a coordinator marker todo, proposes the run (spawns the architect), polls the architect's progress for up to 180s, auto-accepts crafted.md on the operator's behalf, and returns once the worker is running. The architect's plan is auto-approved — use this when the operator has said 'just do it.' Returns architect_pending=true if architect is still running at timeout (caller should poll status).",
+        "description": "Propose an Eternal run. Creates a coordinator marker todo and spawns the architect agent in a tile, then RETURNS IMMEDIATELY with the new run_id and state='drafted'. The architect runs asynchronously and produces crafted.md within 30–120s. The CALLER (you, the agent) is responsible for polling tado_use_eternal_status until state == 'awaitingReview', then calling tado_use_eternal_accept to spawn the worker. Don't try to do the polling in a tight loop — wait ~10–15s between status calls so the architect has time to think.",
         "inputSchema": [
             "type": "object",
             "properties": [
@@ -424,6 +424,31 @@ let toolList: [[String: Any]] = [
                 "label": ["type": "string", "description": "Optional human label for the run."],
             ],
             "required": ["goal"],
+        ],
+    ],
+    [
+        "name": "tado_use_eternal_accept",
+        "description": "Accept the architect's crafted.md plan and spawn the worker tile that runs the actual eternal loop. Run must be in state 'awaitingReview'. Errors with state_mismatch if architect is still running — keep polling tado_use_eternal_status in that case.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "run_id": ["type": "string"],
+                "note": ["type": "string", "description": "Optional review note recorded with the acceptance."],
+            ],
+            "required": ["run_id"],
+        ],
+    ],
+    [
+        "name": "tado_use_eternal_reject",
+        "description": "Reject the architect's plan, optionally rebrief the architect with new constraints (re-spawns the architect with the rebrief as the new user-brief). Run must be in state 'awaitingReview' or 'ready'.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "run_id": ["type": "string"],
+                "reason": ["type": "string"],
+                "rebrief": ["type": "string", "description": "If non-empty, re-spawn the architect with this as the new user-brief. If empty/omitted, just archive crafted.md and stop."],
+            ],
+            "required": ["run_id"],
         ],
     ],
     [
@@ -476,7 +501,7 @@ let toolList: [[String: Any]] = [
     // ─── Dispatch — autonomous ───────────────────────────────────
     [
         "name": "tado_use_dispatch_start",
-        "description": "AUTONOMOUS: kick off a Dispatch run end-to-end. Creates coordinator marker todo, proposes the run (spawns architect), polls for crafted.md (up to 240s), auto-accepts the multi-phase plan, and returns once phase 1 is running. Same auto-approve semantics as eternal_start.",
+        "description": "Propose a Dispatch run. Spawns the architect that plans a multi-phase delivery, returns immediately. Same propose/poll/accept pattern as eternal_start: poll dispatch_status until state=='awaitingReview', then call dispatch_accept.",
         "inputSchema": [
             "type": "object",
             "properties": [
@@ -486,6 +511,31 @@ let toolList: [[String: Any]] = [
                 "label": ["type": "string"],
             ],
             "required": ["goal"],
+        ],
+    ],
+    [
+        "name": "tado_use_dispatch_accept",
+        "description": "Accept the dispatch architect's plan, spawn phase 1, materialize the kanban board.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "run_id": ["type": "string"],
+                "note": ["type": "string"],
+            ],
+            "required": ["run_id"],
+        ],
+    ],
+    [
+        "name": "tado_use_dispatch_reject",
+        "description": "Reject the dispatch architect's plan, optionally rebrief.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "run_id": ["type": "string"],
+                "reason": ["type": "string"],
+                "rebrief": ["type": "string"],
+            ],
+            "required": ["run_id"],
         ],
     ],
     [
@@ -755,12 +805,16 @@ let toolKindMap: [String: String] = [
     "tado_use_project_delete": "tado_use.project_delete",
 
     "tado_use_eternal_start": "tado_use.eternal_start",
+    "tado_use_eternal_accept": "tado_use.eternal_accept",
+    "tado_use_eternal_reject": "tado_use.eternal_reject",
     "tado_use_eternal_list": "tado_use.eternal_list",
     "tado_use_eternal_status": "tado_use.eternal_status",
     "tado_use_eternal_stop": "tado_use.eternal_stop",
     "tado_use_eternal_intervene": "tado_use.eternal_intervene",
 
     "tado_use_dispatch_start": "tado_use.dispatch_start",
+    "tado_use_dispatch_accept": "tado_use.dispatch_accept",
+    "tado_use_dispatch_reject": "tado_use.dispatch_reject",
     "tado_use_dispatch_list": "tado_use.dispatch_list",
     "tado_use_dispatch_status": "tado_use.dispatch_status",
 

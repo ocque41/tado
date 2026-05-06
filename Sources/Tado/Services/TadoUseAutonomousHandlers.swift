@@ -46,14 +46,18 @@ enum TadoUseAutonomousHandlers {
         "tado_use.project_create",
         "tado_use.project_resolve",
         "tado_use.project_delete",
-        // Eternal — autonomous
+        // Eternal — propose / accept / reject
         "tado_use.eternal_start",
+        "tado_use.eternal_accept",
+        "tado_use.eternal_reject",
         "tado_use.eternal_list",
         "tado_use.eternal_status",
         "tado_use.eternal_stop",
         "tado_use.eternal_intervene",
-        // Dispatch — autonomous
+        // Dispatch — propose / accept / reject
         "tado_use.dispatch_start",
+        "tado_use.dispatch_accept",
+        "tado_use.dispatch_reject",
         "tado_use.dispatch_list",
         "tado_use.dispatch_status",
         // Bootstraps
@@ -112,9 +116,13 @@ enum TadoUseAutonomousHandlers {
         case "tado_use.project_delete":
             return projectDelete(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
 
-        // Eternal autonomous
+        // Eternal
         case "tado_use.eternal_start":
             return eternalStartAutonomous(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
+        case "tado_use.eternal_accept":
+            return eternalAccept(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
+        case "tado_use.eternal_reject":
+            return eternalReject(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
         case "tado_use.eternal_list":
             return eternalList(requestID: requestID, payload: payload, modelContext: modelContext)
         case "tado_use.eternal_status":
@@ -124,9 +132,13 @@ enum TadoUseAutonomousHandlers {
         case "tado_use.eternal_intervene":
             return eternalIntervene(requestID: requestID, payload: payload, modelContext: modelContext)
 
-        // Dispatch autonomous
+        // Dispatch
         case "tado_use.dispatch_start":
             return dispatchStartAutonomous(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
+        case "tado_use.dispatch_accept":
+            return dispatchAccept(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
+        case "tado_use.dispatch_reject":
+            return dispatchReject(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext, appState: appState)
         case "tado_use.dispatch_list":
             return dispatchList(requestID: requestID, payload: payload, modelContext: modelContext)
         case "tado_use.dispatch_status":
@@ -411,23 +423,24 @@ enum TadoUseAutonomousHandlers {
         ]))
     }
 
-    // MARK: - Eternal — autonomous start
+    // MARK: - Eternal — propose / accept / reject (split flow)
+    //
+    // Earlier versions of this handler tried to be one-shot: propose
+    // → poll on `Thread.sleep` for up to 180s → auto-accept. That
+    // wedged the SwiftUI render loop on the main actor and macOS
+    // killed the app for being unresponsive. The right pattern is
+    // for the agent to drive the polling itself: call
+    // `eternal_start`, poll `eternal_status` every ~10–15s, then
+    // call `eternal_accept` once the run hits `awaitingReview`.
+    // The system preamble in TadoUseEngine documents this loop, and
+    // the agent's tool-call latency naturally bounds the poll rate
+    // without blocking the host app.
 
-    /// One-shot "start an eternal and walk away":
-    ///
-    ///   1. Create a coordinator marker todo in the project (used as
-    ///      the eternal's `coordinator_todo_id` so the existing
-    ///      coordinator path's invariants hold).
-    ///   2. Propose the run — spawns the architect agent.
-    ///   3. Poll the run's state every 1.5s for up to 180s, waiting
-    ///      for `awaitingReview` (architect produced crafted.md).
-    ///   4. Auto-accept on the operator's behalf — spawns the worker
-    ///      tile that begins the actual eternal loop.
-    ///   5. Return the run id + final state.
-    ///
-    /// If the architect is still running when the timeout expires
-    /// the handler returns `state: "drafted"` with `architect_pending`
-    /// = true so the caller knows to poll status manually.
+    /// Propose an Eternal run. Creates a coordinator marker todo,
+    /// kicks off the architect via `EternalService.proposeViaCoordinator`,
+    /// and returns immediately. The caller polls `eternal_status`
+    /// until the run hits `awaitingReview`, then calls
+    /// `eternal_accept` to spawn the worker.
     private static func eternalStartAutonomous(
         requestID: String,
         payload: ControlPayload,
@@ -439,11 +452,11 @@ enum TadoUseAutonomousHandlers {
             return ControlRequestRouter.error(requestID, code: "not_found", message: "project required (pass project, project_id, or name)")
         }
         guard let goal = payload.string("goal"), !goal.isEmpty else {
-            return ControlRequestRouter.error(requestID, code: "missing_param", message: "goal required (the user-brief description of what the eternal should accomplish)")
+            return ControlRequestRouter.error(requestID, code: "missing_param", message: "goal required (the user-brief the architect plans against)")
         }
 
-        // 1. Create a coordinator marker todo. Title hints at the
-        //    fact that this is a Tado-Use-spawned eternal.
+        // Create a coordinator marker todo. Title hints that this is
+        // a Tado-Use-spawned eternal.
         let gridIndex = nextGridIndex(modelContext: modelContext)
         let gridColumns = (try? modelContext.fetch(FetchDescriptor<AppSettings>()).first?.gridColumns) ?? 3
         let position = CanvasLayout.position(forIndex: gridIndex, gridColumns: gridColumns)
@@ -453,7 +466,6 @@ enum TadoUseAutonomousHandlers {
         modelContext.insert(coordTodo)
         try? modelContext.save()
 
-        // 2. Propose. EternalService handles architect spawn.
         let mode = payload.string("mode") ?? "sprint"  // sprint | mega
         let engine = payload.string("engine") ?? project.defaultEngineForCoordinator()
         let label = payload.string("label") ?? "Tado Use: \(goal.prefix(40))"
@@ -469,61 +481,6 @@ enum TadoUseAutonomousHandlers {
             appState: appState
         )
 
-        // 3. Poll for awaitingReview.
-        let deadline = Date().addingTimeInterval(180)
-        var sawReview = false
-        var polls = 0
-        // Early-exit for tiny architect runs: check on every tick,
-        // 1.5s cadence. We block on the main actor here, which is
-        // OK because the control-socket handler runs on its own
-        // task queue and re-hops to MainActor; the polling pattern
-        // is also used elsewhere (eg. coordinator ack waits).
-        while Date() < deadline {
-            polls += 1
-            // Force a fresh read — SwiftData caches; the architect
-            // updates run.state via the EternalService's MainActor
-            // hop, but our polling loop owns its own snapshot.
-            modelContext.processPendingChanges()
-            if run.state == "awaitingReview" || run.state == "running" {
-                sawReview = run.state == "awaitingReview"
-                break
-            }
-            if run.state == "rejected" || run.state == "stopped" || run.state == "failed" {
-                return ControlRequestRouter.error(requestID, code: "architect_failed", message: "architect ended in state '\(run.state)'", extra: [
-                    "run_id": AnyCodable(run.id.uuidString),
-                    "polls": AnyCodable(polls),
-                ])
-            }
-            // Sleep 1.5s without blocking the actor — Thread.sleep is
-            // fine on a detached MainActor hop (we're inside the
-            // control-socket dispatch task, not the SwiftUI render
-            // path).
-            Thread.sleep(forTimeInterval: 1.5)
-        }
-
-        // 4. Auto-accept if architect produced a crafted.
-        var accepted = false
-        var finalState = run.state
-        if sawReview {
-            let result = EternalService.acceptReviewWithGuard(
-                run: run,
-                expectedState: "awaitingReview",
-                reviewNote: "Auto-accepted by Tado Use",
-                modelContext: modelContext,
-                terminalManager: terminalManager,
-                appState: appState
-            )
-            switch result {
-            case .accepted:
-                accepted = true
-                finalState = run.state
-            case .stateMismatch(let actual):
-                finalState = actual
-            case .notFound:
-                break
-            }
-        }
-
         return ControlRequestRouter.ok(requestID, data: AnyCodable([
             "run_id": AnyCodable(run.id.uuidString),
             "project_id": AnyCodable(project.id.uuidString),
@@ -531,12 +488,91 @@ enum TadoUseAutonomousHandlers {
             "label": AnyCodable(run.label),
             "mode": AnyCodable(run.mode),
             "engine": AnyCodable(run.engine),
-            "state": AnyCodable(finalState),
-            "auto_accepted": AnyCodable(accepted),
-            "architect_pending": AnyCodable(!sawReview && !accepted),
+            "state": AnyCodable(run.state),
             "coordinator_todo_id": AnyCodable(coordTodo.id.uuidString),
-            "polls": AnyCodable(polls),
+            "next_step": AnyCodable("Poll tado_use_eternal_status until state == 'awaitingReview', then call tado_use_eternal_accept with this run_id."),
         ]))
+    }
+
+    /// Accept the architect's `crafted.md` plan — spawns the worker
+    /// tile that runs the actual eternal loop. Errors with
+    /// `state_mismatch` if the run isn't in `awaitingReview` yet
+    /// (caller should keep polling status).
+    private static func eternalAccept(
+        requestID: String,
+        payload: ControlPayload,
+        terminalManager: TerminalManager,
+        modelContext: ModelContext,
+        appState: AppState
+    ) -> ControlResponseEnvelope {
+        guard let run = lookupEternalRun(payload: payload, modelContext: modelContext) else {
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "eternal run not found")
+        }
+        let note = payload.string("note") ?? "Auto-accepted by Tado Use"
+        let result = EternalService.acceptReviewWithGuard(
+            run: run,
+            expectedState: "awaitingReview",
+            reviewNote: note,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+        switch result {
+        case .accepted:
+            return ControlRequestRouter.ok(requestID, data: AnyCodable([
+                "run_id": AnyCodable(run.id.uuidString),
+                "state": AnyCodable(run.state),
+                "accepted": AnyCodable(true),
+            ]))
+        case .stateMismatch(let actual):
+            return ControlRequestRouter.error(requestID, code: "state_mismatch", message: "run is in state '\(actual)', not 'awaitingReview' — keep polling tado_use_eternal_status", extra: [
+                "actual": AnyCodable(actual),
+                "expected": AnyCodable("awaitingReview"),
+                "run_id": AnyCodable(run.id.uuidString),
+            ])
+        case .notFound:
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "run not found")
+        }
+    }
+
+    /// Reject the architect's plan. Optionally rebrief the
+    /// architect (re-spawns with the new constraints).
+    private static func eternalReject(
+        requestID: String,
+        payload: ControlPayload,
+        terminalManager: TerminalManager,
+        modelContext: ModelContext,
+        appState: AppState
+    ) -> ControlResponseEnvelope {
+        guard let run = lookupEternalRun(payload: payload, modelContext: modelContext) else {
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "eternal run not found")
+        }
+        let reason = payload.string("reason") ?? "Rejected by Tado Use"
+        let rebrief = payload.string("rebrief")
+        let result = EternalService.rejectReview(
+            run: run,
+            reason: reason,
+            rebrief: rebrief,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+        switch result {
+        case .rejected:
+            return ControlRequestRouter.ok(requestID, data: AnyCodable([
+                "run_id": AnyCodable(run.id.uuidString),
+                "state": AnyCodable(run.state),
+                "rejected": AnyCodable(true),
+                "rebriefed": AnyCodable(rebrief != nil),
+            ]))
+        case .stateMismatch(let actual):
+            return ControlRequestRouter.error(requestID, code: "state_mismatch", message: "run is in state '\(actual)', not 'awaitingReview' or 'ready'", extra: [
+                "actual": AnyCodable(actual),
+                "run_id": AnyCodable(run.id.uuidString),
+            ])
+        case .notFound:
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "run not found")
+        }
     }
 
     private static func eternalList(
@@ -651,7 +687,7 @@ enum TadoUseAutonomousHandlers {
         ]))
     }
 
-    // MARK: - Dispatch — autonomous
+    // MARK: - Dispatch — propose / accept / reject
 
     private static func dispatchStartAutonomous(
         requestID: String,
@@ -686,64 +722,94 @@ enum TadoUseAutonomousHandlers {
             appState: appState
         )
 
-        // Poll for the awaitingReview state. Dispatch architect tends
-        // to take a bit longer (it generates per-phase plans), so we
-        // give it 240s.
-        let deadline = Date().addingTimeInterval(240)
-        var sawReview = false
-        var polls = 0
-        while Date() < deadline {
-            polls += 1
-            // Force a fresh read — SwiftData caches; the architect
-            // updates run.state via the EternalService's MainActor
-            // hop, but our polling loop owns its own snapshot.
-            modelContext.processPendingChanges()
-            if run.state == "awaitingReview" || run.state == "running" {
-                sawReview = run.state == "awaitingReview"
-                break
-            }
-            if run.state == "rejected" || run.state == "stopped" || run.state == "failed" {
-                return ControlRequestRouter.error(requestID, code: "architect_failed", message: "architect ended in state '\(run.state)'", extra: [
-                    "run_id": AnyCodable(run.id.uuidString),
-                    "polls": AnyCodable(polls),
-                ])
-            }
-            Thread.sleep(forTimeInterval: 1.5)
-        }
-
-        var accepted = false
-        var finalState = run.state
-        if sawReview {
-            let result = DispatchPlanService.acceptReviewWithGuard(
-                run: run,
-                expectedState: "awaitingReview",
-                reviewNote: "Auto-accepted by Tado Use",
-                modelContext: modelContext,
-                terminalManager: terminalManager,
-                appState: appState
-            )
-            switch result {
-            case .accepted:
-                accepted = true
-                finalState = run.state
-            case .stateMismatch(let actual):
-                finalState = actual
-            case .notFound:
-                break
-            }
-        }
-
+        // Same propose-only pattern as eternal: return immediately.
+        // Agent polls dispatch_status until awaitingReview, then
+        // calls dispatch_accept. Polling on the main actor would
+        // wedge the SwiftUI render loop and crash the app.
         return ControlRequestRouter.ok(requestID, data: AnyCodable([
             "run_id": AnyCodable(run.id.uuidString),
             "project_id": AnyCodable(project.id.uuidString),
             "project_name": AnyCodable(project.name),
             "label": AnyCodable(run.label),
-            "state": AnyCodable(finalState),
-            "auto_accepted": AnyCodable(accepted),
-            "architect_pending": AnyCodable(!sawReview && !accepted),
+            "state": AnyCodable(run.state),
             "coordinator_todo_id": AnyCodable(coordTodo.id.uuidString),
-            "polls": AnyCodable(polls),
+            "next_step": AnyCodable("Poll tado_use_dispatch_status until state == 'awaitingReview', then call tado_use_dispatch_accept with this run_id."),
         ]))
+    }
+
+    private static func dispatchAccept(
+        requestID: String,
+        payload: ControlPayload,
+        terminalManager: TerminalManager,
+        modelContext: ModelContext,
+        appState: AppState
+    ) -> ControlResponseEnvelope {
+        guard let run = lookupDispatchRun(payload: payload, modelContext: modelContext) else {
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "dispatch run not found")
+        }
+        let note = payload.string("note") ?? "Auto-accepted by Tado Use"
+        let result = DispatchPlanService.acceptReviewWithGuard(
+            run: run,
+            expectedState: "awaitingReview",
+            reviewNote: note,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+        switch result {
+        case .accepted:
+            return ControlRequestRouter.ok(requestID, data: AnyCodable([
+                "run_id": AnyCodable(run.id.uuidString),
+                "state": AnyCodable(run.state),
+                "accepted": AnyCodable(true),
+            ]))
+        case .stateMismatch(let actual):
+            return ControlRequestRouter.error(requestID, code: "state_mismatch", message: "run is in state '\(actual)', not 'awaitingReview' — keep polling tado_use_dispatch_status", extra: [
+                "actual": AnyCodable(actual),
+                "expected": AnyCodable("awaitingReview"),
+                "run_id": AnyCodable(run.id.uuidString),
+            ])
+        case .notFound:
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "run not found")
+        }
+    }
+
+    private static func dispatchReject(
+        requestID: String,
+        payload: ControlPayload,
+        terminalManager: TerminalManager,
+        modelContext: ModelContext,
+        appState: AppState
+    ) -> ControlResponseEnvelope {
+        guard let run = lookupDispatchRun(payload: payload, modelContext: modelContext) else {
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "dispatch run not found")
+        }
+        let reason = payload.string("reason") ?? "Rejected by Tado Use"
+        let rebrief = payload.string("rebrief")
+        let result = DispatchPlanService.rejectReview(
+            run: run,
+            reason: reason,
+            rebrief: rebrief,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            appState: appState
+        )
+        switch result {
+        case .rejected:
+            return ControlRequestRouter.ok(requestID, data: AnyCodable([
+                "run_id": AnyCodable(run.id.uuidString),
+                "state": AnyCodable(run.state),
+                "rejected": AnyCodable(true),
+                "rebriefed": AnyCodable(rebrief != nil),
+            ]))
+        case .stateMismatch(let actual):
+            return ControlRequestRouter.error(requestID, code: "state_mismatch", message: "run is in state '\(actual)', not 'awaitingReview' or 'ready'", extra: [
+                "actual": AnyCodable(actual),
+                "run_id": AnyCodable(run.id.uuidString),
+            ])
+        case .notFound:
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "run not found")
+        }
     }
 
     private static func dispatchList(
@@ -1121,30 +1187,19 @@ enum TadoUseAutonomousHandlers {
     }
 
     // MARK: - Kanban
+    //
+    // The Kanban model + per-todo column membership land in a future
+    // commit (see Tado's WIP branch — `KanbanColumn` SwiftData entity
+    // and `TodoItem.kanbanColumnKey`). Until those land in HEAD,
+    // these handlers return a clean "not yet available" response so
+    // the bridge stays stable.
 
     private static func kanbanColumns(
         requestID: String,
         payload: ControlPayload,
         modelContext: ModelContext
     ) -> ControlResponseEnvelope {
-        guard let project = resolveProject(payload: payload, modelContext: modelContext) else {
-            return ControlRequestRouter.error(requestID, code: "not_found", message: "project required")
-        }
-        let descriptor = FetchDescriptor<KanbanColumn>(sortBy: [SortDescriptor<KanbanColumn>(\.orderIndex)])
-        let cols = (try? modelContext.fetch(descriptor)) ?? []
-        let projectCols = cols.filter { $0.project?.id == project.id }
-        let entries = projectCols.map { c -> AnyCodable in
-            AnyCodable([
-                "column_key": AnyCodable(c.columnKey),
-                "title": AnyCodable(c.title),
-                "order_index": AnyCodable(c.orderIndex),
-            ])
-        }
-        return ControlRequestRouter.ok(requestID, data: AnyCodable([
-            "project_id": AnyCodable(project.id.uuidString),
-            "columns": AnyCodable(entries),
-            "count": AnyCodable(entries.count),
-        ]))
+        return ControlRequestRouter.error(requestID, code: "not_implemented", message: "Kanban support requires the KanbanColumn model + TodoItem.kanbanColumnKey field, which haven't landed in HEAD yet. Use tado_use_todo_list with state filters as a substitute.")
     }
 
     private static func kanbanMoveCard(
@@ -1152,22 +1207,7 @@ enum TadoUseAutonomousHandlers {
         payload: ControlPayload,
         modelContext: ModelContext
     ) -> ControlResponseEnvelope {
-        guard let todoIDStr = payload.string("todo_id"),
-              let todoID = UUID(uuidString: todoIDStr) else {
-            return ControlRequestRouter.error(requestID, code: "missing_param", message: "todo_id required")
-        }
-        let columnKey = payload.string("column_key")  // nil ⇒ remove from board
-        let descriptor = FetchDescriptor<TodoItem>()
-        let todos = (try? modelContext.fetch(descriptor)) ?? []
-        guard let todo = todos.first(where: { $0.id == todoID }) else {
-            return ControlRequestRouter.error(requestID, code: "not_found", message: "todo not found")
-        }
-        todo.kanbanColumnKey = columnKey
-        try? modelContext.save()
-        return ControlRequestRouter.ok(requestID, data: AnyCodable([
-            "todo_id": AnyCodable(todoID.uuidString),
-            "column_key": AnyCodable(columnKey ?? ""),
-        ]))
+        return ControlRequestRouter.error(requestID, code: "not_implemented", message: "Kanban support requires the KanbanColumn model + TodoItem.kanbanColumnKey field, which haven't landed in HEAD yet.")
     }
 
     // MARK: - Extensions

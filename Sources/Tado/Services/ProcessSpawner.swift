@@ -1876,10 +1876,12 @@ enum ProcessSpawner {
         marker: String,
         runID: UUID,
         engine: TerminalEngine = .claude,
-        perfMode: Bool = false
+        perfMode: Bool = false,
+        sprintMode: Bool = false
     ) -> String {
         let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
         let perfStep = perfMode ? eternalPerfStepBlock(runDir: runDir, marker: marker, sprintMarker: nil) : ""
+        let sprintStep = sprintMode ? eternalSprintStepBlock(runDir: runDir, marker: marker, sprintMarker: nil) : ""
         return """
         You are running as a Tado Eternal agent (MEGA mode) for project "\(projectName)" at \(projectRoot).
 

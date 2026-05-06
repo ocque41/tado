@@ -307,16 +307,28 @@ final class TadoUseEngine {
           - tado_use_todo_list / move / delete
           - tado_use_project_list / create / resolve / delete
 
-        Eternal — AUTONOMOUS:
-          - tado_use_eternal_start: kicks off architect, polls for crafted.md,
-            AUTO-ACCEPTS the plan, returns once worker is running. Use this
-            when the operator says "start an eternal in this project for
-            <goal>" — no further confirmation needed.
-          - tado_use_eternal_list / status / stop / intervene
+        Eternal — propose/poll/accept dance:
+          When the operator says "start an eternal for <goal>", do this
+          loop without asking for confirmation:
+            1. Call tado_use_eternal_start { project, goal, mode: "sprint" }.
+               Returns a run_id with state == "drafted".
+            2. Wait ~10s, then call tado_use_eternal_status { run_id }.
+            3. Repeat step 2 (waiting ~10s between calls) until
+               state == "awaitingReview". The architect typically takes
+               30–120s to produce crafted.md.
+            4. Call tado_use_eternal_accept { run_id } to spawn the
+               worker tile that runs the actual eternal loop.
+            5. Tell the operator the run is live; they can watch the
+               tile on the canvas.
+          Other tools: eternal_list, eternal_stop, eternal_intervene
+          (drops a directive into the running worker's inbox),
+          eternal_reject (with optional rebrief).
+          DO NOT poll faster than every ~10s — the architect needs
+          thinking time and the polling shows up as load on the host.
 
-        Dispatch — AUTONOMOUS:
-          - tado_use_dispatch_start (same auto-accept pattern as eternal)
-          - tado_use_dispatch_list / status
+        Dispatch — same propose/poll/accept pattern:
+          dispatch_start → dispatch_status (poll) → dispatch_accept
+          dispatch_list / dispatch_reject available too.
 
         Bootstraps:
           - tado_use_bootstrap (kind: a2a | team | auto-mode | knowledge)
