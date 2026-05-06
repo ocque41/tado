@@ -1977,6 +1977,73 @@ enum ProcessSpawner {
         """
     }
 
+    /// Sprint step instructions appended to mega/sprint worker prompts
+    /// when `EternalRun.kind == "sprint"`. Mirrors `eternalPerfStepBlock`
+    /// but for the SprintSuccessScore gate (sprint-suite + sprint-gate.sh).
+    private static func eternalSprintStepBlock(
+        runDir: String,
+        marker: String,
+        sprintMarker: String?
+    ) -> String {
+        let pairedMarker = sprintMarker ?? marker
+        return """
+
+
+        ═══════════════════════════════════════════════════════════
+        SPRINT STEP (kind=sprint — same-turn pay-back required)
+        ═══════════════════════════════════════════════════════════
+        This run was created with kind=sprint. The methodology under \
+        optimization is `sprint_rules.txt` in the project root. Each \
+        iteration you propose ONE rule change, edit `sprint_rules.txt`, \
+        record a measured row in `sprint-data.json`, then run the gate. \
+        The gate computes the SprintSuccessScore via:
+
+          score = (points_completed / total_points_planned * 100)
+                + (code_review_passes * 2)
+                - (bugs_found_after_sprint * 10)
+                + (developer_satisfaction_score * 5)
+
+        and compares it to the all-time-best baseline at \
+        `.tado/sprint-baselines/<project>.json`. The baseline is \
+        ratcheting — it never moves backwards.
+
+        Per-iteration sprint protocol:
+          A. Read \(runDir)/crafted.md's `## SPRINT RULES OPTIMIZATION` \
+             section for the active formula, baseline composite, and \
+             rules-hygiene constraints.
+          B. Propose ONE rule change (add, refine, or retire). Edit \
+             `sprint_rules.txt` to apply it. Add or update one row in \
+             `sprint-data.json`.
+          C. Run: bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/sprint-gate.sh
+             Stdout shapes:
+               "SCORE: PASS composite=<n>"          followed by
+               "[SCORE-OK] composite=<n>"            ← the marker the loop reads
+               "SCORE: BASELINE-INIT composite=<n>"  followed by [SCORE-OK] (first run)
+               "SCORE: REGRESSION delta=<d> hot=<sub-metric> composite=<n>"
+                                                    ← no [SCORE-OK] is printed
+               "SCORE: NO-DATA-DETECTED"            followed by [SCORE-OK] (free pass)
+          D. If [SCORE-OK] appeared: copy that line into your output AND \
+             print "\(pairedMarker)" on its own line afterward. The Stop \
+             hook + loop driver verify [SCORE-OK] precedes \
+             "\(pairedMarker)" / "\(marker)". `git commit -am "<short \
+             rule-change message>"` so the per-rule history is auditable.
+          E. If [SCORE-OK] did NOT appear: in this same turn, either \
+             (i) revert the diff with `git revert HEAD --no-edit` and \
+             document the revert reason in progress.md; OR (ii) read \
+             \(runDir)/sprint-proposals.md, apply ONE different proposal, \
+             and re-run the gate.
+
+        Do NOT modify `prepare.py` (the scorer) or the formula in the \
+        same iteration where it produces the metric. Do NOT inflate \
+        `sprint-data.json` rows with unrealistic values to game the gate.
+
+        See \(runDir)/crafted.md's `## SPRINT RULES OPTIMIZATION` \
+        section for active baseline, per-component guards (bugs cannot \
+        rise; reviews cannot drop), and the satisfaction threshold \
+        (above which printing "\(marker)" is OK).
+        """
+    }
+
     /// Engine-tailored "non-stop hygiene" closing paragraph for Mega and
     /// Sprint prompts. Claude callers get the `.claude/`-protected-path
     /// warning specific to `--dangerously-skip-permissions`; Codex callers
