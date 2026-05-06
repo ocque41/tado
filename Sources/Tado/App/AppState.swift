@@ -276,6 +276,7 @@ final class AppState {
     var currentView: ViewMode = .todos
     var showSettings: Bool = false
     var showSidebar: Bool = false
+    var showTadoUse: Bool = false
     var showDoneList: Bool = false
     var showTrashList: Bool = false
     var pendingNavigationID: UUID? = nil

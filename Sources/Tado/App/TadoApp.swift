@@ -6,6 +6,8 @@ import AppKit
 struct TadoApp: App {
     @State private var appState = AppState()
     @State private var terminalManager = TerminalManager()
+    @State private var tadoUseState = TadoUseState()
+    @State private var tadoUseEngineHolder = TadoUseEngineHolder()
     @State private var ipcBrokerInitialized = false
     // One zoom-state per WindowGroup. Lifted to the App so the View
     // menu's commands can target the main window's zoom directly;
@@ -171,6 +173,10 @@ struct TadoApp: App {
         // tado-mcp isn't a UI extension — it's a stdio tool Claude
         // spawns on demand.
         TadoMcpAutoRegister.kickoff()
+        // Tado Use bridge — Swift stdio MCP server that proxies the
+        // six in-process control tools (navigate, focus_tile, etc.)
+        // into the running app. Same auto-register pattern.
+        TadoUseBridgeAutoRegister.kickoff()
 
         // v0.15 — clean shutdown for the in-process bt-core daemon.
         // The Phase-2 stub `tado_dome_stop` is finally wired: when
@@ -194,6 +200,7 @@ struct TadoApp: App {
         // closure is safe because it's a reference type and SwiftUI
         // keeps the same instance for the app's lifetime.
         let tm = terminalManager
+        let useEngineHolder = tadoUseEngineHolder
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -202,6 +209,10 @@ struct TadoApp: App {
             DomeRpcClient.domeStop()
             MainActor.assumeIsolated {
                 tm.shutdownAllSessions()
+                // Tado Use's headless subprocess + bridge child die
+                // with the parent. Engine teardown also unlinks
+                // any per-turn MCP config files we generated.
+                useEngineHolder.engine.teardown()
                 BackgroundLifecycle.shared.teardown()
             }
         }
@@ -212,6 +223,8 @@ struct TadoApp: App {
             MainWindowRoot(
                 appState: appState,
                 terminalManager: terminalManager,
+                tadoUseState: tadoUseState,
+                tadoUseEngineHolder: tadoUseEngineHolder,
                 zoomState: mainZoom,
                 ipcBrokerInitialized: $ipcBrokerInitialized
             )
@@ -229,6 +242,11 @@ struct TadoApp: App {
                     appState.showSidebar.toggle()
                 }
                 .keyboardShortcut("b", modifiers: .command)
+
+                Button("Toggle Tado Use") {
+                    appState.showTadoUse.toggle()
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
             }
             CommandMenu("Navigate") {
                 Button("Projects") {
@@ -310,6 +328,8 @@ struct TadoApp: App {
 struct MainWindowRoot: View {
     let appState: AppState
     let terminalManager: TerminalManager
+    let tadoUseState: TadoUseState
+    let tadoUseEngineHolder: TadoUseEngineHolder
     let zoomState: WindowZoomState
     @Binding var ipcBrokerInitialized: Bool
 
@@ -317,6 +337,8 @@ struct MainWindowRoot: View {
         ContentView()
             .environment(appState)
             .environment(terminalManager)
+            .environment(tadoUseState)
+            .environment(tadoUseEngineHolder)
             // Pin the whole window tree to dark mode. Without this
             // SwiftUI's adaptive system colors (sidebar, form bg,
             // sheet chrome) sample the host's appearance — if macOS

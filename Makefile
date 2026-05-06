@@ -1,4 +1,4 @@
-.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench sync-header mcp perf-suite perf-bench perf-detect perf-test
+.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench sync-header mcp bridge perf-suite perf-bench perf-detect perf-test
 
 # Daily development: release-optimized Rust core + header sync + Swift app.
 # Launching the app this way boots Tado AND (via DomeExtension.onAppLaunch)
@@ -37,8 +37,17 @@ sync-header: core
 
 # Build just the MCP bridges. Useful when iterating on dome-mcp or
 # tado-mcp's tool surface without rebuilding the whole Swift app.
-mcp:
+# Also rebuilds tado-use-bridge, the Swift stdio MCP server that
+# proxies the six SwiftUI control tools through the running app's
+# control socket.
+mcp: bridge
 	cd tado-core && cargo build --release -p dome-mcp -p tado-mcp -p tado-dome
+
+# Build the Tado Use stdio MCP bridge (Swift exec target). Lives
+# next to dome-mcp / tado-mcp inside Tado.app/Contents/MacOS/ once
+# the app is bundled; in dev runs out of .build/release/.
+bridge:
+	swift build -c release --product tado-use-bridge
 
 core-test:
 	cd tado-core && cargo test --release

@@ -224,14 +224,26 @@ final class ControlSocketServer {
 
     /// Reads a single 4-byte-length-prefixed frame off the socket.
     /// Returns nil on EOF or short read; the caller closes.
+    ///
+    /// `&array[i]` to `recv`/`send` is unsafe in Swift — Array's
+    /// inout subscript can yield a pointer into a temporary buffer
+    /// that isn't stable across the syscall. We use
+    /// `withUnsafeMutableBufferPointer` (returns a pointer to the
+    /// Array's storage with a guaranteed lifetime for the duration
+    /// of the closure) and pointer arithmetic for the offset.
     private nonisolated func readFrame(from fd: Int32) -> Data? {
         var lenBuf = [UInt8](repeating: 0, count: 4)
         var read = 0
-        while read < 4 {
-            let n = recv(fd, &lenBuf[read], 4 - read, 0)
-            if n <= 0 { return nil }
-            read += n
+        let lenOK = lenBuf.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let base = buf.baseAddress else { return false }
+            while read < 4 {
+                let n = recv(fd, base.advanced(by: read), 4 - read, 0)
+                if n <= 0 { return false }
+                read += n
+            }
+            return true
         }
+        guard lenOK else { return nil }
         let length = (UInt32(lenBuf[0]) << 24)
             | (UInt32(lenBuf[1]) << 16)
             | (UInt32(lenBuf[2]) << 8)
@@ -241,11 +253,16 @@ final class ControlSocketServer {
         guard length > 0, length <= 4 * 1024 * 1024 else { return nil }
         var body = [UInt8](repeating: 0, count: Int(length))
         var got = 0
-        while got < Int(length) {
-            let n = recv(fd, &body[got], Int(length) - got, 0)
-            if n <= 0 { return nil }
-            got += n
+        let bodyOK = body.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let base = buf.baseAddress else { return false }
+            while got < Int(length) {
+                let n = recv(fd, base.advanced(by: got), Int(length) - got, 0)
+                if n <= 0 { return false }
+                got += n
+            }
+            return true
         }
+        guard bodyOK else { return nil }
         return Data(body)
     }
 
@@ -256,12 +273,17 @@ final class ControlSocketServer {
         header[1] = UInt8((length >> 16) & 0xFF)
         header[2] = UInt8((length >> 8) & 0xFF)
         header[3] = UInt8(length & 0xFF)
-        var sent = 0
-        while sent < 4 {
-            let n = send(fd, &header[sent], 4 - sent, 0)
-            if n <= 0 { return false }
-            sent += n
+        let headerOK = header.withUnsafeBufferPointer { buf -> Bool in
+            guard let base = buf.baseAddress else { return false }
+            var sent = 0
+            while sent < 4 {
+                let n = send(fd, base.advanced(by: sent), 4 - sent, 0)
+                if n <= 0 { return false }
+                sent += n
+            }
+            return true
         }
+        guard headerOK else { return false }
         return data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Bool in
             guard let base = buf.baseAddress else { return false }
             var written = 0

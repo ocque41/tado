@@ -46,6 +46,16 @@ let package = Package(
                 .linkedLibrary("c++")
             ]
         ),
+        // Tado Use bridge — stdio MCP server that proxies the six
+        // in-process tool calls into the running Tado app's
+        // ControlSocketServer. Foundation-only, no SwiftUI / AppKit /
+        // SwiftData / Rust deps so it stays a tiny standalone binary.
+        // Bundled at `Tado.app/Contents/MacOS/tado-use-bridge` next to
+        // the Rust `tado-mcp` and `dome-mcp` binaries.
+        .executableTarget(
+            name: "tado-use-bridge",
+            path: "Sources/TadoUseBridge"
+        ),
         .testTarget(
             name: "TadoCoreTests",
             dependencies: ["Tado"],

@@ -165,6 +165,20 @@ enum ControlRequestRouter {
             )
 
         default:
+            // Tado Use bridge — six in-process tools the drawer's
+            // headless agent calls to drive Tado's SwiftUI surface.
+            // Kept behind a Set check (not a static `case` list) so
+            // the bridge can grow without touching this file.
+            if TadoUseBridgeHandlers.kinds.contains(request.kind) {
+                return TadoUseBridgeHandlers.handle(
+                    kind: request.kind,
+                    requestID: request.requestID,
+                    payload: payload,
+                    terminalManager: terminalManager,
+                    modelContext: modelContext,
+                    appState: appState
+                )
+            }
             return error(request.requestID, code: "unknown_kind", message: "Unknown kind: \(request.kind)")
         }
     }

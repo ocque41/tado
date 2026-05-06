@@ -10,6 +10,11 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Hidden zero-sized button carrying Cmd+Shift+U so the
+            // hotkey resolves while the main window is key. Matches
+            // `DomeHotkeyRegistrar`'s pattern.
+            TadoUseHotkeyRegistrar()
+
             // .zIndex(1) forces the nav bar above the canvas ZStack in both
             // rendering and hit-testing. Prevents a canvas tile whose NSView
             // extends upward (via scale + pan transforms) from stealing
@@ -20,6 +25,15 @@ struct ContentView: View {
                 .zIndex(1)
 
             HStack(spacing: 0) {
+                // Tado Use drawer — slides in from the left edge,
+                // sibling to the existing SidebarView. Both can
+                // coexist; the drawer is wider (360pt) because chat
+                // needs reading width.
+                if appState.showTadoUse {
+                    TadoUsePanel()
+                        .frame(width: 360)
+                        .transition(.move(edge: .leading))
+                }
                 // Sidebar takes real layout space — TodoListView / ProjectsView
                 // reflow into the remaining width instead of being covered.
                 // Canvas still fills the remaining width via `maxWidth:
@@ -86,6 +100,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: appState.showSettings)
         .animation(.easeInOut(duration: 0.2), value: appState.currentView)
         .animation(.easeInOut(duration: 0.2), value: appState.showSidebar)
+        .animation(.easeInOut(duration: 0.2), value: appState.showTadoUse)
         .sheet(isPresented: Binding(
             get: { appState.showSettings },
             set: { appState.showSettings = $0 }
