@@ -807,6 +807,72 @@ file every 5 seconds. External messages go to `/tmp/tado-ipc/a2a-inbox/`.
 See [IPCBroker.swift](Sources/Tado/Services/IPCBroker.swift) and
 [IPCMessage.swift](Sources/Tado/Models/IPCMessage.swift).
 
+## Sprint step (Eternal `kind = sprint`)
+
+The Sprint step is a v1.3 addition: an opt-in mode for any Eternal
+run (set `EternalRun.kind = "sprint"` via the New Eternal modal's
+"Kind" picker — third button after General and Performance) that
+treats sprint *methodology* as the optimization target. Each
+iteration the worker proposes ONE rule change to
+`<project>/sprint_rules.txt`, records a measured row in
+`<project>/sprint-data.json`, and runs the gate. The gate computes
+**SprintSuccessScore** via:
+
+```
+score = (points_completed / total_points_planned * 100)
+      + (code_review_passes * 2)
+      - (bugs_found_after_sprint * 10)
+      + (developer_satisfaction_score * 5)
+```
+
+and ratchets the all-time-best baseline at
+`<project>/.tado/sprint-baselines/<safe-name>.json`. **Per-component
+guards (gate-enforced)**: `bugs_found_after_sprint` cannot rise
+above baseline; `code_review_passes` cannot drop below baseline.
+Even a higher composite that breaks either guard regresses.
+
+The architecture mirrors the Performance step exactly:
+
+- **Rust harness**: `tado-core/crates/sprint-suite/` — six
+  subcommands (`detect / measure / score / propose / baseline
+  init|update / explain`) with the stable single-line stdout
+  contract:
+  - `SCORE: PASS composite=<n>`
+  - `SCORE: BASELINE-INIT composite=<n>`
+  - `SCORE: REGRESSION delta=<d> hot=<sub> composite=<n>`
+  - `SCORE: NO-DATA-DETECTED`
+  The `[SCORE-OK] composite=<n>` marker is printed by the bash
+  hook only on PASS / BASELINE-INIT / NO-DATA, never on regression.
+
+- **Bash gate**: `.tado/eternal/hooks/sprint-gate.sh` (canonical
+  literal in `EternalService.swift::sprintGateScript`).
+
+- **Worker skill**: `.claude/skills/eternal-sprint-step/SKILL.md`
+  — auto-discoverable; teaches the worker the formula, per-
+  iteration protocol, and hard rules.
+
+- **Stop hook**: enforces the same-turn pay-back contract — no
+  `[SPRINT-DONE]` / `ETERNAL-DONE` without a preceding `[SCORE-OK]`
+  in the same turn's transcript.
+
+- **State**: `EternalState` carries `sprintCycles`,
+  `lastSprintScore`, `sprintRegressionDelta`, `lastSprintReportPath`
+  + two new `PhaseKind` cases (`sprintPending`, `sprintRegressed`).
+
+- **Architect addendum**: when `kind = sprint`, the architect
+  prompt's `## SPRINT RULES OPTIMIZATION` section seeds
+  `sprint_rules.txt`, `sprint-data.json`, and a reference
+  `prepare.py` scorer in the project root, then writes the
+  formula + baseline target + per-component guards + a five-rung
+  rules-impact stratum (Hygiene → Refinement → Coverage →
+  Reduction → Process → Structural) for the IMPROVE phase.
+
+The contract is intentionally identical-shape to perf-suite: same
+ratcheting baseline, same regression-floor (0.5 score points), same
+bounded history (50 entries), same machine-class drift detection.
+Any agent that knows how to reason about the perf gate already
+knows how to reason about the sprint gate.
+
 ## Performance step (Eternal `kind = perf`)
 
 The Performance step is a v0.19.0 addition: an opt-in mode for any
