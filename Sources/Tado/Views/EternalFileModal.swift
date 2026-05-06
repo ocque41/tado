@@ -232,6 +232,7 @@ struct EternalFileModal: View {
             HStack(spacing: 8) {
                 kindButton(label: "General", value: "general")
                 kindButton(label: "Performance", value: "perf")
+                kindButton(label: "Sprint", value: "sprint")
                 Spacer()
             }
             Text(kindSubtitle)
@@ -242,10 +243,13 @@ struct EternalFileModal: View {
     }
 
     private var kindSubtitle: String {
-        if kind == "perf" {
+        switch kind {
+        case "perf":
             return "Performance step active. Each iteration runs perf-suite (algorithmic complexity, alloc count, critical-path ops, IO syscalls, DB query cost, cross-process roundtrips, cold-start ops, steady-state RSS ratio) and scores against the project's all-time-best baseline at .tado/perf-baselines/<project>.json. The worker MUST clear the perf gate ([PERF-OK]) before printing [SPRINT-DONE] or ETERNAL-DONE. Same-turn pay-back required on regression."
-        } else {
-            return "Default Eternal behavior — the architect designs the brief, the worker iterates per the chosen mode, no perf gate active."
+        case "sprint":
+            return "Sprint rules optimization active. Each iteration proposes ONE change to sprint_rules.txt (the methodology under optimization), records a measured row in sprint-data.json, and runs sprint-gate.sh. The gate computes SprintSuccessScore = (points_completed/total_points_planned*100) + (code_review_passes*2) - (bugs_found_after_sprint*10) + (developer_satisfaction_score*5) and ratchets the all-time-best baseline at .tado/sprint-baselines/<project>.json. Per-component guards: bugs cannot rise; reviews cannot drop. The worker MUST clear the sprint gate ([SCORE-OK]) before printing [SPRINT-DONE] or ETERNAL-DONE."
+        default:
+            return "Default Eternal behavior — the architect designs the brief, the worker iterates per the chosen mode, no gate active."
         }
     }
 
@@ -480,7 +484,7 @@ struct EternalFileModal: View {
         run.skipPermissions = skipPermissions
         run.loopKind = (loopKind == "internal") ? "internal" : "external"
         run.engine = (engine == "codex") ? "codex" : "claude"
-        run.kind = (kind == "perf") ? "perf" : "general"
+        run.kind = ["perf", "sprint"].contains(kind) ? kind : "general"
         // Refresh the default label when the mode flips (user may have
         // opened the modal via "New Mega" then switched to Sprint).
         run.label = EternalRun.defaultLabel(mode: mode, createdAt: run.createdAt)
