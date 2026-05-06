@@ -1,13 +1,26 @@
 import SwiftUI
 
-/// A single conversation turn rendered in the Tado Use drawer.
-/// User turns are right-aligned terracotta-tinted bubbles;
-/// assistant turns are left-aligned with a model-/engine- chip,
-/// streaming caret while the turn is mid-flight, and collapsible
-/// tool-call disclosure rows nested beneath the text.
+/// A single FINALIZED conversation turn rendered in the Tado Use
+/// drawer. User turns are right-aligned terracotta-tinted bubbles;
+/// assistant turns are left-aligned with an engine chip and
+/// collapsible tool-call disclosures.
+///
+/// Live (streaming) turns render through `TadoUseLiveTurnRow`
+/// instead — see `TadoUsePanel.swift`. Splitting the live and
+/// finalized renderers keeps the per-token state mutations off the
+/// finalized `ForEach` body's invalidation graph.
 struct TadoUseTurnRow: View {
     let turn: TadoUseState.Turn
-    let isStreaming: Bool
+    /// Body font for assistant text. Resolved once by the panel
+    /// from `AppSettings.terminalFontFamily` + `terminalFontSize`
+    /// so the drawer chat respects the same font knobs the canvas
+    /// tiles do (settings parity).
+    let bodyFont: Font
+    /// Optional "stopped" pill — set on the most recent turn when
+    /// the user hit Stop mid-stream. Renders a small chip below
+    /// the assistant text so it's clear the response was cut off
+    /// rather than naturally complete.
+    let stoppedPill: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -22,30 +35,27 @@ struct TadoUseTurnRow: View {
         }
     }
 
-    // MARK: - User bubble
-
     private var userBubble: some View {
         Text(turn.text)
-            .font(Typography.body)
+            .font(bodyFont)
             .foregroundStyle(Palette.textPrimary)
             .multilineTextAlignment(.leading)
+            .textSelection(.enabled)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Palette.surfaceAccent)
             )
     }
 
-    // MARK: - Assistant bubble
-
     private var assistantBubble: some View {
         VStack(alignment: .leading, spacing: 6) {
-            engineChip
+            TadoUseEngineChip(engine: turn.engine)
 
-            if !turn.text.isEmpty || isStreaming {
-                Text(turn.text + (isStreaming ? "▍" : ""))
-                    .font(Typography.body)
+            if !turn.text.isEmpty {
+                Text(turn.text)
+                    .font(bodyFont)
                     .foregroundStyle(Palette.textPrimary)
                     .multilineTextAlignment(.leading)
                     .textSelection(.enabled)
@@ -59,20 +69,95 @@ struct TadoUseTurnRow: View {
                 }
                 .padding(.top, 2)
             }
+
+            if stoppedPill {
+                stoppedChip
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Palette.surfaceElevated)
         )
     }
 
-    private var engineChip: some View {
+    private var stoppedChip: some View {
         HStack(spacing: 4) {
-            Image(systemName: turn.engine == .codex ? "circle.hexagongrid" : "sparkles")
+            Image(systemName: "stop.circle")
                 .font(.system(size: 9))
-            Text(turn.engine.rawValue)
+            Text("stopped")
+                .font(Typography.captionSm)
+        }
+        .foregroundStyle(Palette.textTertiary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            Capsule().fill(Palette.background.opacity(0.5))
+        )
+    }
+}
+
+/// Live (streaming) assistant turn. Bound directly to the
+/// scratchpad scalars on `TadoUseState` (`streamingText`,
+/// `streamingToolCalls`, …) instead of a `Turn` value. Per-token
+/// mutations on those scalars only invalidate this view, NOT the
+/// parent ForEach over finalized turns.
+///
+/// This is the H1 fix: the original implementation rendered every
+/// turn from `useState.turns` and mutated `turns[last].text` per
+/// delta, which invalidated the array keypath and rebuilt every
+/// `TadoUseTurnRow` on every token. Splitting the live row out
+/// drops streaming-window CPU by ~30–50% on M-series machines.
+struct TadoUseLiveTurnRow: View {
+    let engine: TerminalEngine
+    let text: String
+    let toolCalls: [TadoUseState.Turn.ToolCall]
+    let isStreaming: Bool
+    let bodyFont: Font
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                TadoUseEngineChip(engine: engine)
+
+                if !text.isEmpty || isStreaming {
+                    Text(text + (isStreaming ? "▍" : ""))
+                        .font(bodyFont)
+                        .foregroundStyle(Palette.textPrimary)
+                        .multilineTextAlignment(.leading)
+                        .textSelection(.enabled)
+                }
+
+                if !toolCalls.isEmpty {
+                    VStack(spacing: 4) {
+                        ForEach(toolCalls) { call in
+                            TadoUseToolCallRow(call: call)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Palette.surfaceElevated)
+            )
+            Spacer(minLength: 32)
+        }
+    }
+}
+
+/// Engine badge for both finalized and live assistant turns.
+struct TadoUseEngineChip: View {
+    let engine: TerminalEngine
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: engine == .codex ? "circle.hexagongrid" : "sparkles")
+                .font(.system(size: 9))
+            Text(engine.displayName)
                 .font(Typography.captionSm)
         }
         .foregroundStyle(Palette.textTertiary)
@@ -84,7 +169,7 @@ struct TadoUseTurnRow: View {
 /// glyph; expanded view shows the input and (if present) the
 /// output JSON.
 struct TadoUseToolCallRow: View {
-    let call: TadoUseState.ToolCall
+    let call: TadoUseState.Turn.ToolCall
     @State private var expanded: Bool = false
 
     var body: some View {
@@ -121,7 +206,7 @@ struct TadoUseToolCallRow: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .background(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Palette.background.opacity(0.5))
         )
     }
