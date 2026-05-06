@@ -1728,7 +1728,8 @@ enum ProcessSpawner {
         skipPermissions: Bool,
         codexPreFlags: [String]? = nil,
         codexPostFlags: [String]? = nil,
-        perfMode: Bool = false
+        perfMode: Bool = false,
+        sprintMode: Bool = false
     ) -> [String: String] {
         var env: [String: String] = [
             // Per-run scope key. Every hook script uses this to resolve
@@ -2444,6 +2445,90 @@ enum ProcessSpawner {
           python →  pytest --benchmark-only && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
           go     →  go test -bench=. -benchmem ./... && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
           generic→  hyperfine '<entry-cmd>' --warmup 3 && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+
+        """
+    }
+
+    /// Architect addendum injected when `EternalRun.kind == "sprint"`.
+    /// Tells the architect to seed sprint_rules.txt (methodology under
+    /// optimization), sprint-data.json (measured outcome rows), and a
+    /// reference prepare.py scorer; then write a `## SPRINT RULES
+    /// OPTIMIZATION` section in crafted.md.
+    private static func eternalSprintArchitectAddendum(
+        projectName: String,
+        projectRoot: String,
+        runDir: String,
+        isSprintMode: Bool
+    ) -> String {
+        let modeNote = isSprintMode
+            ? "Each sprint's TASK should drive ONE rule change in sprint_rules.txt. EVALUATE invokes sprint-gate.sh and stores the SprintSuccessScore + per-component contributions into metrics.jsonl. IMPROVE re-reads the last 5 metric lines + sprint-proposals.md and picks the next rule to refine, retire, or add."
+            : "Mega's checklist should be ordered by rules-impact stratum — safest (hygiene, retire stale rules) first, most structural (introduce new ceremonies) last. Each checklist item ends in a sprint-gate.sh invocation that must clear before ticking the box."
+        return """
+
+        ═══════════════════════════════════════════════════════════
+        SPRINT STEP MODE — additional architect responsibilities
+        ═══════════════════════════════════════════════════════════
+        This run was created with kind=sprint. The user wants their \
+        sprint methodology turned into an engineering discipline with \
+        measurable improvement per iteration. Your crafted.md must \
+        include a `## SPRINT RULES OPTIMIZATION` section.
+
+        STEP S0 — Seed the optimization artifacts in the project root:
+          1. `\(projectRoot)/sprint_rules.txt` — the methodology under \
+             optimization. If it exists, leave it alone. If not, write \
+             a baseline of 4–6 rules covering planning, in-sprint \
+             discipline, code review, retro hygiene.
+          2. `\(projectRoot)/sprint-data.json` — measured outcomes per \
+             sprint. Either array of objects or single object. Each \
+             object has: tickets_completed, points_completed, \
+             total_points_planned, bugs_found_after_sprint, \
+             code_review_passes, developer_satisfaction_score (1–5), \
+             optional `weights` override of \
+             {velocity:1, code_review_passes:2, bugs_penalty:10, \
+             satisfaction:5}. Seed with one row representing the current \
+             sprint under existing rules — that becomes the baseline.
+          3. `\(projectRoot)/prepare.py` — reference Python scorer the \
+             user can run independently. Reads sprint-data.json, prints \
+             SprintSuccessScore. Under 30 lines, no external deps. The \
+             gate (sprint-suite) is authoritative; prepare.py is for \
+             sanity checks.
+
+        STEP S1 — Add a `## SPRINT RULES OPTIMIZATION` section to \
+        crafted.md with:
+          • **Methodology file:** `\(projectRoot)/sprint_rules.txt`
+          • **Data file:** `\(projectRoot)/sprint-data.json`
+          • **Reference scorer:** `\(projectRoot)/prepare.py`
+          • **Formula:** \
+            `score = (points_completed / total_points_planned * 100) \
+            + (code_review_passes * 2) - (bugs_found_after_sprint * 10) \
+            + (developer_satisfaction_score * 5)`
+          • **Weights:** velocity 1, code_review_passes 2, bugs_penalty \
+            10, satisfaction 5.
+          • **Baseline composite:** read from \
+            `\(projectRoot)/.tado/sprint-baselines/<safe-project-name>.json` \
+            after the first SCORE: BASELINE-INIT.
+          • **Per-component guards:** bugs_found_after_sprint cannot \
+            rise above baseline; code_review_passes cannot drop below \
+            baseline.
+          • **Satisfaction threshold:** composite above which printing \
+            `ETERNAL-DONE` is OK (default: `baseline_composite + 30`).
+          • **Mode hint:** \(modeNote)
+
+        STEP S2 — Add to the `## Hard rules` section:
+          • Never edit `prepare.py` or the formula in the same iteration \
+            where it produces the metric.
+          • Never inflate sprint-data.json rows with unrealistic values.
+          • Never print `\(isSprintMode ? "[SPRINT-DONE]" : "ETERNAL-DONE")` \
+            without `[SCORE-OK]` already in the same turn's transcript.
+
+        RULES-IMPACT STRATUM (rungs to recommend in IMPROVE, safest → \
+        most structural):
+          Stratum 0  Hygiene             (retire stale rules, fix typos, clarify wording)
+          Stratum 1  Refinement          (tighten existing rules — add quantitative thresholds)
+          Stratum 2  Coverage            (add a rule for an uncovered failure mode)
+          Stratum 3  Reduction           (combine two overlapping rules)
+          Stratum 4  Process             (new ceremony — async-review window, standup-only-for-blocked)
+          Stratum 5  Structural          (replace one process with another — squad model, swarming)
 
         """
     }
