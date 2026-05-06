@@ -309,7 +309,8 @@ struct MetalTerminalTileView: View {
                 skipPermissions: session.eternalSkipPermissionsFlag,
                 codexPreFlags: session.eternalCodexPreFlags,
                 codexPostFlags: session.eternalCodexPostFlags,
-                perfMode: (session.eternalKind == "perf")
+                perfMode: (session.eternalKind == "perf"),
+                sprintMode: (session.eternalKind == "sprint")
             )
             for (k, v) in eternalEnv { envDict[k] = v }
         }
