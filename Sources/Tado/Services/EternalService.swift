@@ -493,6 +493,44 @@ enum EternalService {
         fi
     fi
 
+    # ─── Sprint gate enforcement (kind == "sprint") ────────────────────
+    # Mirror of the perf-gate block above, scoped to TADO_SPRINT_MODE.
+    if [ "${TADO_SPRINT_MODE:-0}" = "1" ] && [ -n "$LAST" ]; then
+        SCORE_OK_LINE="$(echo "$LAST" | grep -nF -- "[SCORE-OK]" | tail -1 | cut -d: -f1)"
+        DONE_LINE="$(echo "$LAST" | grep -nFx -- "$DONE_MARKER" | tail -1 | cut -d: -f1)"
+        SPRINT_DONE_LINE="$(echo "$LAST" | grep -nFx -- "$SPRINT_MARKER" | tail -1 | cut -d: -f1)"
+        TERMINAL_LINE=""
+        if [ -n "$DONE_LINE" ] && { [ -z "$SPRINT_DONE_LINE" ] || [ "$DONE_LINE" -gt "$SPRINT_DONE_LINE" ]; }; then
+            TERMINAL_LINE="$DONE_LINE"
+        elif [ -n "$SPRINT_DONE_LINE" ]; then
+            TERMINAL_LINE="$SPRINT_DONE_LINE"
+        fi
+
+        if [ -n "$TERMINAL_LINE" ]; then
+            if [ -z "$SCORE_OK_LINE" ] || [ "$SCORE_OK_LINE" -gt "$TERMINAL_LINE" ]; then
+                tmp="$(mktemp 2>/dev/null)" && jq '.phase = "sprintPending" | .lastActivityAt = (now|floor)' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+                echo "exit path: sprint gate marker-out-of-order block" >> "$LOG" 2>/dev/null || true
+                emit_block_and_exit "[Tado Eternal · sprint gate] You printed $DONE_MARKER or $SPRINT_MARKER without first clearing the sprint gate. Run \`bash $RUN_DIR/../../hooks/sprint-gate.sh\` (or its absolute path: $ROOT/.tado/eternal/hooks/sprint-gate.sh). If it prints \`SCORE: PASS\`, copy the \`[SCORE-OK] composite=...\` line into your output, then re-print the iteration marker. If it prints \`SCORE: REGRESSION\`, you MUST in this same turn either revert the offending diff with \`git revert HEAD --no-edit\` or apply ONE proposal from $RUN_DIR/sprint-proposals.md, then re-run the gate. Only print the iteration marker after [SCORE-OK] is in this turn's output."
+            fi
+        elif [ -n "$SCORE_OK_LINE" ]; then
+            REPORT_JSON="$RUN_DIR/sprint-report.json"
+            COMPOSITE="$(jq -r '.composite // null' "$REPORT_JSON" 2>/dev/null || echo "null")"
+            if [ "$COMPOSITE" = "null" ] || [ -z "$COMPOSITE" ]; then
+                COMPOSITE="$(echo "$LAST" | grep -F -- "[SCORE-OK]" | tail -1 | sed -nE 's/.*composite=(-?[0-9.]+).*/\1/p')"
+            fi
+            if [ -z "$COMPOSITE" ]; then COMPOSITE="0"; fi
+            tmp="$(mktemp 2>/dev/null)" && jq --argjson c "$COMPOSITE" --arg p "$REPORT_JSON" '
+                .sprintCycles = ((.sprintCycles // 0) + 1)
+                | .lastSprintScore = $c
+                | .sprintRegressionDelta = null
+                | .lastSprintReportPath = $p
+                | .phase = "working"
+                | .lastActivityAt = (now|floor)
+            ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "exit path: sprint gate cycle bump (mid-iteration)" >> "$LOG" 2>/dev/null || true
+        fi
+    fi
+
     # Completion marker — whole-line match only. Substring matches are
     # false-positives ("ETERNAL-DONE only after all phases" shouldn't stop).
     if [ -n "$LAST" ] && echo "$LAST" | grep -qFx -- "$DONE_MARKER" 2>/dev/null; then
