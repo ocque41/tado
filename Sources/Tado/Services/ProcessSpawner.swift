@@ -1906,6 +1906,7 @@ enum ProcessSpawner {
         If you get stuck on a single-turn problem, write what you tried to progress.md and move \
         on to the next independent unit of work; revisit the stuck one later with fresh context.
         \(perfStep)
+        \(sprintStep)
 
         \(eternalNonStopHygiene(engine: engine, runDir: runDir))
         """
