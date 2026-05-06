@@ -2034,10 +2034,12 @@ enum ProcessSpawner {
         sprintMarker: String,
         runID: UUID,
         engine: TerminalEngine = .claude,
-        perfMode: Bool = false
+        perfMode: Bool = false,
+        sprintMode: Bool = false
     ) -> String {
         let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
         let perfStep = perfMode ? eternalPerfStepBlock(runDir: runDir, marker: marker, sprintMarker: sprintMarker) : ""
+        let sprintStep = sprintMode ? eternalSprintStepBlock(runDir: runDir, marker: marker, sprintMarker: sprintMarker) : ""
         let evalLine = perfMode
             ? "2. EVAL    — run the evaluation from the TASK/EVALUATE sections AND `bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh`. Read the gate's output. Append one line to\n                       \(runDir)/metrics.jsonl in this exact shape, with `metric` set to the perf composite and `components` carrying every per-dimension normalized score:\n                       {\"sprint\": N, \"timestamp\": \"<iso>\", \"metric\": <perf-composite-or-task-metric>, \"components\": {\"algo_complexity\": ..., \"alloc_per_op\": ...}, \"note\": \"<one-liner>\"}"
             : "2. EVAL    — run the evaluation from the TASK/EVALUATE sections. Append one line to\n                       \(runDir)/metrics.jsonl in this exact shape:\n                       {\"sprint\": N, \"timestamp\": \"<iso>\", \"metric\": <number-or-short-string>, \"note\": \"<one-liner>\"}"
@@ -2069,6 +2071,7 @@ enum ProcessSpawner {
         Don't ask clarifying questions — decide and proceed.
         Don't summarise at the end of turns — metrics.jsonl and progress.md are the summary.
         \(perfStep)
+        \(sprintStep)
 
         \(eternalNonStopHygiene(engine: engine, runDir: runDir))
         """
