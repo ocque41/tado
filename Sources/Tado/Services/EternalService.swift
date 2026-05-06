@@ -349,6 +349,7 @@ enum EternalService {
         ("post-tool.sh", postToolScript),
         ("eternal-loop.sh", workerLoopScript),
         ("perf-gate.sh", perfGateScript),
+        ("sprint-gate.sh", sprintGateScript),
     ]
 
     // MARK: - Hook bodies
