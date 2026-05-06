@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Sprint Step (`EternalRun.kind = "sprint"`)** — a third kind of
+  Eternal run alongside `general` and `perf`. Mirrors the perf gate's
+  same-turn pay-back contract but optimizes a project's *sprint
+  methodology* instead of its code. Inspired by an external "sprint
+  rules optimizer" prompt: turn the standard-issue retrospective
+  ("we sort of had a good sprint") into an engineering discipline
+  ("we hit SprintSuccessScore = 124.3 vs 117.0 last week, ratchet
+  locked").
+  - Adds [`tado-core/crates/sprint-suite/`](tado-core/crates/sprint-suite/)
+    — a new Rust workspace member modeled on perf-suite. Six
+    subcommands (`detect / measure / score / propose / baseline
+    init|update / explain`) with the same single-line stdout
+    contract the bash gate parses:
+        `SCORE: PASS composite=<n>`
+        `SCORE: BASELINE-INIT composite=<n>`
+        `SCORE: REGRESSION delta=<d> hot=<sub> composite=<n>`
+        `SCORE: NO-DATA-DETECTED`
+    The `[SCORE-OK] composite=<n>` marker is printed by the bash
+    hook only on PASS / BASELINE-INIT / NO-DATA, never on regression.
+  - Implements the **SprintSuccessScore formula** verbatim from the
+    user's original prompt:
+        `score = (points_completed / total_points_planned * 100)
+              + (code_review_passes * 2)
+              - (bugs_found_after_sprint * 10)
+              + (developer_satisfaction_score * 5)`
+    Weights are overridable per-row via an optional `weights` field
+    in `sprint-data.json`. Per-sprint scores cap at `[-200, 500]`
+    so a junk row can't poison the running ratchet.
+  - **Per-component minimum guard**: `bugs_found_after_sprint`
+    cannot rise above baseline; `code_review_passes` cannot drop
+    below baseline. Even a higher composite that breaks either
+    guard still REGRESSES, identical-shape to perf-suite's
+    PER_COMPONENT_MIN_GUARD.
+  - **Ratcheting per-project baseline** at
+    `<project>/.tado/sprint-baselines/<safe-name>.json`. Updated
+    only on PASS via `tado_settings::write_json` (atomic store:
+    temp + fsync + rename). History bounded at 50 entries. Machine-
+    class drift detection (apple-silicon-macos / intel-macos /
+    linux / windows) — protects shared-team baselines from silent
+    drift across machines; override via `TADO_SPRINT_ALLOW_DRIFT=1`.
+  - **Bash gate** at `.tado/eternal/hooks/sprint-gate.sh` (mirrored
+    canonical in `EternalService.swift::sprintGateScript`) — fail-
+    safe, no `set -e`, three sub-cases (PASS/BASELINE-INIT,
+    REGRESSION, NO-DATA). On regression auto-generates
+    `sprint-proposals.md` with up to 8 candidate rule refinements
+    chosen by which sub-metric regressed (bug spike → reviewer rule;
+    velocity drop → task-splitting; review drop → async-review
+    window; satisfaction drop → meeting-discipline rules).
+  - **Worker skill** at
+    [`.claude/skills/eternal-sprint-step/SKILL.md`](.claude/skills/eternal-sprint-step/SKILL.md)
+    — same shape as the v0.19 perf step skill. Tells the worker
+    when to read `sprint_rules.txt` + `sprint-data.json`, the
+    formula, the per-iteration protocol (propose ONE rule change →
+    edit rules → record measured row → run gate → branch on
+    result), and the hard rules (never edit `prepare.py` / formula
+    in the same iteration as it scores; never inflate data rows to
+    game the gate; never print `[SPRINT-DONE]` / `ETERNAL-DONE`
+    without `[SCORE-OK]` already in this turn's transcript).
+  - **Architect addendum** generates a `## SPRINT RULES OPTIMIZATION`
+    section in `crafted.md` with the active formula, baseline
+    composite, per-component guards, and a five-rung *rules-impact
+    stratum* for IMPROVE recommendations: Hygiene → Refinement →
+    Coverage → Reduction → Process → Structural. Architect also
+    seeds `sprint_rules.txt`, `sprint-data.json`, and a reference
+    `prepare.py` scorer in the project root on first run.
+  - **State surface**: `EternalState` gains four sprint fields
+    (`sprintCycles`, `lastSprintScore`, `sprintRegressionDelta`,
+    `lastSprintReportPath`) plus two new `PhaseKind` cases
+    (`sprintPending`, `sprintRegressed`) — all optional / default-
+    zero so old `state.json` files decode unchanged.
+  - 12/12 sprint-suite unit tests pass. `cargo build --release -p
+    sprint-suite` lands a 4.6 MB single-binary suite.
+
 ## [1.0.0] - 2026-05-06
 
 Tado v1.0.0 — the unified release. v1 takes everything Tado learned
