@@ -1873,6 +1873,7 @@ enum EternalService {
         let workerEngine = TerminalEngine(rawValue: run.engine) ?? .claude
         let prompt: String
         let perfMode = (run.kind == "perf")
+        let sprintMode = (run.kind == "sprint")
         if run.mode == "sprint" {
             prompt = ProcessSpawner.eternalSprintPrompt(
                 projectName: project.name,
@@ -1881,7 +1882,8 @@ enum EternalService {
                 sprintMarker: "[SPRINT-DONE]",
                 runID: run.id,
                 engine: workerEngine,
-                perfMode: perfMode
+                perfMode: perfMode,
+                sprintMode: sprintMode
             )
         } else {
             prompt = ProcessSpawner.eternalMegaPrompt(
@@ -1890,7 +1892,8 @@ enum EternalService {
                 marker: run.completionMarker,
                 runID: run.id,
                 engine: workerEngine,
-                perfMode: perfMode
+                perfMode: perfMode,
+                sprintMode: sprintMode
             )
         }
 
