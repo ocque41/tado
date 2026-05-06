@@ -1207,6 +1207,123 @@ enum EternalService {
     esac
     """##
 
+    // The sprint gate.
+    //
+    // Invoked from the worker prompt when an Eternal run was created
+    // with kind=sprint. Reads the project's `sprint-data.json`,
+    // computes the SprintSuccessScore via sprint-suite, scores
+    // against `.tado/sprint-baselines/<safe-name>.json`, and either:
+    //   - PASS / BASELINE-INIT: updates the baseline atomically and
+    //     prints `[SCORE-OK] composite=<n>`.
+    //   - REGRESSION: refuses to update the baseline, generates a
+    //     fresh `sprint-proposals.md`, sets state.phase=sprintRegressed,
+    //     and prints `SCORE: REGRESSION delta=<d> hot=<sub>`.
+    //   - NO-DATA-DETECTED: no sprint-data.json yet; gate is a free
+    //     pass.
+    //
+    // Stdout contract identical to perf-gate.sh in shape, prefix
+    // `SCORE:` instead of `PERF:`. FAIL-SAFE — no `set -e`.
+    private static let sprintGateScript = ##"""
+    #!/bin/bash
+    # FAIL-SAFE — no set -e / pipefail. See stop.sh comment.
+
+    ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+    RUN_ID="${TADO_ETERNAL_RUN_ID:-}"
+    if [ -z "$RUN_ID" ]; then
+        echo "SCORE: NO-RUN — sprint-gate.sh requires TADO_ETERNAL_RUN_ID env var" >&2
+        exit 0
+    fi
+
+    if [ "${TADO_SPRINT_MODE:-0}" != "1" ]; then
+        echo "SCORE: NOT-SPRINT-MODE"
+        exit 0
+    fi
+
+    RUN_DIR="$ROOT/.tado/eternal/runs/$RUN_ID"
+    REPORT="$RUN_DIR/sprint-report.json"
+    PROPOSALS="$RUN_DIR/sprint-proposals.md"
+    STATE="$RUN_DIR/state.json"
+    LOG="$RUN_DIR/sprint-gate.log"
+    PROJECT_NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9_.-' '_' | head -c 64)"
+    BASELINE_DIR="$ROOT/.tado/sprint-baselines"
+    BASELINE="$BASELINE_DIR/$PROJECT_NAME.json"
+
+    mkdir -p "$RUN_DIR" "$BASELINE_DIR" 2>/dev/null || true
+    { echo "---"; date -u +"%FT%TZ sprint-gate invoked (run=$RUN_ID, project=$PROJECT_NAME)"; } >> "$LOG" 2>/dev/null || true
+
+    if [ -n "${TADO_SPRINT_SUITE_BIN:-}" ] && [ -x "$TADO_SPRINT_SUITE_BIN" ]; then
+        SUITE_BIN=("$TADO_SPRINT_SUITE_BIN")
+    elif command -v sprint-suite >/dev/null 2>&1; then
+        SUITE_BIN=(sprint-suite)
+    else
+        TADO_REPO="${TADO_REPO_ROOT:-/Users/miguel/Documents/tado}"
+        if [ -d "$TADO_REPO/tado-core" ]; then
+            SUITE_BIN=(cargo run --quiet --release --manifest-path "$TADO_REPO/tado-core/Cargo.toml" -p sprint-suite --)
+        else
+            echo "SCORE: NO-RUNTIME — sprint-suite not found (set TADO_SPRINT_SUITE_BIN or install sprint-suite to PATH)" >&2
+            exit 0
+        fi
+    fi
+
+    tmp="$(mktemp 2>/dev/null)" && jq '.phase = "sprintPending" | .lastActivityAt = (now|floor)' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+
+    "${SUITE_BIN[@]}" measure --project-root "$ROOT" --run-dir "$RUN_DIR" --output "$REPORT" >> "$LOG" 2>&1
+    MEASURE_EXIT=$?
+    if [ "$MEASURE_EXIT" != "0" ]; then
+        echo "SCORE: MEASURE-FAILED exit=$MEASURE_EXIT" >&2
+        tmp="$(mktemp 2>/dev/null)" && jq '.phase = "sprintRegressed" | .sprintRegressionDelta = 1.0' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+        exit 0
+    fi
+
+    SCORE_LINE="$("${SUITE_BIN[@]}" score --report "$REPORT" --baseline "$BASELINE" 2>>"$LOG")"
+    SCORE_EXIT=$?
+    echo "$SCORE_LINE" >> "$LOG" 2>/dev/null || true
+
+    case "$SCORE_LINE" in
+        "SCORE: PASS"*|"SCORE: BASELINE-INIT"*)
+            COMPOSITE="$(echo "$SCORE_LINE" | sed -nE 's/.*composite=(-?[0-9.]+).*/\1/p')"
+            if [ -z "$COMPOSITE" ]; then COMPOSITE="0"; fi
+            if echo "$SCORE_LINE" | grep -q "BASELINE-INIT"; then
+                "${SUITE_BIN[@]}" baseline init --report "$REPORT" --baseline "$BASELINE" >> "$LOG" 2>&1
+            else
+                "${SUITE_BIN[@]}" baseline update --report "$REPORT" --baseline "$BASELINE" >> "$LOG" 2>&1
+            fi
+            tmp="$(mktemp 2>/dev/null)" && jq --argjson c "$COMPOSITE" --arg p "$REPORT" '
+                .sprintRegressionDelta = null
+                | .lastSprintScore = $c
+                | .lastSprintReportPath = $p
+                | .phase = "working"
+            ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "$SCORE_LINE"
+            echo "[SCORE-OK] composite=$COMPOSITE"
+            exit 0
+            ;;
+        "SCORE: REGRESSION"*)
+            DELTA="$(echo "$SCORE_LINE" | sed -nE 's/.*delta=(-?[0-9.]+).*/\1/p')"
+            if [ -z "$DELTA" ]; then DELTA="0"; fi
+            tmp="$(mktemp 2>/dev/null)" && jq --argjson d "$DELTA" --arg p "$REPORT" '
+                .sprintRegressionDelta = $d
+                | .lastSprintReportPath = $p
+                | .phase = "sprintRegressed"
+            ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            "${SUITE_BIN[@]}" propose --project-root "$ROOT" --report "$REPORT" --output "$PROPOSALS" --cap 8 >> "$LOG" 2>&1
+            echo "$SCORE_LINE"
+            echo "Proposals written to $PROPOSALS"
+            exit 0
+            ;;
+        "SCORE: NO-DATA-DETECTED"*)
+            tmp="$(mktemp 2>/dev/null)" && jq '.phase = "working" | .sprintRegressionDelta = null' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "$SCORE_LINE"
+            echo "[SCORE-OK] composite=0.000"
+            exit 0
+            ;;
+        *)
+            echo "SCORE: UNKNOWN — score returned exit=$SCORE_EXIT line='$SCORE_LINE'" >&2
+            exit 0
+            ;;
+    esac
+    """##
+
     // MARK: - .claude/settings.json merge
 
     /// Hook command strings are presence-gated by the per-run `active` marker
