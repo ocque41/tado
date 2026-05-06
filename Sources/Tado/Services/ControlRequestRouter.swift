@@ -165,12 +165,26 @@ enum ControlRequestRouter {
             )
 
         default:
-            // Tado Use bridge — six in-process tools the drawer's
-            // headless agent calls to drive Tado's SwiftUI surface.
-            // Kept behind a Set check (not a static `case` list) so
-            // the bridge can grow without touching this file.
+            // Tado Use bridge — six core tools the drawer's headless
+            // agent calls to drive Tado's SwiftUI surface.
             if TadoUseBridgeHandlers.kinds.contains(request.kind) {
                 return TadoUseBridgeHandlers.handle(
+                    kind: request.kind,
+                    requestID: request.requestID,
+                    payload: payload,
+                    terminalManager: terminalManager,
+                    modelContext: modelContext,
+                    appState: appState
+                )
+            }
+            // Tado Use autonomous tools — todos, eternals (with
+            // auto-accept), dispatches, bootstraps, settings, Dome
+            // ingestion, kanban, extensions, notifications, tile
+            // control. Same fall-through pattern, separate handler
+            // file so the surface can grow without bloating the
+            // router.
+            if TadoUseAutonomousHandlers.kinds.contains(request.kind) {
+                return TadoUseAutonomousHandlers.handle(
                     kind: request.kind,
                     requestID: request.requestID,
                     payload: payload,
