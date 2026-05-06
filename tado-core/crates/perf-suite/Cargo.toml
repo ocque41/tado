@@ -1,0 +1,71 @@
+# perf-suite — measurable performance evaluation for the Tado Eternal
+# Performance step.
+#
+# Modeled after `dome-eval`. Where dome-eval scores retrieval *quality*,
+# perf-suite scores *application performance* of whatever project an
+# Eternal worker is editing — auto-detecting the stack (Rust, Swift,
+# Node, Python, Go, polyglot) and measuring eight curated dimensions
+# (algo complexity, alloc count, critical-path ops, IO syscalls, DB
+# query cost, cross-process roundtrips, cold-start ops, steady-state
+# RSS ratio).
+#
+# The CLI is invoked from `.tado/eternal/hooks/perf-gate.sh`, which is
+# called by Eternal workers in the EVAL phase (sprint mode) or as a
+# pre-marker step (mega mode) when `EternalRun.kind == "perf"`. The
+# gate blocks `[SPRINT-DONE]` / `ETERNAL-DONE` until the suite either
+# PASSes or the worker pays back the regression in the same turn.
+#
+# Three contracts kept stable across releases:
+#   1. `score` subcommand stdout is exactly ONE line:
+#        "PERF: PASS composite=<n>"
+#        "PERF: REGRESSION delta=<d> hot=<sub>"
+#        "PERF: BASELINE-INIT composite=<n>"
+#        "PERF: NO-STACK-DETECTED"
+#        "PERF: CORRECTNESS-FAILED <stack> <exit-code>"
+#      The `[PERF-OK] composite=<n>` marker is printed by the bash hook
+#      after consuming this line — the suite itself never prints the
+#      marker.
+#   2. The composite score is in `[0, 2]`. 1.0 = matches baseline.
+#      Per-component normalized scores are also clamped to `[0, 2]` so
+#      one massive win cannot mask other regressions.
+#   3. The per-component minimum guard requires `min(component_i /
+#      baseline_i) >= 0.85` after direction-flip. A composite above 1.0
+#      with one component below 0.85 still REGRESSES.
+#
+# All atomic file IO routes through `tado-settings::write_json` so the
+# project-wide write barrier (temp + fsync + rename) is preserved. The
+# crate never writes outside the project root or the per-run dir.
+
+[package]
+name = "perf-suite"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Measurable performance evaluation harness for Tado's Eternal Performance step."
+
+[[bin]]
+name = "perf-suite"
+path = "src/main.rs"
+
+[lib]
+name = "perf_suite"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+regex = "1"
+tado-settings = { path = "../tado-settings" }
+
+[dev-dependencies]
+# Criterion drives perf-suite's own self-bench (under 30s budget) so
+# the suite is itself measured by the shape it imposes on others.
+criterion = "0.5"
+
+[[bench]]
+name = "self_bench"
+harness = false

@@ -53,6 +53,14 @@ struct ContentView: View {
                         .opacity(appState.currentView == .extensions ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .extensions)
 
+                    // Details — top-level live status dashboard reached
+                    // by clicking the Tado wordmark. Stays mounted like
+                    // the others so the 2 s polling Task and EventBus
+                    // observation stay warm across view switches.
+                    DetailsView()
+                        .opacity(appState.currentView == .details ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .details)
+
                     // Non-blocking banner overlay. Sits on top of whatever
                     // page is active; hit-testing limited to visible pills
                     // so it doesn't eat clicks on the canvas/todos below.
@@ -188,6 +196,17 @@ struct ContentView: View {
         let state = appState
         terminalManager.ipcBroker?.onSpawnRequest = { request in
             ContentView.handleSpawnRequest(request, terminalManager: manager, modelContext: context, appState: state)
+        }
+        // Coordinator-driven Unix socket. Same shape as
+        // onSpawnRequest — we capture the SwiftUI environment values
+        // and route through `ControlRequestRouter.handle`.
+        terminalManager.ipcBroker?.controlSocket.onRequest = { request in
+            ControlRequestRouter.handle(
+                request: request,
+                terminalManager: manager,
+                modelContext: context,
+                appState: state
+            )
         }
     }
 
@@ -368,13 +387,6 @@ struct ContentView: View {
         EternalService.reconcileActiveFlagsOnLaunch(
             modelContext: modelContext,
             terminalManager: terminalManager
-        )
-        // Start the 15-min watchdog. Idempotent: successive calls cancel
-        // any previous timer and re-schedule from now.
-        EternalWatchdog.shared.start(
-            modelContext: modelContext,
-            terminalManager: terminalManager,
-            appState: appState
         )
     }
 

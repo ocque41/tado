@@ -177,8 +177,32 @@ enum ProjectActionsService {
         for todo in todos where todo.projectID == project.id {
             terminalManager.terminateSessionForTodo(todo.id)
         }
+        // Clean up the perf-baselines directory for this project
+        // before the SwiftData record disappears. The baselines live
+        // under <project-root>/.tado/perf-baselines/ — same scope as
+        // the rest of the per-project Tado state, so deletion lines
+        // up with how Eternal/Dispatch run dirs are handled.
+        cleanupPerfBaselines(for: project)
         modelContext.delete(project)
         try? modelContext.save()
+    }
+
+    /// Remove the perf-baselines directory for a project. Best-
+    /// effort — failures are logged but never block the deletion.
+    /// Called from `deleteProject` and from the Reset Tado data
+    /// flow.
+    static func cleanupPerfBaselines(for project: Project) {
+        let baselineDir = URL(fileURLWithPath: project.rootPath)
+            .appendingPathComponent(".tado")
+            .appendingPathComponent("perf-baselines")
+        if FileManager.default.fileExists(atPath: baselineDir.path) {
+            do {
+                try FileManager.default.removeItem(at: baselineDir)
+                NSLog("ProjectActionsService: removed perf-baselines for \(project.name) at \(baselineDir.path)")
+            } catch {
+                NSLog("ProjectActionsService: failed to remove perf-baselines at \(baselineDir.path): \(error)")
+            }
+        }
     }
 
     // MARK: - Internal helpers

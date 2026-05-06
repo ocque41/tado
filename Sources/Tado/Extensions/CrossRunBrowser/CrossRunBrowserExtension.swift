@@ -32,7 +32,7 @@ enum CrossRunBrowserExtension: AppExtension {
         shortDescription: "One timeline of every Eternal + Dispatch run across every project.",
         iconSystemName: "clock.arrow.2.circlepath",
         version: "0.1.0",
-        defaultWindowSize: ExtensionManifest.Size(width: 900, height: 700),
+        defaultWindowSize: ExtensionManifest.Size(width: 960, height: 640),
         windowResizable: true
     )
 

@@ -36,12 +36,11 @@ struct ProjectTodosSection: View {
     }
 
     var body: some View {
+        // The "TODOS" overline + count + actions are now drawn by
+        // the parent `SectionRail` in `ProjectDetailView`. The body
+        // contributes only the inline new-team form (when armed)
+        // and the INBOX + per-team disclosures.
         VStack(alignment: .leading, spacing: 8) {
-            Text("TODOS")
-                .font(Typography.callout)
-                .tracking(0.6)
-                .foregroundStyle(Palette.textSecondary)
-
             if showNewTeamInProject {
                 newTeamForm
             }
@@ -99,10 +98,10 @@ struct ProjectTodosSection: View {
                 .padding(.vertical, 8)
                 .background(Palette.surface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: DK.radius)
                         .stroke(Palette.divider, lineWidth: 1)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
 
             if !agents.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -155,7 +154,7 @@ struct ProjectTodosSection: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.surfaceAccentSoft)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 }
 
@@ -195,7 +194,7 @@ private struct InboxDisclosureRow: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)
                 .background(isHeaderHovered ? Palette.hoverBackground : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

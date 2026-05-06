@@ -2206,38 +2206,88 @@ enum DomeRpcClient {
         return decode(ContextPackDetail.self, from: json)
     }
 
-    /// One entry on the daemon calendar feed. Mirrors bt-core's
-    /// `calendar_range.entries` shape.
-    struct CalendarEntry: Codable, Identifiable, Equatable {
-        let id: String
-        let kind: String
-        let title: String?
-        let startedAt: String?
-        let finishedAt: String?
-        let plannedAt: String?
-        let status: String?
-        let agent: String?
-        let runId: String?
-        let docId: String?
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case kind
-            case title
-            case startedAt = "started_at"
-            case finishedAt = "finished_at"
-            case plannedAt = "planned_at"
-            case status
-            case agent
-            case runId = "run_id"
-            case docId = "doc_id"
+    /// v0.17 — delete one cached context pack (DB rows + on-disk
+    /// manifest/summary files). Used by the Packs surface ⋯ menu.
+    /// Returns true on success, false on missing pack / daemon down.
+    @discardableResult
+    static func contextDelete(contextID: String) -> Bool {
+        let json = contextID.withCString { idC -> String? in
+            guard let raw = tado_dome_context_delete(idC) else { return nil }
+            defer { tado_string_free(raw) }
+            return String(cString: raw)
         }
+        struct Envelope: Codable { let deleted: Bool }
+        return decode(Envelope.self, from: json)?.deleted ?? false
     }
 
-    /// Result of `calendar_range`. We keep totals raw because the
-    /// bt-core shape evolves.
-    struct CalendarRangeResult: Codable, Equatable {
+    /// One row in the v0.17 daemon calendar feed. The bt-core
+    /// `calendar_range` envelope is denser than the v0.14 binding
+    /// assumed: each entry carries an `entry_type` discriminant
+    /// (`automation` | `agent_run`) plus nested `automation`,
+    /// `occurrence`, `run`, and `evaluation` blocks that hold the
+    /// human-readable title, agent name, status, ratings, and
+    /// timestamps. The v0.14 struct hard-coded `kind/title/started_at`
+    /// at the root level so the JSONDecoder silently rejected every
+    /// row, leaving daemon mode permanently empty. This rewrite
+    /// pulls the fields off of whichever sub-object actually carries
+    /// them, with `entry_type` as the single source of truth for
+    /// dispatch.
+    struct CalendarEntry: Identifiable, Equatable {
+        /// `automation` for scheduler-fired occurrences, `agent_run`
+        /// for terminal-canvas (interactive) sessions. Falls back to
+        /// `unknown` when bt-core ever extends the discriminant
+        /// without bumping our binding.
+        enum Kind: String, Equatable {
+            case automation
+            case agentRun = "agent_run"
+            case unknown
+        }
+
+        let id: String
+        let kind: Kind
+        let title: String
+        /// `entry_type` verbatim — useful for filtering chips or
+        /// debug rendering.
+        let entryType: String
+        let displayStatus: String
+        /// Operator-facing rating bucket; bt-core uses values like
+        /// `excellent`, `good`, `needs_review`, `failed`,
+        /// `heartbeat_missed`, `running`, `scheduled`.
+        let qualityBadge: String?
+        /// `agent_name` from the run, falling back to the
+        /// automation's `executor_config_json.agent_name`.
+        let agent: String?
+        let plannedAt: String?
+        let startedAt: String?
+        let finishedAt: String?
+        let runId: String?
+        let docId: String?
+        /// Quality score (0–1) from the run evaluation row, when one
+        /// landed. `nil` for occurrences that haven't completed.
+        let qualityScore: Double?
+        /// Number of human interventions during the run. Only
+        /// populated for terminal-canvas runs that emitted a
+        /// framework-metrics artifact.
+        let interventionCount: Int?
+        /// Framework follow accuracy as a percentage (0–100). Only
+        /// populated for terminal-canvas runs that emitted metrics.
+        let frameworkAccuracyPercent: Double?
+        /// Short summary line — the run's `summary` for canvas
+        /// sessions, the automation's `prompt_template` for
+        /// scheduled work.
+        let summary: String?
+    }
+
+    /// Top-level result of `calendar_range`. Keeps the raw entries
+    /// plus the bt-core summary block (`succeeded`, `failed`,
+    /// `active`, `terminal_canvas_entries`, `framework_accuracy_average_percent`).
+    struct CalendarRangeResult: Equatable {
         let entries: [CalendarEntry]
+        let summarySucceeded: Int
+        let summaryFailed: Int
+        let summaryActive: Int
+        let summaryTerminalCanvasEntries: Int
+        let summaryFrameworkAccuracyAverage: Double?
     }
 
     // MARK: - v0.15 Suggestions
@@ -2327,7 +2377,96 @@ enum DomeRpcClient {
                 }
             }
         }
-        return decode(CalendarRangeResult.self, from: json)
+        return parseCalendarRange(json)
+    }
+
+    /// Parse the raw `calendar_range` JSON envelope into a
+    /// `CalendarRangeResult`. The envelope's shape — nested
+    /// `automation`, `occurrence`, `run`, `evaluation`,
+    /// `framework_metrics` blocks under each entry — is too dense
+    /// for plain Codable, so we walk the JSON manually with
+    /// `JSONSerialization` and extract the operator-relevant fields.
+    /// Anything missing falls back to nil so partial bt-core upgrades
+    /// degrade gracefully instead of dropping rows.
+    private static func parseCalendarRange(_ json: String?) -> CalendarRangeResult? {
+        guard let data = json?.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let rawEntries = (root["entries"] as? [[String: Any]]) ?? []
+        var entries: [CalendarEntry] = []
+        entries.reserveCapacity(rawEntries.count)
+        for raw in rawEntries {
+            let id = (raw["id"] as? String) ?? UUID().uuidString
+            let entryType = (raw["entry_type"] as? String) ?? "unknown"
+            let displayStatus = (raw["display_status"] as? String)
+                ?? ((raw["occurrence"] as? [String: Any])?["status"] as? String)
+                ?? "unknown"
+            let qualityBadge = raw["quality_badge"] as? String
+            let automation = raw["automation"] as? [String: Any]
+            let occurrence = raw["occurrence"] as? [String: Any]
+            let run = raw["run"] as? [String: Any]
+            let evaluation = raw["evaluation"] as? [String: Any]
+            let metrics = raw["framework_metrics"] as? [String: Any]
+
+            let title = (automation?["title"] as? String)
+                ?? (run?["summary"] as? String)
+                ?? entryType.replacingOccurrences(of: "_", with: " ").capitalized
+
+            let agentName = (run?["agent_name"] as? String)
+                ?? (run?["openclaw_agent_name"] as? String)
+                ?? ((automation?["executor_config_json"] as? [String: Any])?["agent_name"] as? String)
+
+            let plannedAt = (occurrence?["planned_at"] as? String)
+                ?? (raw["planned_local"] as? String)
+            let startedAt = (occurrence?["started_at"] as? String)
+                ?? (run?["started_at"] as? String)
+            let finishedAt = (occurrence?["finished_at"] as? String)
+                ?? (run?["ended_at"] as? String)
+                ?? (raw["finished_local"] as? String)
+            let runId = (occurrence?["run_id"] as? String)
+                ?? (run?["id"] as? String)
+            let docId = (run?["doc_id"] as? String)
+                ?? (automation?["doc_id"] as? String)
+
+            let qualityScore = evaluation?["quality_score"] as? Double
+            let interventionCount: Int? = {
+                if let v = evaluation?["intervention_count"] as? Int { return v }
+                if let v = metrics?["intervention_count"] as? Int { return v }
+                return nil
+            }()
+            let frameworkAccuracy = metrics?["framework_follow_accuracy_percent"] as? Double
+            let summary = (run?["summary"] as? String)
+                ?? (automation?["prompt_template"] as? String)
+
+            let kind = CalendarEntry.Kind(rawValue: entryType) ?? .unknown
+            entries.append(CalendarEntry(
+                id: id,
+                kind: kind,
+                title: title,
+                entryType: entryType,
+                displayStatus: displayStatus,
+                qualityBadge: qualityBadge,
+                agent: agentName,
+                plannedAt: plannedAt,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                runId: runId,
+                docId: docId,
+                qualityScore: qualityScore,
+                interventionCount: interventionCount,
+                frameworkAccuracyPercent: frameworkAccuracy,
+                summary: summary
+            ))
+        }
+        let summary = root["summary"] as? [String: Any]
+        return CalendarRangeResult(
+            entries: entries,
+            summarySucceeded: (summary?["succeeded"] as? Int) ?? 0,
+            summaryFailed: (summary?["failed"] as? Int) ?? 0,
+            summaryActive: (summary?["active"] as? Int) ?? 0,
+            summaryTerminalCanvasEntries: (summary?["terminal_canvas_entries"] as? Int) ?? 0,
+            summaryFrameworkAccuracyAverage: summary?["framework_accuracy_average_percent"] as? Double
+        )
     }
 
     /// Helper: decode JSON of unknown shape so `manifestJSON`
@@ -2401,5 +2540,82 @@ enum DomeRpcClient {
     private static func withOptionalCString<T>(_ value: String?, _ body: (UnsafePointer<CChar>?) -> T) -> T {
         guard let value else { return body(nil) }
         return value.withCString { body($0) }
+    }
+
+    // MARK: - Zombie sweeper (v0.18)
+    //
+    // Process-management, not vault-related — wrapped in DomeRpcClient
+    // for consistency with every other tado_* FFI call's facade. The
+    // underlying `tado_zombie_sweep` shim does NOT require
+    // `tado_dome_start` to have run first, so this call works even
+    // if the Dome daemon is offline (for instance, on a fresh install
+    // before the model has finished downloading).
+
+    /// One zombie kill record. Returned both for processes the
+    /// sweeper actually killed and (under `matchedButProtected`)
+    /// for processes that matched a kill pattern but sat inside
+    /// the protected ancestor chain.
+    struct KilledProcess: Codable, Identifiable, Hashable {
+        let pid: Int32
+        let pgid: Int32
+        let command: String
+        let matchedPattern: String
+        let killOutcome: String
+
+        var id: Int32 { pid }
+
+        enum CodingKeys: String, CodingKey {
+            case pid, pgid, command
+            case matchedPattern = "matched_pattern"
+            case killOutcome = "kill_outcome"
+        }
+    }
+
+    /// Full result envelope returned by `tado_zombie_sweep`. Mirrors
+    /// `bt_core::zombie::SweepResult` field-for-field; renamed to
+    /// camelCase via `CodingKeys`.
+    struct ZombieSweepResult: Codable {
+        let timestampMs: Int64
+        let ourPid: Int32
+        let protectedPids: [Int32]
+        let killed: [KilledProcess]
+        let matchedButProtected: [KilledProcess]
+        let patterns: [String]
+        let totalScanned: Int
+        let dryRun: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case timestampMs = "timestamp_ms"
+            case ourPid = "our_pid"
+            case protectedPids = "protected_pids"
+            case killed
+            case matchedButProtected = "matched_but_protected"
+            case patterns
+            case totalScanned = "total_scanned"
+            case dryRun = "dry_run"
+        }
+    }
+
+    /// Sweep zombie Tado-related processes. Pass `dryRun: true` to
+    /// preview the kill set without actually signaling anything —
+    /// useful for the Settings UI's "preview" affordance and for
+    /// testing.
+    ///
+    /// Returns nil only on a catastrophic FFI failure (panic or
+    /// JSON encode/decode error). A "nothing to kill, system was
+    /// already clean" outcome returns a `SweepResult` with empty
+    /// `killed`, NOT nil.
+    static func zombieSweep(dryRun: Bool = false) -> ZombieSweepResult? {
+        // Build the JSON options blob inline rather than going
+        // through JSONEncoder for one boolean — saves allocation
+        // and the Codable plumbing isn't worth it here.
+        let optionsJson = "{\"dry_run\":\(dryRun ? "true" : "false")}"
+        return optionsJson.withCString { cstr in
+            guard let raw = tado_zombie_sweep(cstr) else { return nil }
+            defer { tado_string_free(raw) }
+            let json = String(cString: raw)
+            guard let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(ZombieSweepResult.self, from: data)
+        }
     }
 }

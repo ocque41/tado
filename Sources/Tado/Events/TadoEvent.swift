@@ -314,4 +314,105 @@ extension TadoEvent {
             body: "Code index won't update on save until you re-watch"
         )
     }
+
+    // MARK: - Coordinator (natural-language todo)
+
+    /// Natural-language coordinator todo just spawned. Carries the
+    /// brief verbatim so the Calendar surface and notification log
+    /// show what the user asked for — without it, an audit reader
+    /// looking at "coordinator.spawned" sees just an opaque UUID.
+    static func coordinatorSpawned(todoID: UUID, brief: String) -> TadoEvent {
+        TadoEvent(
+            type: "coordinator.spawned",
+            severity: .info,
+            source: Source(kind: "coordinator", sessionID: todoID),
+            title: "Coordinator spawned",
+            body: brief
+        )
+    }
+
+    /// Coordinator successfully proposed a run (Eternal or Dispatch).
+    /// Emitted by the service-side `proposeViaCoordinator` paths.
+    static func coordinatorProposed(todoID: UUID, runID: UUID, kind: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "coordinator.proposed",
+            severity: .info,
+            source: Source(kind: "coordinator", sessionID: todoID, projectName: projectName, runID: runID),
+            title: "Coordinator proposed \(kind)",
+            body: "run \(runID.uuidString.prefix(8))"
+        )
+    }
+
+    /// Coordinator accepted an architect's plan on the user's behalf.
+    /// Emitted from `acceptReviewWithGuard` when the guard succeeds
+    /// and the run was originally proposed by a coordinator.
+    static func coordinatorAccepted(todoID: UUID, runID: UUID, kind: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "coordinator.accepted",
+            severity: .success,
+            source: Source(kind: "coordinator", sessionID: todoID, projectName: projectName, runID: runID),
+            title: "Coordinator accepted \(kind)",
+            body: "run \(runID.uuidString.prefix(8))"
+        )
+    }
+
+    /// Coordinator rejected an architect's plan with a reason.
+    /// Emitted from `rejectReview` when the run was originally
+    /// proposed by a coordinator.
+    static func coordinatorRejected(todoID: UUID, runID: UUID, kind: String, reason: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "coordinator.rejected",
+            severity: .warning,
+            source: Source(kind: "coordinator", sessionID: todoID, projectName: projectName, runID: runID),
+            title: "Coordinator rejected \(kind)",
+            body: reason
+        )
+    }
+
+    // MARK: - Eternal Performance step events
+    //
+    // Emitted by RunEventWatcher.handleEternalFire when state.json's
+    // perfCycles counter increments. Three flavors so the dashboard
+    // pill colour-shifts correctly: improved (green / .success), held
+    // (gray / .info), regressed (yellow / .warning). All ride the
+    // same `eternal` source kind so the Calendar surface picks them
+    // up alongside the existing eternal events without per-event-type
+    // plumbing.
+
+    /// Perf cycle cleared with a composite score above the prior best
+    /// — the baseline ratchets forward.
+    static func eternalPerfImproved(runID: UUID, projectName: String?, composite: Double, delta: Double) -> TadoEvent {
+        TadoEvent(
+            type: "eternal.perfImproved",
+            severity: .success,
+            source: Source(kind: "eternal", projectName: projectName, runID: runID),
+            title: "Perf improved (+\(String(format: "%.3f", delta)))",
+            body: "composite=\(String(format: "%.3f", composite))"
+        )
+    }
+
+    /// Perf cycle cleared at-or-near the prior baseline — no
+    /// regression, no improvement worth ratcheting.
+    static func eternalPerfHeld(runID: UUID, projectName: String?, composite: Double) -> TadoEvent {
+        TadoEvent(
+            type: "eternal.perfHeld",
+            severity: .info,
+            source: Source(kind: "eternal", projectName: projectName, runID: runID),
+            title: "Perf held",
+            body: "composite=\(String(format: "%.3f", composite))"
+        )
+    }
+
+    /// Perf cycle reported a regression. The baseline does NOT move.
+    /// The worker's next iteration nudge will include the delta and
+    /// the offending sub-metric so it can pay back.
+    static func eternalPerfRegressed(runID: UUID, projectName: String?, composite: Double, delta: Double) -> TadoEvent {
+        TadoEvent(
+            type: "eternal.perfRegressed",
+            severity: .warning,
+            source: Source(kind: "eternal", projectName: projectName, runID: runID),
+            title: "Perf regressed (-\(String(format: "%.3f", delta)))",
+            body: "composite=\(String(format: "%.3f", composite))"
+        )
+    }
 }

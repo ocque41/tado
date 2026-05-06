@@ -41,6 +41,18 @@ final class TerminalSession: Identifiable {
     var status: SessionStatus = .running
     var promptQueue: [String] = []
     var unreadMessageCount: Int = 0
+    /// Number of prompts that have actually been sent to the PTY. Bumped
+    /// from `sendToTerminal` (not `enqueueOrSend`) so it tracks turns
+    /// the agent has actually started, mirroring Symphony's `turn_count`
+    /// semantics. The Details page renders this as the second value in
+    /// the AGE / TURN column.
+    var turnCount: Int = 0
+    /// OS process id of the underlying child captured at spawn time.
+    /// Populated by `MetalTerminalTileView.spawnIfNeeded` right after
+    /// the `coreSession` assignment lands. `nil` until the spawn
+    /// completes; never mutated after that. Observation-ignored since
+    /// it's set once during render and consumed read-only.
+    @ObservationIgnored var processID: pid_t?
     var engine: TerminalEngine?
     var tileWidth: CGFloat = CanvasLayout.contentWidth
     var tileHeight: CGFloat = CanvasLayout.contentHeight
@@ -156,6 +168,41 @@ final class TerminalSession: Identifiable {
     /// to each claude -p invocation. Mirrors Project.eternalSkipPermissions.
     @ObservationIgnored var eternalSkipPermissionsFlag: Bool = true
 
+    /// Pre-prompt flags for the Codex per-iteration invocation, e.g.
+    /// `[-c, shell_environment_policy.inherit=all, --no-alt-screen,
+    /// --ask-for-approval, never, --sandbox, danger-full-access,
+    /// <codexMode flags>]`. The wrapper expands these inline before the
+    /// prompt argument. Nil for Claude eternal workers.
+    @ObservationIgnored var eternalCodexPreFlags: [String]?
+
+    /// Post-prompt flags for the Codex per-iteration invocation —
+    /// `<codexModel flags> <codexEffort flags>`. Codex's flag parser
+    /// accepts model/effort either before or after the positional prompt;
+    /// keeping them post-prompt mirrors how regular Codex tiles assemble.
+    /// Nil for Claude eternal workers.
+    @ObservationIgnored var eternalCodexPostFlags: [String]?
+
+    /// `general` (default) or `perf`. Mirrors `EternalRun.kind`.
+    /// When `"perf"` the spawn path sets `TADO_PERF_MODE=1` in the
+    /// worker env, which activates the `[PERF-OK]`-before-marker
+    /// enforcement in `stop.sh` and `eternal-loop.sh`. Nil for
+    /// non-eternal sessions; defaults to `"general"` for legacy
+    /// eternal sessions stamped before v0.19 so behavior is
+    /// preserved across the SwiftData rebuild.
+    @ObservationIgnored var eternalKind: String?
+
+    /// True when this Codex tile should spawn through `codex exec`
+    /// instead of interactive `codex`. Set on Eternal architect /
+    /// interventor sessions (and any other one-shot Codex role) so
+    /// they (a) get clean scrollable text output instead of a TUI,
+    /// (b) skip the interactive-only `--no-alt-screen` /
+    /// `--ask-for-approval` flags, and (c) sidestep a Codex 0.125.0
+    /// bug where interactive mode rejects gpt-5.5 with "newer Codex
+    /// required" while exec mode accepts it. Internal-mode Eternal
+    /// workers (Codex Continuous) leave this false — they need the
+    /// persistent interactive session.
+    @ObservationIgnored var eternalUseCodexExec: Bool = false
+
     // MARK: - Run linkage (multi-run)
 
     /// UUID of the `EternalRun` that owns this session, when the session is an
@@ -215,6 +262,11 @@ final class TerminalSession: Identifiable {
     /// multi-line text when the PTY has the mode enabled.
     private func sendToTerminal(_ text: String) {
         guard let core = coreSession else { return }
+
+        // Every actual write to the PTY counts as one turn. We bump
+        // here (not in `enqueueOrSend`) so queued-but-unsent prompts
+        // don't pad the counter — matches Symphony's per-turn shape.
+        turnCount += 1
 
         if text.contains("\n"), core.bracketedPasteEnabled {
             let start: [UInt8] = [0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E]
@@ -338,7 +390,14 @@ final class TerminalSession: Identifiable {
               !continuePrompt.isEmpty
         else { return }
 
-        if !eternalLoopCommandInstalled {
+        // The `/loop` secondary driver is a Claude Code feature
+        // (`claude` CLI parses `/loop <interval> <prompt>` and runs an
+        // in-session scheduler). Codex doesn't have it — typing
+        // `/loop …` into a Codex TUI would land as plain text in the
+        // user's prompt buffer and corrupt the next message. So we
+        // skip the secondary driver for Codex internal-mode workers
+        // and rely on Tado's idle injection (the primary driver) only.
+        if !eternalLoopCommandInstalled && engine != .codex {
             eternalLoopCommandInstalled = true
             // Queue the /loop command first — it'll fire on the next
             // idle transition (turn 2). Continue prompt goes second so

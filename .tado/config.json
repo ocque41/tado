@@ -6,8 +6,7 @@
   "dome" : {
     "advancedWorkflowsEnabled" : true,
     "agentRegistrationEnabled" : true,
-    "defaultKnowledgeKind" : "knowledge",
-    "includeGlobal" : true
+    "defaultKnowledgeKind" : "knowledge"
   },
   "engine" : {
     "default" : ""
@@ -29,6 +28,12 @@
     "name" : "tado"
   },
   "schemaVersion" : 1,
-  "updatedAt" : "2026-04-25T06:35:57Z",
+  "snippets" : [
+
+  ],
+  "templates" : [
+
+  ],
+  "updatedAt" : "2026-04-30T11:07:39Z",
   "writer" : "tado-app"
 }

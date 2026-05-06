@@ -287,6 +287,52 @@ final class RunEventWatcher {
             }
         }
 
+        // Performance step — fires whenever perfCycles ticks. Three
+        // event flavors so the dashboard pill colour-shifts correctly;
+        // a `kind: "eternal-perf"` Dome retro is always written so
+        // future architects can dome_search it. The retro records the
+        // composite delta + the offending sub-metric on regression so
+        // the next architect's IMPROVE ladder can target the actual
+        // hot path instead of guessing.
+        if newState.perfCycles > old.perfCycles {
+            let composite = newState.lastPerfScore ?? 0
+            let isRegression = newState.perfRegressionDelta != nil
+            let event: TadoEvent
+            if let delta = newState.perfRegressionDelta {
+                event = .eternalPerfRegressed(runID: run.id, projectName: projectName, composite: composite, delta: delta)
+            } else if let prev = old.lastPerfScore, composite > prev + 0.005 {
+                event = .eternalPerfImproved(runID: run.id, projectName: projectName, composite: composite, delta: composite - prev)
+            } else {
+                event = .eternalPerfHeld(runID: run.id, projectName: projectName, composite: composite)
+            }
+            EventBus.shared.publish(event)
+            if let project = run.project {
+                let outcome: String
+                if isRegression, let delta = newState.perfRegressionDelta {
+                    outcome = "Perf cycle \(newState.perfCycles): regressed by \(String(format: "%.3f", delta)) (composite=\(String(format: "%.3f", composite))). Run \(runLabel)."
+                } else {
+                    outcome = "Perf cycle \(newState.perfCycles): composite=\(String(format: "%.3f", composite)). Run \(runLabel)."
+                }
+                let cites: [String] = [
+                    "composite: \(String(format: "%.3f", composite))",
+                    "report: \(newState.lastPerfReportPath ?? "—")",
+                ]
+                let nextNote: String? = isRegression
+                    ? "Perf regressed last cycle — IMPROVE ladder should focus on the largest-loss sub-metric in perf-report.json."
+                    : newState.lastProgressNote
+                DomeProjectMemory.appendStructuredRetro(
+                    for: project,
+                    runID: run.id,
+                    kind: "eternal-perf",
+                    outcome: outcome,
+                    decision: nil,
+                    caveats: isRegression ? "Baseline NOT updated this cycle." : nil,
+                    cites: cites,
+                    nextAgentNote: nextNote
+                )
+            }
+        }
+
         if newState.phase != old.phase {
             switch newState.phase {
             case "completed":

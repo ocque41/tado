@@ -32,6 +32,15 @@ pub struct Session {
     master: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
     pub running: Arc<AtomicBool>,
     pub exit_code: Arc<AtomicI32>,
+    /// OS process id of the child process at spawn time. Captured once
+    /// from `portable_pty::Child::process_id()` before the child is
+    /// moved into the mutex above; never mutated after. Surfaced to
+    /// the Swift Details surface so the dashboard can show a real PID
+    /// per row (Symphony-flavored "this is a real OS process" cue).
+    /// Returns 0 over the FFI when None — the underlying portable-pty
+    /// backend is not guaranteed to populate it on every platform, but
+    /// macOS does.
+    pid: Option<u32>,
     /// Latest OSC 0 / OSC 2 title since the last drain. Overwritten on
     /// each new title so a burst coalesces to the final value. Cleared
     /// by `take_title`.
@@ -58,6 +67,11 @@ impl Session {
             master,
         } = spawn_pty(cmd, args, cwd, env, cols, rows)?;
 
+        // Capture the child's OS pid before it moves into the mutex.
+        // portable-pty's macOS backend populates this; on platforms
+        // where it doesn't, we simply expose 0 via the FFI.
+        let pid = child.process_id();
+
         let grid = Arc::new(Mutex::new(Grid::new(cols, rows)));
         let running = Arc::new(AtomicBool::new(true));
         let exit_code = Arc::new(AtomicI32::new(i32::MIN));
@@ -73,6 +87,7 @@ impl Session {
             master: Arc::new(Mutex::new(Some(master))),
             running: running.clone(),
             exit_code: exit_code.clone(),
+            pid,
             latest_title: latest_title.clone(),
             bell_count: bell_count.clone(),
         });
@@ -159,6 +174,12 @@ impl Session {
             }
             on_eof();
         });
+    }
+
+    /// OS process id captured at spawn time. None when the underlying
+    /// PTY backend doesn't expose it (every shipping macOS path does).
+    pub fn process_id(&self) -> Option<u32> {
+        self.pid
     }
 
     /// Take+clear the most recent OSC 0/2 title. Returns None if no
@@ -334,14 +355,54 @@ impl Session {
         }
     }
 
+    /// Signal the PTY child's entire foreground process group.
+    ///
+    /// **Why a process-group kill** — the Tado tile launches a shell
+    /// wrapper (`/bin/zsh -l -c "claude '<prompt>'"`), which forks the
+    /// agent CLI (claude / codex), which in turn spawns its own
+    /// subprocesses (MCP bridges, npm, cargo, etc.). portable-pty's
+    /// `Child::kill()` only signals the immediate child PID — the
+    /// shell — leaving the whole sub-tree orphaned and re-parented to
+    /// launchd. The user's UI Stop button then "succeeds" without
+    /// actually killing the agent. The fix is `killpg(pgid, sig)`,
+    /// which signals every process whose PGID is the target. PTY
+    /// allocation makes the child a session leader (its PGID == its
+    /// PID), so we can pass the captured `pid` directly as the PGID.
+    ///
+    /// **Honoring `signal`** — the older code path ignored this argument
+    /// and unconditionally invoked portable-pty's signum-less `kill()`,
+    /// which on Unix sends SIGKILL. That was both too blunt for normal
+    /// stop (no chance for the agent to flush state) and too shallow
+    /// (children survived). Now `signal` is the actual signum to
+    /// deliver — SIGTERM by default for UI Stop, SIGKILL for app
+    /// shutdown / `terminateSession(hard: true)`.
     pub fn kill(&self, signal: i32) {
-        // portable_pty Child has a `kill()` but no signal selector on macOS in
-        // the portable API; signal is advisory here. Reader thread notices EOF.
+        let sig = if signal == 0 { libc::SIGTERM } else { signal };
+        if let Some(pid) = self.pid {
+            // Defensive guard: refuse to call killpg with pid 0
+            // (which signals the *caller's* process group — Tado
+            // itself, instant suicide) or pid 1 (launchd's group —
+            // would take down user-session services). Both should
+            // be impossible from portable-pty on macOS, but a
+            // single bad return value here would be catastrophic
+            // and unrecoverable, so the cost of the branch is
+            // worth the insurance. killpg returns -1 with ESRCH
+            // if the group is already gone — best-effort, no
+            // error handling needed (the running flag and reader-
+            // thread EOF still close out session bookkeeping).
+            if pid > 1 {
+                unsafe {
+                    libc::killpg(pid as libc::pid_t, sig);
+                }
+            }
+        }
+        // Belt-and-braces: also notify portable-pty so its reader
+        // thread sees EOF promptly even when killpg already finished.
+        // Cheap; no harm if the group is dead.
         if let Some(c) = self.child.lock().as_mut() {
             let _ = c.kill();
         }
         self.running.store(false, Ordering::SeqCst);
-        let _ = signal; // reserved for future direct SIG delivery
     }
 }
 

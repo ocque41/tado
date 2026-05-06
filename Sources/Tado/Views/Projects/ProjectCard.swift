@@ -1,17 +1,31 @@
 import SwiftUI
 
-/// One project in the list view, rendered as a three-row card:
+/// One project in the list view, rendered as a four-row card:
 ///
 /// - **Row 1**: name (titleLg) + dispatch status capsule.
 /// - **Row 2**: project path (monoCaption, middle-truncated).
-/// - **Row 3**: stats line (`12 todos · 3 teams · 5 agents`) + ••• menu.
+/// - **Row 3**: stats line (`12 todos · 3 teams · 5 agents`) + index badge.
+/// - **Row 4**: explicit action buttons — `+ Dispatch` / `Start`,
+///   bootstrap quartet (A2A / Team / Auto / Knowledge), and a
+///   trailing `Delete`. All visible, all named — no ••• menu.
 ///
-/// Tap the card body to open the project. The ••• menu exposes the
-/// per-project rare actions (bootstrap tools / bootstrap team /
-/// delete) that were previously tiny icons crammed into the row.
+/// **No more ••• menu** — the v0.18 → v0.19 design pass replaced the
+/// hidden-behind-ellipsis actions with an explicit action row at the
+/// bottom of every card. Every per-project action shows up under the
+/// project it belongs to, with its own label, instead of being one
+/// tap of a menu away. The `Bootstrap …` quartet is grouped behind a
+/// short `bootstrap:` overline so the eye reads "primary actions ·
+/// bootstrap actions · destructive" without each button needing to
+/// repeat the word *Bootstrap*.
 ///
-/// When `project.dispatchState == "dispatching"`, a 2 px accent
-/// left border signals active work at a glance.
+/// Tap the card body (anywhere outside the action buttons) to open
+/// the project — the outer `.onTapGesture` handles that, while the
+/// inner Buttons capture their own taps by SwiftUI hit-testing
+/// priority.
+///
+/// When `project.dispatchState == "dispatching"` (or any Eternal
+/// run is live), a 2 px accent left border signals active work at a
+/// glance.
 struct ProjectCard: View {
     let project: Project
     let todoCount: Int
@@ -30,42 +44,61 @@ struct ProjectCard: View {
     @State private var isHovered: Bool = false
 
     var body: some View {
+        // v0.18 design pass: cards drop their rounded corners and
+        // raised fill, flattening into structural rows that sit
+        // inside the parent `SectionRail`. Each card is still fully
+        // clickable; the leading 2 px accent stripe still flags
+        // active dispatch / eternal runs at a glance.
+        //
+        // The card is a `Button(action: onTap)` so SwiftUI's hit-test
+        // priority gives inner Buttons (Dispatch / Start / Bootstrap
+        // / Delete) precedence — a tap inside any inner button fires
+        // only that button's action, never the outer card's `onTap`.
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 10) {
-                // Row 1 — identity
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(project.name)
-                        .font(Typography.titleLg)
-                        .foregroundStyle(Palette.textPrimary)
-                    Spacer()
-                    if isEternalRunning {
-                        eternalGlyph
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Row 1 — identity
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(project.name)
+                            .font(Font.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Palette.ink)
+                        if isEternalRunning {
+                            eternalGlyph
+                        }
+                        dispatchStatusCapsule
+                        Spacer(minLength: 0)
                     }
-                    dispatchStatusCapsule
+
+                    // Row 2 — path
+                    Text(project.rootPath)
+                        .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Row 3 — stats + index badge
+                    HStack(alignment: .center, spacing: 12) {
+                        Text(statsLine)
+                            .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Palette.ink3)
+                        CodeIndexBadge(projectID: project.id.uuidString.lowercased())
+                        Spacer()
+                    }
                 }
 
-                // Row 2 — context
-                Text(project.rootPath)
-                    .font(Typography.monoCaption)
-                    .foregroundStyle(Palette.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Hairline separator between info + actions.
+                Rectangle()
+                    .fill(Palette.rule)
+                    .frame(height: DK.ruleW)
 
-                // Row 3 — stats + menu
-                HStack(alignment: .center, spacing: 12) {
-                    Text(statsLine)
-                        .font(Typography.monoMicro)
-                        .foregroundStyle(Palette.textSecondary)
-                    CodeIndexBadge(projectID: project.id.uuidString.lowercased())
-                    Spacer()
-                    actionsMenu
-                }
+                // Row 4 — explicit action row.
+                actionsRow
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 24)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Palette.surfaceElevated)
+            .background(isHovered ? Palette.bgRowHi : Palette.bgElev)
             .overlay(alignment: .leading) {
                 if isDispatching || isEternalRunning {
                     Rectangle()
@@ -73,11 +106,6 @@ struct ProjectCard: View {
                         .frame(width: 2)
                 }
             }
-            .overlay(
-                Rectangle()
-                    .fill(isHovered ? Palette.hoverBackground : Color.clear)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -88,28 +116,85 @@ struct ProjectCard: View {
         }
     }
 
+    // MARK: - Action row
+
+    /// Explicit per-project actions. Three groups separated visually:
+    /// run controls (left), bootstrap quartet (middle, behind a short
+    /// `bootstrap:` overline so the labels can stay short), and a
+    /// destructive `Delete` on the far right.
+    ///
+    /// Wrapping each line so the row can flow on narrow widths is
+    /// handled by `FlowLayout`; on a typical card width every button
+    /// fits on a single line.
+    private var actionsRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            // Run controls
+            OutlineButton(
+                project.dispatchRuns.isEmpty ? "+ Dispatch" : "+ Dispatch run",
+                size: .small,
+                variant: .accent,
+                action: onDispatch
+            )
+            .help("Open the dispatch composer for this project")
+
+            OutlineButton(
+                "Start",
+                size: .small,
+                variant: .standard,
+                action: onStart
+            )
+            .disabled(!hasReadyDispatch)
+            .help(hasReadyDispatch
+                  ? "Start the latest ready/planning dispatch"
+                  : "No ready dispatch to start")
+
+            // Group separator + bootstrap label.
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(width: DK.ruleW, height: 18)
+                .padding(.horizontal, 4)
+
+            OverlineLabel("bootstrap", tint: Palette.ink4)
+
+            OutlineButton("A2A", size: .small, variant: .standard, action: onBootstrapTools)
+                .help("Bootstrap A2A tools (CLAUDE.md / AGENTS.md)")
+            OutlineButton("Team", size: .small, variant: .standard, action: onBootstrapTeam)
+                .disabled(!hasTeams)
+                .help(hasTeams
+                      ? "Bootstrap team awareness (re-inject roster)"
+                      : "Add a team first to enable team-awareness bootstrap")
+            OutlineButton("Auto", size: .small, variant: .standard, action: onBootstrapAutoMode)
+                .help("Bootstrap Claude auto mode (permission policy)")
+            OutlineButton("Knowledge", size: .small, variant: .standard, action: onBootstrapKnowledge)
+                .help("Bootstrap knowledge layer (Dome second brain)")
+
+            Spacer(minLength: 8)
+
+            // Destructive — far right, danger variant.
+            OutlineButton("Delete", size: .small, variant: .danger, action: onDelete)
+                .help("Delete this project (asks for confirmation)")
+        }
+    }
+
+    /// Whether at least one dispatch run is in a state that `Start`
+    /// can act on.
+    private var hasReadyDispatch: Bool {
+        project.dispatchRuns.contains { $0.state == "ready" || $0.state == "planning" }
+    }
+
     // MARK: - Pieces
 
-    /// State-driven pill on the right of row 1. Shows the worst-active state
-    /// across the project's dispatches (since the project may have multiple
-    /// concurrent runs). Priority order: dispatching > planning > drafted.
-    /// Hidden when no runs are active — the absence of a capsule is itself
-    /// a signal ("no dispatch going on").
+    /// State-driven pill on the right of row 1. Shows the worst-active
+    /// state across the project's dispatches (since a project may have
+    /// multiple concurrent runs). Priority order: dispatching >
+    /// planning > drafted. Hidden when no runs are active — absence
+    /// of a capsule is itself a signal ("no dispatch going on").
+    /// Uses the shared `StatusPill` so list cards and the project
+    /// detail page render identical chrome.
     @ViewBuilder
     private var dispatchStatusCapsule: some View {
         if let state = mostActiveDispatchState {
-            switch state {
-            case "drafted":
-                capsule(label: "DRAFTED", fg: Palette.warning, bg: Palette.warning.opacity(0.12))
-            case "planning":
-                capsule(label: "PLANNING", fg: Palette.accent, bg: Palette.accent.opacity(0.12))
-            case "ready":
-                capsule(label: "READY", fg: Palette.success, bg: Palette.success.opacity(0.15))
-            case "dispatching":
-                capsule(label: "DISPATCHING", fg: Palette.accent, bg: Palette.accent.opacity(0.22))
-            default:
-                capsule(label: state.uppercased(), fg: Palette.textSecondary, bg: Palette.surface)
-            }
+            StatusPill.runState(state)
         } else {
             EmptyView()
         }
@@ -152,51 +237,6 @@ struct ProjectCard: View {
             parts.append("\(agentCount) \(agentCount == 1 ? "agent" : "agents")")
         }
         return parts.joined(separator: "  ·  ")
-    }
-
-    private var actionsMenu: some View {
-        Menu {
-            Button(action: onDispatch) {
-                Label(project.dispatchRuns.isEmpty
-                      ? "New Dispatch…"
-                      : "New Dispatch run…",
-                      systemImage: "doc.text.badge.plus")
-            }
-            // "Start" triggers phase 1 of the most-recently-created READY
-            // dispatch. When there's none, the card's onStart handler shows
-            // the "plan not ready" alert.
-            Button(action: onStart) {
-                Label("Start latest dispatch", systemImage: "play.fill")
-            }
-            .disabled(!project.dispatchRuns.contains(where: { $0.state == "ready" || $0.state == "planning" }))
-            Divider()
-            Button(action: onBootstrapTools) {
-                Label("Bootstrap A2A tools", systemImage: "wrench.and.screwdriver")
-            }
-            Button(action: onBootstrapTeam) {
-                Label("Bootstrap team awareness", systemImage: "person.3")
-            }
-            .disabled(!hasTeams)
-            Button(action: onBootstrapAutoMode) {
-                Label("Bootstrap Claude auto mode", systemImage: "lock.open.rotation")
-            }
-            Button(action: onBootstrapKnowledge) {
-                Label("Bootstrap knowledge layer", systemImage: "brain.head.profile")
-            }
-            Divider()
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete project", systemImage: "trash")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Palette.textSecondary)
-                .frame(width: 28, height: 20)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
     }
 
     private var isDispatching: Bool {

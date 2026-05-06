@@ -1,31 +1,22 @@
 import SwiftUI
 import SwiftData
 
-/// Sticky top navigation bar — sits above every page and replaces both
-/// the floating bottom-left page switcher and the per-page breadcrumb
-/// strip that lived inside `ProjectDetailView`.
+/// Sticky 44 pt top navigation bar — the design pass that landed in
+/// v0.18 reshapes this strip to match the projects-page mockup:
 ///
-/// Layout (left → right):
+/// 1. **Brand cell** — `tado` set in mono 600, with a 6 × 6 amber
+///    accent square trailing it. Click returns to the Todos view.
+/// 2. **Nav strip** — four equal cells (Canvas / Projects / Todos /
+///    Extensions), each with its SF Symbol + label, separated by
+///    1 px vertical hairlines. The active cell paints its row
+///    background `bgRowHi` and gets a 2 px accent underline.
+/// 3. **Right cluster** — keyboard hint (⌘ K) + `UserChip` showing
+///    the active project (or "tado" when on a global page).
 ///
-/// 1. **Tado wordmark** — `tado` set in Plus Jakarta Sans ExtraBold.
-///    Doubles as a "go home" target: clicking it returns to the Todos
-///    page (the default landing view).
-/// 2. **Menu items** — one button per `ViewMode` (Canvas, Projects,
-///    Todos), each with its SF Symbol icon + label in the brand font.
-///    Re-clicking the active page resets that page's deep state — for
-///    Projects, that means clearing `activeProjectID` so the user lands
-///    back on the project list.
-/// 3. **Spacer** — pushes the page-context cluster to the right edge.
-/// 4. **Page title** — the name of whatever the user is currently
-///    looking at: page name, or for Projects in detail mode, the
-///    project's own name.
-/// 5. **Actions menu** — the page's `⋯` menu, when one applies. Today
-///    only the project detail page contributes one; other pages render
-///    nothing so the slot collapses naturally.
-///
-/// The bar reads its rendering data from `AppState` + a few SwiftData
-/// queries; every page-specific action is dispatched through the same
-/// environment so no page has to re-declare its breadcrumb.
+/// Page-specific actions used to live here too — that role moves
+/// inside `PageHeader` per page now, so the bar carries chrome only.
+/// Action menus that need to follow the page are dispatched from the
+/// new `PageHeader` so each page owns its own contextual controls.
 struct TopNavBar: View {
     @Environment(AppState.self) private var appState
     @Environment(TerminalManager.self) private var terminalManager
@@ -39,80 +30,118 @@ struct TopNavBar: View {
         return projects.first { $0.id == id }
     }
 
+    /// Explicit four-cell strip — `.details` is intentionally absent
+    /// here. The Tado wordmark on the left is its affordance, mirroring
+    /// the "Tado / Canvas / Projects / Todos / Extensions" hierarchy
+    /// the user laid out (one global home + four contextual workspaces).
+    /// `Ctrl+Tab` cycling still includes `.details` because it iterates
+    /// `ViewMode.allCases`, so the page remains keyboard-reachable.
+    private static let stripModes: [ViewMode] = [.canvas, .projects, .todos, .extensions]
+
     var body: some View {
         HStack(spacing: 0) {
-            wordmark
-                .padding(.trailing, 22)
+            brandCell
+                .padding(.leading, 16)
+                .padding(.trailing, 14)
 
-            HStack(spacing: 4) {
-                ForEach(ViewMode.allCases, id: \.self) { mode in
-                    menuItem(for: mode)
-                }
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(width: DK.ruleW, height: 44)
+
+            ForEach(Self.stripModes, id: \.self) { mode in
+                navCell(for: mode)
+                Rectangle()
+                    .fill(Palette.rule)
+                    .frame(width: DK.ruleW, height: 44)
             }
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 12)
 
-            pageContext
+            rightCluster
+                .padding(.trailing, 16)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(Palette.surfaceElevated)
+        .frame(height: 44)
+        .background(Palette.bgElev)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Palette.divider)
-                .frame(height: 1)
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
         }
     }
 
-    // MARK: - Wordmark
+    // MARK: - Brand
 
-    private var wordmark: some View {
+    /// 6 × 6 terracotta dot + mono 600 wordmark. Per the Cumulus
+    /// master brand spec (CUMULUS-BRAND.md "Logo system"): the brand
+    /// mark is a true-circle terracotta dot to the LEFT of the
+    /// product wordmark. Click navigates to Details (the live status
+    /// dashboard) and clears any project drill-down so the wordmark
+    /// functions as the global "go home" affordance.
+    private var brandCell: some View {
         Button(action: {
-            // Click the wordmark = go home. "Home" means the default
-            // landing page (Todos) and any project drill-down clears.
             appState.activeProjectID = nil
             appState.showNewTeamForActiveProject = false
-            appState.currentView = .todos
+            appState.currentView = .details
         }) {
-            Text("tado")
-                .font(Typography.sans(size: 18, weight: .heavy))
-                .kerning(-0.5)
-                .foregroundStyle(Palette.textPrimary)
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Palette.accent)
+                    .frame(width: 6, height: 6)
+                Text("tado")
+                    .font(Font.system(size: 14, weight: .semibold, design: .monospaced))
+                    .tracking(-0.2)
+                    .foregroundStyle(Palette.ink)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Tado")
+        .help("Tado — go home (Details)")
     }
 
-    // MARK: - Menu
+    // MARK: - Nav cell
 
-    private func menuItem(for mode: ViewMode) -> some View {
+    @State private var hoveredMode: ViewMode? = nil
+
+    private func navCell(for mode: ViewMode) -> some View {
         let isActive = appState.currentView == mode
-
+        let isHovered = hoveredMode == mode
         return Button(action: { selectMode(mode) }) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: mode.icon)
                     .font(.system(size: 11, weight: .semibold))
                 Text(mode.label)
-                    .font(Typography.label)
+                    .font(Font.system(size: 12.5, weight: .medium))
             }
-            .foregroundStyle(isActive ? Palette.accent : Palette.textSecondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .foregroundStyle(isActive ? Palette.ink : Palette.ink3)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive ? Palette.surfaceAccent : Color.clear)
+                ZStack(alignment: .bottom) {
+                    if isActive {
+                        Palette.bgRowHi
+                    } else if isHovered {
+                        Palette.bgRow.opacity(0.5)
+                    }
+                    if isActive {
+                        Rectangle()
+                            .fill(Palette.accent)
+                            .frame(height: 2)
+                    }
+                }
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredMode = hovering ? mode : (hoveredMode == mode ? nil : hoveredMode)
+        }
     }
 
     private func selectMode(_ mode: ViewMode) {
         // Re-clicking the current page resets that page's deep state.
         // For Projects this clears the drill-down so the user lands
-        // back on the project list — equivalent to the old "← Projects"
-        // breadcrumb button. Other pages have no equivalent state
-        // today, so re-clicks are no-ops aside from the animation.
+        // back on the project list. Other pages have no equivalent
+        // state today.
         if appState.currentView == mode {
             if mode == .projects {
                 appState.activeProjectID = nil
@@ -123,146 +152,43 @@ struct TopNavBar: View {
         appState.currentView = mode
     }
 
-    // MARK: - Page context (right side)
+    // MARK: - Right cluster (keyboard hint + user chip)
 
-    /// The right cluster: page title, then any page-specific actions
-    /// the current view contributes. Each page used to render its own
-    /// header strip; that chrome lives here now so a project page, a
-    /// todo page, and the canvas all share one nav bar with their
-    /// actions slotted in.
-    private var pageContext: some View {
-        HStack(spacing: 10) {
-            Text(pageTitle)
-                .font(Typography.label)
-                .foregroundStyle(Palette.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            pageActions
-        }
+    private var rightCluster: some View {
+        // Just the user chip on the right. The earlier `⌘K` keycap
+        // hint was removed in v0.19 — the shortcut wasn't wired to
+        // anything (no command palette exists), so showing it set up
+        // an expectation the app couldn't honour.
+        UserChip(label: chipLabel, dotColor: chipDot)
     }
 
-    private var pageTitle: String {
-        if let project = activeProject {
-            return project.name
+    /// Either the active project's name or "tado" when on a global
+    /// page (Canvas, Todos, Extensions, or the project list with
+    /// nothing selected). Mirrors the chip in the design mockup.
+    private var chipLabel: String {
+        if let activeProject {
+            return activeProject.name
         }
-        return appState.currentView.label
+        return "tado"
     }
 
-    /// Whatever buttons / menus the current page wants in the nav bar.
-    /// Empty for pages that have no chrome action today (Canvas,
-    /// Todos). The project list contributes "+ New Project"; the
-    /// project detail contributes the `⋯` actions menu (kept last so
-    /// it sits at the very right edge as described in the brief).
-    @ViewBuilder
-    private var pageActions: some View {
-        switch appState.currentView {
-        case .projects:
-            if let project = activeProject {
-                projectActionsMenu(for: project)
-            } else {
-                newProjectButton
-            }
-        case .canvas, .todos, .extensions:
-            EmptyView()
+    /// Live-dot colour. Green when an Eternal run is live for the
+    /// chip's project (or any project, when chipLabel == "tado");
+    /// amber when only Dispatch is mid-flight; otherwise the muted
+    /// green default so the chip never reads as offline.
+    private var chipDot: Color {
+        let projectsForChip: [Project]
+        if let activeProject {
+            projectsForChip = [activeProject]
+        } else {
+            projectsForChip = projects
         }
-    }
-
-    /// "+ New Project" pill — same accent treatment as the empty-state
-    /// CTA so the action reads as one consistent affordance whether it
-    /// comes from the nav bar or the empty page body.
-    private var newProjectButton: some View {
-        Button(action: { appState.showNewProjectSheet = true }) {
-            HStack(spacing: 4) {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("New Project")
-                    .font(Typography.label)
-            }
-            .foregroundStyle(Palette.accent)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Palette.surfaceAccent)
-            .clipShape(Capsule())
-            .contentShape(Capsule())
+        if projectsForChip.contains(where: { p in p.eternalRuns.contains(where: { $0.state == "running" }) }) {
+            return Palette.green
         }
-        .buttonStyle(.plain)
-    }
-
-    /// The `⋯` menu surfaced for the current project. Mirrors the
-    /// items the old in-page breadcrumb exposed; bootstrap + delete
-    /// route through `ProjectActionsService` so the list view, the
-    /// detail view, and this bar share one implementation.
-    private func projectActionsMenu(for project: Project) -> some View {
-        let projectTeams = teams.filter { $0.projectID == project.id }
-
-        return Menu {
-            Button(action: { appState.showNewTeamForActiveProject = true }) {
-                Label("New team…", systemImage: "person.3.sequence")
-            }
-            Divider()
-            Button(action: {
-                ProjectActionsService.bootstrapTools(
-                    project: project,
-                    modelContext: modelContext,
-                    terminalManager: terminalManager,
-                    appState: appState
-                )
-            }) {
-                Label("Bootstrap A2A tools", systemImage: "wrench.and.screwdriver")
-            }
-            Button(action: {
-                ProjectActionsService.bootstrapTeam(
-                    project: project,
-                    teams: projectTeams,
-                    modelContext: modelContext,
-                    terminalManager: terminalManager,
-                    appState: appState
-                )
-            }) {
-                Label("Bootstrap team awareness", systemImage: "person.3")
-            }
-            .disabled(projectTeams.isEmpty)
-            Button(action: {
-                ProjectActionsService.bootstrapAutoMode(
-                    project: project,
-                    modelContext: modelContext,
-                    terminalManager: terminalManager,
-                    appState: appState
-                )
-            }) {
-                Label("Bootstrap Claude auto mode", systemImage: "lock.open.rotation")
-            }
-            Button(action: {
-                ProjectActionsService.bootstrapKnowledge(
-                    project: project,
-                    modelContext: modelContext,
-                    terminalManager: terminalManager,
-                    appState: appState
-                )
-            }) {
-                Label("Bootstrap knowledge layer", systemImage: "brain.head.profile")
-            }
-            Divider()
-            Button(role: .destructive, action: {
-                ProjectActionsService.deleteProject(
-                    project,
-                    modelContext: modelContext,
-                    terminalManager: terminalManager
-                )
-                appState.activeProjectID = nil
-            }) {
-                Label("Delete project", systemImage: "trash")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Palette.textSecondary)
-                .frame(width: 28, height: 22)
-                .contentShape(Rectangle())
+        if projectsForChip.contains(where: { p in p.dispatchRuns.contains(where: { $0.state == "dispatching" || $0.state == "planning" }) }) {
+            return Palette.accent
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        return Palette.green.opacity(0.55)
     }
 }

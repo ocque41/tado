@@ -170,6 +170,15 @@ enum TadoCore {
             tado_session_is_running(UnsafeMutablePointer(handle)) != 0
         }
 
+        /// OS process id captured at spawn time. Returns nil when the
+        /// underlying PTY backend didn't populate it (every shipping
+        /// macOS path does). The `Details` page renders this in the
+        /// PID column; `nil` shows as `—`.
+        var processID: pid_t? {
+            let raw = tado_session_pid(UnsafeMutablePointer(handle))
+            return raw == 0 ? nil : pid_t(raw)
+        }
+
         /// DECSET 2004 — the PTY wants paste events wrapped with
         /// `ESC [ 200 ~` / `ESC [ 201 ~`. Consulted from Cmd+V handler.
         var bracketedPasteEnabled: Bool {

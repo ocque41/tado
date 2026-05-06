@@ -1,4 +1,4 @@
-.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench sync-header mcp
+.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench sync-header mcp perf-suite perf-bench perf-detect perf-test
 
 # Daily development: release-optimized Rust core + header sync + Swift app.
 # Launching the app this way boots Tado AND (via DomeExtension.onAppLaunch)
@@ -57,3 +57,25 @@ core-bench:
 # Results get written to bench/BENCH.md manually after inspection.
 bench: core-bench
 	swift test --filter RendererBenchTests
+
+# Build the perf-suite binary used by the Eternal Performance step's
+# perf-gate.sh hook. Release-mode optimization matters here because
+# the gate runs every Eternal worker iteration in perf mode.
+perf-suite:
+	cd tado-core && cargo build --release -p perf-suite
+
+# Run perf-suite's own self-bench (Criterion). Validates the suite's
+# scoring + slope-fit + baseline-update hot paths complete in a few
+# microseconds — required so the gate doesn't itself become a perf
+# bottleneck.
+perf-bench:
+	cd tado-core && cargo bench -p perf-suite
+
+# Smoke-test perf-suite on the project Tado lives in. Useful for
+# confirming the binary is wired correctly after a build.
+perf-detect: perf-suite
+	cd tado-core && cargo run --release -p perf-suite -- detect --project-root $(PWD)
+
+# Run perf-suite's full test matrix (unit + integration + fixtures).
+perf-test:
+	cd tado-core && cargo test -p perf-suite

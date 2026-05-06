@@ -92,7 +92,7 @@ struct MarkdownBlockView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Palette.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     /// Best-effort inline parser. SwiftUI's `AttributedString(markdown:)`

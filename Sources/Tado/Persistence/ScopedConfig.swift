@@ -330,6 +330,25 @@ final class ScopedConfig {
             out.dome.advancedWorkflowsEnabled = local.dome.advancedWorkflowsEnabled
         }
 
+        // Composer library — local extends shared (additive). Dedup
+        // by id so an entry that exists in both files (rare) doesn't
+        // appear twice.
+        out.templates = mergeLibrary(shared: shared.templates, local: local.templates)
+        out.snippets = mergeLibrary(shared: shared.snippets, local: local.snippets)
+
+        return out
+    }
+
+    private func mergeLibrary(
+        shared: [GlobalSettings.LibraryEntry],
+        local: [GlobalSettings.LibraryEntry]
+    ) -> [GlobalSettings.LibraryEntry] {
+        var seen = Set(shared.map { $0.id })
+        var out = shared
+        for entry in local where !seen.contains(entry.id) {
+            seen.insert(entry.id)
+            out.append(entry)
+        }
         return out
     }
 }

@@ -67,3 +67,12 @@ tree-sitter-python = "0.25"
 # stable 8.x line — 9.x is rc and not yet hardened on macOS FSEvents.
 notify = "8"
 notify-debouncer-mini = "0.6"
+
+# v0.18 zombie sweeper. Direct libc binding for `killpg(2)` /
+# `getpgid(2)` plus `sysinfo` for cross-platform process enumeration
+# with full command-line and parent-PID access. The zombie module
+# (`src/zombie.rs`) is the only consumer of either dep — keeping
+# them as direct deps documents the dependency surface for the
+# sweeper specifically rather than burying it inside a transitive.
+libc = "0.2"
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }

@@ -16,6 +16,7 @@ DerivedData/
 
 # Swift Package Manager
 .build/
+.build 2/
 .swiftpm/
 
 # Environment / secrets
@@ -38,7 +39,11 @@ npm-debug.log*
 
 # Rust core build artifacts
 tado-core/target/
+tado-core/target 2/
 tado-core/include/tado_core.h
+
+# Save-session skill output
+sessions/
 
 # Tado per-repo runtime state (Eternal/Dispatch runs on this repo).
 # These are generated on each run and are per-developer; they're not

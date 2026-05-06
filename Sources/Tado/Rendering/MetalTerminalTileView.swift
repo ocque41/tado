@@ -106,7 +106,7 @@ struct MetalTerminalTileView: View {
                         isFocused: isFocused
                     )
                     if flashActive {
-                        Color.white
+                        Palette.foreground
                             .opacity(0.35)
                             .allowsHitTesting(false)
                             .transition(.opacity)
@@ -174,11 +174,27 @@ struct MetalTerminalTileView: View {
                 // Without threading them here the TUI would read the user's
                 // global ~/.claude/settings.json defaults and silently ignore
                 // Tado's picker.
-                cmd = ProcessSpawner.internalEternalCommand(
-                    projectRoot: projectRoot,
-                    modelID: session.eternalModelID,
-                    effortLevel: session.eternalEffortLevel
-                )
+                //
+                // Codex internal-mode workers route through a different
+                // command builder: codex doesn't take `--model` /
+                // `--effort` in the same shape as claude, so the spawn
+                // path pre-bundles those into eternalCodexPostFlags and
+                // we hand them through here directly. The resulting
+                // session is interactive (no `-p`); Tado's idle-injection
+                // re-runs the continue prompt on every `.needsInput`.
+                if engine == .codex {
+                    cmd = ProcessSpawner.internalCodexEternalCommand(
+                        projectRoot: projectRoot,
+                        codexPreFlags: session.eternalCodexPreFlags ?? [],
+                        codexPostFlags: session.eternalCodexPostFlags ?? []
+                    )
+                } else {
+                    cmd = ProcessSpawner.internalEternalCommand(
+                        projectRoot: projectRoot,
+                        modelID: session.eternalModelID,
+                        effortLevel: session.eternalEffortLevel
+                    )
+                }
             } else {
                 cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
             }
@@ -207,14 +223,28 @@ struct MetalTerminalTileView: View {
                 for: preambleCtx,
                 userPrompt: session.todoText
             )
-            let cmd = ProcessSpawner.command(
-                for: enrichedPrompt,
-                engine: engine,
-                modeFlags: modeFlags,
-                effortFlags: effortFlags,
-                modelFlags: modelFlags,
-                agentName: agentName
-            )
+            let cmd: (executable: String, args: [String])
+            if engine == .codex && session.eternalUseCodexExec {
+                // One-shot Codex Eternal roles (architect, interventor)
+                // route through `codex exec` instead of interactive
+                // `codex`: cleaner non-TUI output and sidesteps a Codex
+                // 0.125.0 interactive bug where gpt-5.5 returns "newer
+                // Codex required" despite the model being available.
+                let flags = modeFlags + effortFlags + modelFlags
+                cmd = ProcessSpawner.codexExecCommand(
+                    for: enrichedPrompt,
+                    flags: flags
+                )
+            } else {
+                cmd = ProcessSpawner.command(
+                    for: enrichedPrompt,
+                    engine: engine,
+                    modeFlags: modeFlags,
+                    effortFlags: effortFlags,
+                    modelFlags: modelFlags,
+                    agentName: agentName
+                )
+            }
             executable = cmd.executable
             args = cmd.args
         }
@@ -276,7 +306,10 @@ struct MetalTerminalTileView: View {
                 doneMarker: session.eternalDoneMarker ?? "ETERNAL-DONE",
                 modelID: session.eternalModelID,
                 effortLevel: session.eternalEffortLevel,
-                skipPermissions: session.eternalSkipPermissionsFlag
+                skipPermissions: session.eternalSkipPermissionsFlag,
+                codexPreFlags: session.eternalCodexPreFlags,
+                codexPostFlags: session.eternalCodexPostFlags,
+                perfMode: (session.eternalKind == "perf")
             )
             for (k, v) in eternalEnv { envDict[k] = v }
         }
@@ -323,6 +356,9 @@ struct MetalTerminalTileView: View {
             spawned.setAnsiPalette(palette)
         }
         session.coreSession = spawned
+        // PID is stable for the life of the session — capture once
+        // here so the Details page can show it without re-querying.
+        session.processID = spawned.processID
         EventBus.shared.publish(
             .terminalSpawned(
                 sessionID: session.id,

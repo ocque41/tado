@@ -33,7 +33,10 @@ final class EternalRun {
 
     // MARK: - State (mirrors what was on Project)
 
-    /// `drafted | planning | ready | running | completed | stopped`.
+    /// `drafted | planning | awaitingReview | ready | running | completed | stopped`.
+    /// `awaitingReview` is the gate between architect (writes `crafted.md`)
+    /// and worker (reads `crafted.md`). Set by `RunEventWatcher` when both
+    /// `crafted.md` and `plan.json` are on disk; cleared by `acceptReview`.
     var state: String = "drafted"
     /// `mega | sprint`.
     var mode: String = "mega"
@@ -67,6 +70,24 @@ final class EternalRun {
     /// When true, worker spawns with `--dangerously-skip-permissions`.
     var skipPermissions: Bool = true
 
+    /// Engine the architect / worker / interventor run on. `"claude"` (the
+    /// default) keeps every existing run on disk behaving as before; new
+    /// runs created via the Eternal sheet pick this up from `AppSettings`.
+    /// Stored as a string for SwiftData simplicity, paralleling `mode`
+    /// and `loopKind`. Resolved through `TerminalEngine(rawValue:)` at
+    /// spawn time.
+    var engine: String = "claude"
+
+    /// `general` (default — today's behavior) or `perf` (Performance step
+    /// active). Orthogonal to `mode` and `loopKind`. When `"perf"`, the
+    /// architect prompt's `## PERFORMANCE` section is generated, the
+    /// worker env carries `TADO_PERF_MODE=1`, and `stop.sh` enforces
+    /// the same-turn pay-back contract: `[SPRINT-DONE]` and
+    /// `ETERNAL-DONE` are blocked unless `[PERF-OK]` precedes them in
+    /// the same turn's transcript. Backed by the new `tado-core/crates/
+    /// perf-suite/` measurement harness.
+    var kind: String = "general"
+
     /// Raw plain-language brief the user wrote in the modal. Persisted here
     /// so the `drafted` state can be reopened in the modal without touching
     /// the filesystem. The authoritative brief after Accept is `crafted.md`
@@ -81,6 +102,13 @@ final class EternalRun {
     /// TodoID of the architect tile. Same soft-cache contract as `workerTodoID`.
     var architectTodoID: UUID?
 
+    /// TodoID of the coordinator tile that proposed this run via the
+    /// natural-language `tado <brief>` path on the general todo page.
+    /// Nil for runs created via the project UI's "New Mega/Sprint" buttons.
+    /// Used by Cross-Run Browser to badge coordinator-spawned runs and link
+    /// back to their originating todo for audit.
+    var spawnedByCoordinatorTodoID: UUID?
+
     init(
         id: UUID = UUID(),
         project: Project?,
@@ -93,6 +121,8 @@ final class EternalRun {
         sprintEval: String = "",
         sprintImprove: String = "",
         skipPermissions: Bool = true,
+        engine: String = "claude",
+        kind: String = "general",
         userBrief: String = "",
         workerTodoID: UUID? = nil,
         architectTodoID: UUID? = nil
@@ -108,6 +138,8 @@ final class EternalRun {
         self.sprintEval = sprintEval
         self.sprintImprove = sprintImprove
         self.skipPermissions = skipPermissions
+        self.engine = engine
+        self.kind = kind
         self.userBrief = userBrief
         self.workerTodoID = workerTodoID
         self.architectTodoID = architectTodoID

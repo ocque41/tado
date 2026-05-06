@@ -1,0 +1,6 @@
+{
+  "name": "fixture-node",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Fixture project for perf-suite Node adapter integration tests."
+}

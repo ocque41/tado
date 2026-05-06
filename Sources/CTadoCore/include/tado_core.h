@@ -127,6 +127,14 @@ void tado_session_kill(struct TadoSession *session, int32_t signal);
 uint8_t tado_session_is_running(struct TadoSession *session);
 
 /**
+ * OS process id of the child captured at spawn time. Returns 0 when
+ * the session is null or when the underlying PTY backend didn't
+ * populate it (Swift treats 0 as "unknown PID"). The Details surface
+ * renders this as a `pid_t` in the PID column.
+ */
+uint32_t tado_session_pid(struct TadoSession *session);
+
+/**
  * 1 if the PTY has bracketed paste mode enabled (DECSET 2004).
  */
 uint8_t tado_session_bracketed_paste(struct TadoSession *session);
@@ -421,13 +429,24 @@ int tado_dome_model_fetch_start(void);
 int tado_dome_model_set_path(const char *path_cstr);
 
 /**
- * Shut down the Dome daemon.
+ * Best-effort graceful shutdown — flushes the SQLite WAL.
  *
- * Phase-2 stub: the OS reclaims the runtime on app exit and the
- * socket file is removed on next start (bt-core unlinks before
- * bind). A real graceful-shutdown implementation would signal the
- * RPC loop to stop accepting + drain in-flight handlers, but that's
- * not needed for Phase-2 verification.
+ * v0.15 wires this to `NSApplication.willTerminateNotification` so
+ * every Cmd+Q triggers a `PRAGMA wal_checkpoint(TRUNCATE)` against
+ * the live vault. Without this hook the WAL file accumulated
+ * committed-but-uncheckpointed pages on every quit and the
+ * CLAUDE.md "Stuck SQLite WAL" recovery procedure required the
+ * operator to run `wal_checkpoint(TRUNCATE)` by hand.
+ *
+ * Returns:
+ * - 0 — checkpoint requested (or daemon not booted, which is a no-op).
+ * - 1 — checkpoint failed (logged via stderr).
+ *
+ * We deliberately do NOT signal the RPC loop or drop the keepalive
+ * connection here. The OS reclaims the process state in the next
+ * few millis after this returns; trying to cleanly drain in-flight
+ * handlers would race the kernel teardown. The WAL flush is the
+ * only artifact we care about.
  */
 int tado_dome_stop(void);
 
@@ -654,59 +673,112 @@ char *tado_dome_recipe_seed_defaults(void);
  * project_id, title, description, template_path, policy, enabled,
  * last_verified_at, ...}]}` or null on failure. Caller frees with
  * `tado_string_free`.
+ *
+ * # Safety
+ * Optional pointers may be null; non-null pointers must be valid
+ * NUL-terminated UTF-8.
  */
-char *tado_dome_recipe_list(const char *scope_cstr,
-                            const char *project_id_cstr);
+char *tado_dome_recipe_list(const char *scope_cstr, const char *project_id_cstr);
 
 /**
  * v0.11 — apply a recipe and return its `GovernedAnswer`.
  * `intent_key_cstr` must match a recipe row (e.g.
  * `"architecture-review"`). `project_id_cstr` may be null for
  * global scope.
+ *
+ * Returns JSON `{intent_key, answer, citations: [...],
+ * missing_authority: [...], policy_applied: {...}}` or null on
+ * failure. Caller frees with `tado_string_free`.
+ *
+ * # Safety
+ * `intent_key_cstr` must be a non-null NUL-terminated UTF-8.
+ * `project_id_cstr` may be null.
  */
-char *tado_dome_recipe_apply(const char *intent_key_cstr,
-                             const char *project_id_cstr);
-
-/* ── v0.11 — automation surface ───────────────────────────────── */
+char *tado_dome_recipe_apply(const char *intent_key_cstr, const char *project_id_cstr);
 
 /**
- * List every automation. `enabled_filter`: 1 = only enabled, 0 =
- * only paused, anything else = both. `executor_kind_cstr` may be
- * null. `limit` clamped 1..500.
+ * List every automation. Filters: `enabled_filter` (1 = only
+ * enabled, 0 = only paused, -1 = both), `executor_kind_cstr` (e.g.
+ * `"agent_run"`, null = all kinds), `limit` (clamped 1..500).
+ *
+ * Returns JSON `{"automations": [...AutomationRecord]}` or null.
+ * Caller frees with `tado_string_free`.
+ *
+ * # Safety
+ * `executor_kind_cstr` may be null.
  */
-char *tado_dome_automation_list(int enabled_filter,
-                                const char *executor_kind_cstr,
-                                int limit);
+char *tado_dome_automation_list(int enabled_filter, const char *executor_kind_cstr, int limit);
 
-/** Fetch one automation by id. Returns null when missing. */
+/**
+ * Fetch one automation by id. Returns JSON `{"automation": {...}}`
+ * or null when missing.
+ *
+ * # Safety
+ * `id_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_automation_get(const char *id_cstr);
 
-/** Create an automation. `json_input_cstr` is a JSON object body. */
+/**
+ * Create an automation. `json_input_cstr` must be a JSON object
+ * matching `automation.create`'s expected shape: at minimum
+ * `{title, executor_kind, executor_config, prompt_template,
+ * schedule_kind, schedule, ...}`.
+ *
+ * Returns JSON `{"automation": {...}}` or null on failure.
+ *
+ * # Safety
+ * `json_input_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_automation_create(const char *json_input_cstr);
 
-/** Update an automation. `json_patch_cstr` is a partial JSON object. */
-char *tado_dome_automation_update(const char *id_cstr,
-                                  const char *json_patch_cstr);
+/**
+ * Update an automation. `json_patch_cstr` is a partial JSON body —
+ * only fields present override the existing record.
+ *
+ * # Safety
+ * Both pointers must be non-null NUL-terminated UTF-8.
+ */
+char *tado_dome_automation_update(const char *id_cstr, const char *json_patch_cstr);
 
 /**
- * Delete an automation. Errors with Conflict if the automation has
- * an active occurrence — Swift should surface and suggest pausing.
+ * Delete an automation. Errors with `Conflict` if the automation
+ * has an active occurrence — Swift should surface the error and
+ * suggest pausing first.
+ *
+ * # Safety
+ * `id_cstr` must be non-null NUL-terminated UTF-8.
  */
 char *tado_dome_automation_delete(const char *id_cstr);
 
 /**
- * Toggle paused state. `paused != 0` calls `automation_pause`,
- * `paused == 0` calls `automation_resume`.
+ * Toggle pause state. `paused == 1` → calls `automation_pause`
+ * (sets enabled=false, stamps paused_at). `paused == 0` →
+ * `automation_resume` (sets enabled=true, clears paused_at).
+ *
+ * # Safety
+ * `id_cstr` must be non-null NUL-terminated UTF-8.
  */
 char *tado_dome_automation_set_paused(const char *id_cstr, int paused);
 
-/** Manually enqueue a "right now" occurrence (the Run-now button). */
+/**
+ * Manually enqueue an occurrence right now (the "Run now" button).
+ * Returns JSON `{"occurrence": {...}}` or null on conflict (serial
+ * automation already has an active occurrence).
+ *
+ * # Safety
+ * `id_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_automation_run_now(const char *id_cstr);
 
 /**
- * List occurrences. `automation_id_cstr` null = global ledger.
- * `status_cstr` filters by status string. `from_cstr` and
- * `to_iso_cstr` are optional RFC3339 timestamps.
+ * List occurrences. Pass `automation_id_cstr` to scope to one
+ * automation, or null for the global ledger across all
+ * automations. `status_cstr` filters by status string (`ready`,
+ * `running`, `done`, `failed`, ...). `from_cstr`/`to_cstr` are
+ * optional RFC3339 timestamps.
+ *
+ * # Safety
+ * All pointers may be null. `limit` clamped 1..500.
  */
 char *tado_dome_automation_occurrence_list(const char *automation_id_cstr,
                                            const char *status_cstr,
@@ -714,77 +786,131 @@ char *tado_dome_automation_occurrence_list(const char *automation_id_cstr,
                                            const char *to_iso_cstr,
                                            int limit);
 
-/** Retry a failed/cancelled occurrence. */
+/**
+ * Retry a failed/cancelled occurrence (the "Retry" button on a
+ * failed occurrence row).
+ *
+ * # Safety
+ * `occurrence_id_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_automation_retry_occurrence(const char *occurrence_id_cstr);
 
-/* ── v0.12 — system observability + audit + eval ─────────────────── */
-
-/** Vault health checks (existence, sqlite open, audit log, …). */
+/**
+ * JSON shape: `{checks: [{name, ok, detail}, ...], db_ok, ...}`.
+ * The Knowledge → System surface renders one row per check.
+ */
 char *tado_dome_system_health(void);
 
-/** Scheduler queue depths + stale leases + worker cursors. */
+/**
+ * JSON shape: `{queue_depth: {ready, scheduled, active}, stale_leases,
+ * workers: [...]}`. Used by the System surface "Scheduler" card.
+ */
 char *tado_dome_system_automation_status(void);
 
-/* tado_dome_system_runtime_envelope removed in v0.16.1 — was added
- * in v0.12 but never gained a Swift caller. The health + scheduler
- * cards already cover what operators need. */
-
 /**
- * Tail the audit log. `since_cstr` may be null. `limit` clamped 1..1000.
- * Returns JSON `{entries: [...]}`.
+ * Tail the audit log. `since_cstr` may be null (= start from
+ * origin). `limit` clamped 1..1000.
+ *
+ * Returns JSON `{"entries": [{action, actor_kind, actor_id,
+ * created_at, params, result, ...}, ...]}` or null on failure.
+ *
+ * # Safety
+ * `since_cstr` may be null; non-null must be NUL-terminated UTF-8.
  */
 char *tado_dome_audit_tail(const char *since_cstr, int limit);
 
 /**
- * In-process `dome-eval replay`. `vault_db_cstr` is the absolute
- * path to `<vault>/.bt/index.sqlite`. `since_seconds <= 0` →
- * every row. Returns JSON-serialized `ReplayReport`.
+ * Run `dome-eval replay` in-process. `vault_db_cstr` is the
+ * absolute path to `<vault>/.bt/index.sqlite` (Swift can resolve
+ * via `StorePaths`). `since_seconds <= 0` → every row.
+ *
+ * Returns JSON serialization of the `ReplayReport` (window_start,
+ * window_end, n_rows, consumption_rate, mean_latency_ms,
+ * aggregate, rows). Caller frees with `tado_string_free`.
+ *
+ * # Safety
+ * `vault_db_cstr` must be non-null NUL-terminated UTF-8.
  */
-char *tado_dome_eval_replay(const char *vault_db_cstr, long long since_seconds);
+char *tado_dome_eval_replay(const char *vault_db_cstr, int64_t since_seconds);
 
-/* ── v0.13 — bulk import + vault status + tokens ─────────────────── */
-
-/** Vault status snapshot — paths + doc count + topics count. */
+/**
+ * Vault status snapshot — `vault_path`, `doc_count`,
+ * `topics_count`, `socket_path`, `tasks_file`. Used by the
+ * Knowledge → System "Vault status" header card.
+ */
 char *tado_dome_vault_status(void);
 
 /**
- * Walk `root_path_cstr` (must be inside the vault; null = entire
- * vault root) and return importable items. Used by the Knowledge
- * → Imports wizard step 1.
+ * Walk `root_path` (must already live inside the vault) and list
+ * every importable file. `root_path_cstr = null` → scan the whole
+ * vault root. Returns JSON `{root_path, items: [...], count,
+ * skipped: [...]}` mirroring `service.import_preview`.
+ *
+ * # Safety
+ * `root_path_cstr` may be null.
  */
 char *tado_dome_import_preview(const char *root_path_cstr);
 
 /**
- * Execute the import. `items_json_cstr` is a JSON array of the
- * `import_preview.items` shape — pass back whatever subset the
- * user confirmed. Returns JSON `{imported, failures, count}`.
+ * Execute the import. `items_json_cstr` is a JSON array of
+ * `ImportPreviewItem` shapes (the Swift wizard echoes back
+ * whatever subset of `import_preview.items` the user checked).
+ *
+ * Returns JSON `{imported: [...], failures: [...], count}` or
+ * null on failure.
+ *
+ * # Safety
+ * `items_json_cstr` must be non-null NUL-terminated UTF-8 holding
+ * a JSON array.
  */
 char *tado_dome_import_execute(const char *items_json_cstr);
 
-/** List every issued agent token (revoked ones included). */
+/**
+ * List every issued agent token. Returns JSON `{tokens: [{token_id,
+ * agent_name, caps, created_at, last_used_at, revoked}, ...]}`.
+ */
 char *tado_dome_token_list(void);
 
 /**
- * Issue a token. `caps_csv_cstr` is a comma-separated list of
- * capabilities. Returns JSON `{token, token_id, agent_name,
- * caps}` — the `token` field is the one-time secret.
+ * Issue a new token. `caps_csv_cstr` is a comma-separated list
+ * of capability names (`search,read,note,schedule,recipe,...`).
+ * Returns JSON `{token, token_id, agent_name, caps}` — the
+ * `token` field is the one-time secret the operator must copy
+ * before closing the dialog.
+ *
+ * # Safety
+ * Both pointers must be non-null NUL-terminated UTF-8.
  */
-char *tado_dome_token_create(const char *agent_name_cstr,
-                             const char *caps_csv_cstr);
-
-/** Rotate a token's secret. Old secret stops working immediately. */
-char *tado_dome_token_rotate(const char *token_id_cstr);
-
-/** Revoke a token. Authentication fails afterward. */
-char *tado_dome_token_revoke(const char *token_id_cstr);
-
-/* ── v0.14 — calendar daemon mode + topic browser + graph + packs ──── */
+char *tado_dome_token_create(const char *agent_name_cstr, const char *caps_csv_cstr);
 
 /**
- * Daemon-backed calendar feed. Returns the bt-core
- * `calendar_range` envelope. `from_cstr`, `to_iso_cstr`,
- * `timezone_cstr` non-null. `agent_cstr` and `status_cstr` may be
- * null.
+ * Rotate a token's secret. Returns the new raw secret and the
+ * token_id; old secret is invalidated immediately.
+ *
+ * # Safety
+ * `token_id_cstr` must be non-null NUL-terminated UTF-8.
+ */
+char *tado_dome_token_rotate(const char *token_id_cstr);
+
+/**
+ * Revoke a token. The token row stays in the config (audit trail)
+ * but `revoked = true` so authentication fails.
+ *
+ * # Safety
+ * `token_id_cstr` must be non-null NUL-terminated UTF-8.
+ */
+char *tado_dome_token_revoke(const char *token_id_cstr);
+
+/**
+ * Daemon-backed calendar feed. `from_cstr` and `to_cstr` are RFC3339
+ * timestamps, `timezone_cstr` is an IANA tz name (e.g. "UTC",
+ * "America/New_York"). Optional `agent_cstr` / `status_cstr`
+ * filter chips. Returns the bt-core `calendar_range` envelope:
+ * `{entries: [...], totals: {succeeded, failed, active, ...}}`.
+ *
+ * # Safety
+ * `from`, `to`, `timezone` must be non-null NUL-terminated UTF-8.
+ * `agent`, `status` may be null.
  */
 char *tado_dome_calendar_range(const char *from_cstr,
                                const char *to_iso_cstr,
@@ -792,31 +918,66 @@ char *tado_dome_calendar_range(const char *from_cstr,
                                const char *agent_cstr,
                                const char *status_cstr);
 
-/** List every topic dir under `<vault>/topics/`. */
+/**
+ * List every topic dir under `<vault>/topics/`. Returns
+ * `{topics: ["topic-a", "topic-b", ...]}`.
+ */
 char *tado_dome_topic_list(void);
 
-/** All graph edges touching a single doc. */
+/**
+ * All graph edges touching one doc. Returns `{doc_id, links: [...]}`.
+ *
+ * # Safety
+ * `doc_id_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_graph_links(const char *doc_id_cstr);
 
 /**
- * List context packs. All filter args optional. `limit` clamped
- * 1..500.
+ * List context packs. All filter args optional (null skips them).
+ * `limit` clamped 1..500.
+ *
+ * # Safety
+ * All pointers may be null.
  */
 char *tado_dome_context_list(const char *brand_cstr,
                              const char *session_id_cstr,
                              const char *doc_id_cstr,
                              int limit);
 
-/** Fetch one context pack by id with manifest + summary + sources. */
+/**
+ * Fetch one context pack by id, including manifest + summary +
+ * source references.
+ *
+ * # Safety
+ * `context_id_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_context_get(const char *context_id_cstr);
 
-/* ── v0.15 — suggestions surface ──────────────────────────────── */
+/**
+ * v0.17 — delete one cached context pack (DB rows + on-disk files).
+ * Operator action from the Packs surface. Returns
+ * `{context_id, deleted: true}` on success or null on missing pack /
+ * daemon down.
+ *
+ * # Safety
+ * `context_id_cstr` must be non-null NUL-terminated UTF-8.
+ */
+char *tado_dome_context_delete(const char *context_id_cstr);
 
-/** List suggestions. Both filters optional. */
-char *tado_dome_suggestion_list(const char *doc_id_cstr,
-                                const char *status_cstr);
+/**
+ * List pending / applied / rejected suggestions. Both filters
+ * optional (null = all). Returns `{suggestions: [...]}`.
+ */
+char *tado_dome_suggestion_list(const char *doc_id_cstr, const char *status_cstr);
 
-/** Accept a pending suggestion (applies patch). */
+/**
+ * Accept a pending suggestion — applies the patch + flips status
+ * to `applied`. Errors with Conflict if the suggestion isn't
+ * `pending` anymore.
+ *
+ * # Safety
+ * `id_cstr` must be non-null NUL-terminated UTF-8.
+ */
 char *tado_dome_suggestion_apply(const char *id_cstr);
 
 /**
@@ -957,6 +1118,9 @@ char *tado_dome_vault_purge_topic_scope_count(const char *topic_cstr,
  *
  * Returns JSON `{"purged": N, "topic": ..., "owner_scope": ...,
  * "project_id": ...}` or null on failure.
+ *
+ * # Safety
+ * Same as `_count` above. Caller frees with `tado_string_free`.
  */
 char *tado_dome_vault_purge_topic_scope(const char *topic_cstr,
                                         const char *owner_scope_cstr,
@@ -1072,5 +1236,23 @@ char *tado_dome_code_search(const char *query_json_cstr);
  * safe to poll from the main thread every 250 ms.
  */
 char *tado_dome_code_index_status(const char *project_id_cstr);
+
+/**
+ * Sweep zombie processes spawned (or potentially spawned) by Tado
+ * across this and prior runs.
+ *
+ * `options_json_cstr` is a JSON `{"dry_run": bool}` payload. Pass
+ * `null` or an empty string to default both fields to `false`.
+ *
+ * Returns a heap-allocated JSON string with the full
+ * `bt_core::zombie::SweepResult` shape. Caller frees with
+ * `tado_string_free`.
+ *
+ * # Safety
+ * `options_json_cstr` may be null; if non-null it must be a valid
+ * NUL-terminated UTF-8 string. The returned pointer is non-null on
+ * success and must be freed exactly once via `tado_string_free`.
+ */
+char *tado_zombie_sweep(const char *options_json_cstr);
 
 #endif  /* TADO_CORE_H */

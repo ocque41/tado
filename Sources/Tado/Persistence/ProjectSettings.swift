@@ -23,6 +23,15 @@ struct ProjectSettings: Codable, Equatable {
     var dispatch: DispatchBlock = DispatchBlock()
     var notifications: NotificationsBlock = NotificationsBlock()
     var dome: DomeBlock = DomeBlock()
+    /// Project-shared composer Templates and Snippets. Reuses the
+    /// same `GlobalSettings.LibraryEntry` shape (id/name/body +
+    /// timestamps) — the merged list shown in `ComposerLibraryPane`
+    /// pairs each entry with its owning scope so the badge + delete
+    /// route to the right file. Honours `commitPolicy`: shared →
+    /// committed in `config.json`; localOnly → gitignored along with
+    /// the rest of `.tado/`.
+    var templates: [GlobalSettings.LibraryEntry] = []
+    var snippets: [GlobalSettings.LibraryEntry] = []
 
     enum CommitPolicy: String, Codable, CaseIterable {
         /// `config.json` tracked by git, `local.json` gitignored.

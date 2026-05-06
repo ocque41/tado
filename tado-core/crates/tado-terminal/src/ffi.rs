@@ -266,6 +266,22 @@ pub unsafe extern "C" fn tado_session_is_running(session: *mut TadoSession) -> u
     r.unwrap_or(0)
 }
 
+/// OS process id of the child captured at spawn time. Returns 0 when
+/// the session is null or when the underlying PTY backend didn't
+/// populate it (Swift treats 0 as "unknown PID"). The Details surface
+/// renders this as a `pid_t` in the PID column.
+#[no_mangle]
+pub unsafe extern "C" fn tado_session_pid(session: *mut TadoSession) -> u32 {
+    if session.is_null() {
+        return 0;
+    }
+    let r = panic::catch_unwind(|| {
+        let s = &*(session as *const Session);
+        s.process_id().unwrap_or(0)
+    });
+    r.unwrap_or(0)
+}
+
 /// 1 if the PTY has bracketed paste mode enabled (DECSET 2004).
 #[no_mangle]
 pub unsafe extern "C" fn tado_session_bracketed_paste(session: *mut TadoSession) -> u8 {

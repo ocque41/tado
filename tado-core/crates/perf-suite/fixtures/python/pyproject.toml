@@ -1,0 +1,4 @@
+[project]
+name = "fixture-python"
+version = "0.0.1"
+description = "Fixture project for perf-suite Python adapter integration tests."

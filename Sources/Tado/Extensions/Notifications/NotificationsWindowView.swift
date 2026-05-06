@@ -5,83 +5,107 @@ import SwiftUI
 /// severity filter + free-text search. Older events live in
 /// `~/Library/Application Support/Tado/events/archive/*.ndjson` and
 /// will be paged in by a follow-up packet.
+///
+/// v0.18 — restyled on the structural-grid design language:
+/// PageHeader-style title bar with `MetaStrip` (Total / Unread / Window),
+/// a horizontal filter strip of severity OutlineButtons + composer-style
+/// search input, flat-tabular notification rows with leading severity
+/// dot + StatusPill metadata.
 struct NotificationsWindowView: View {
     @State private var severityFilter: TadoEvent.Severity? = nil
     @State private var query: String = ""
 
+    private var totalCount: Int { EventBus.shared.recent.count }
+    private var unreadCount: Int { EventBus.shared.recent.filter { !$0.read }.count }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             filterBar
-            Divider()
             list
-            Divider()
             footer
         }
-        .background(Palette.surface)
+        .background(Palette.bgPage)
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack {
-            Text("Notifications")
-                .font(Typography.heading)
-                .foregroundStyle(Palette.textPrimary)
-            Spacer()
+        HStack(alignment: .bottom, spacing: 24) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Notifications")
+                    .font(.system(size: 28, weight: .bold))
+                    .tracking(-0.4)
+                    .foregroundStyle(Palette.ink)
+                Text("Live event ring + recent history")
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.ink3)
+            }
+            Spacer(minLength: 16)
+            MetaStrip {
+                MetaCell(
+                    key: "Status",
+                    value: unreadCount > 0 ? "● Unread" : "○ Read",
+                    tint: unreadCount > 0 ? Palette.accent : Palette.ink3
+                )
+                MetaCell(key: "Total", value: "\(totalCount)")
+                MetaCell(key: "Unread", value: "\(unreadCount)", trailingDivider: false)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Palette.surfaceElevated)
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.top, 24)
+        .padding(.bottom, 14)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+        }
     }
 
+    // MARK: - Filter strip
+
     private var filterBar: some View {
-        HStack(spacing: 8) {
-            // Chips wrap into the available width via `Layout`'s native
-            // priority resolution; at narrow widths the search field
-            // gives up space first (lowest layoutPriority), then chips
-            // truncate with `.lineLimit(1)`. No fixed widths anywhere.
+        HStack(spacing: 6) {
             severityChip(nil, label: "All")
             severityChip(.info, label: "Info")
             severityChip(.success, label: "Success")
             severityChip(.warning, label: "Warning")
             severityChip(.error, label: "Error")
             Spacer(minLength: 6)
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
-                    .foregroundStyle(Palette.textTertiary)
+                    .foregroundStyle(Palette.ink4)
                 TextField("Search", text: $query)
                     .textFieldStyle(.plain)
-                    .font(Typography.monoCaption)
-                    .foregroundStyle(Palette.textPrimary)
-                    .frame(minWidth: 60, idealWidth: 200)
+                    .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+                    .frame(minWidth: 60, idealWidth: 220)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Palette.surfaceElevated)
-            .clipShape(Capsule())
+            .frame(height: 24)
+            .background(Palette.bgElev)
+            .overlay(
+                RoundedRectangle(cornerRadius: DK.radius)
+                    .stroke(Palette.rule, lineWidth: DK.ruleW)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
             .layoutPriority(0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.vertical, 10)
+        .background(Palette.bgPage)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+        }
     }
 
     private func severityChip(_ severity: TadoEvent.Severity?, label: String) -> some View {
         let selected = severityFilter == severity
-        return Button {
-            severityFilter = severity
-        } label: {
-            Text(label)
-                .font(Typography.monoCaption)
-                .foregroundStyle(selected ? Palette.accent : Palette.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(selected ? Palette.surfaceAccent : Palette.surfaceElevated)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
+        return OutlineButton(
+            label,
+            size: .small,
+            variant: selected ? .accent : .standard,
+            action: { severityFilter = severity }
+        )
     }
 
     // MARK: - List
@@ -90,25 +114,45 @@ struct NotificationsWindowView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if filteredEvents.isEmpty {
-                    VStack(spacing: 6) {
-                        Image(systemName: "bell.slash")
-                            .font(.system(size: 28))
-                            .foregroundStyle(Palette.textTertiary)
-                        Text("No notifications to show.")
-                            .font(Typography.body)
-                            .foregroundStyle(Palette.textTertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 80)
+                    emptyBlock
                 } else {
                     ForEach(filteredEvents) { event in
                         NotificationRow(event: event)
                             .onTapGesture { EventBus.shared.markRead(event.id) }
-                        Divider().padding(.leading, 44)
+                        Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
                     }
                 }
             }
         }
+    }
+
+    private var emptyBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Palette.ink4)
+                Text("No notifications to show")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+            }
+            Text("Events fan in from `EventBus.shared` — terminal completions, eternal phase transitions, dome daemon updates, and user broadcasts all land here.")
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .frame(maxWidth: 540, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("EVENT RING  ·  in-memory  ·  archived nightly to <storage-root>/events/archive/")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.top, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Palette.rule).frame(height: 1).padding(.horizontal, -2)
+                }
+        }
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var filteredEvents: [TadoEvent] {
@@ -127,22 +171,28 @@ struct NotificationsWindowView: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("\(EventBus.shared.recent.count) event(s) in ring")
-                .font(Typography.monoMicro)
-                .foregroundStyle(Palette.textTertiary)
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
             Spacer()
-            Button("Mark all read") {
-                EventBus.shared.markAllRead()
-                DockBadgeUpdater.shared.refresh()
-            }
-            .buttonStyle(.plain)
-            .font(Typography.label)
-            .foregroundStyle(Palette.textSecondary)
+            OutlineButton(
+                "Mark all read",
+                icon: "checkmark.circle",
+                size: .small,
+                variant: .standard,
+                action: {
+                    EventBus.shared.markAllRead()
+                    DockBadgeUpdater.shared.refresh()
+                }
+            )
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, DK.pageGutter)
         .padding(.vertical, 10)
-        .background(Palette.surfaceElevated)
+        .background(Palette.bgElev)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+        }
     }
 }
 
@@ -152,28 +202,28 @@ private struct NotificationRow: View {
     let event: TadoEvent
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             Circle()
                 .fill(severityColor)
                 .frame(width: 6, height: 6)
-                .padding(.top, 6)
+                .padding(.top, 8)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
                     Text(event.title)
-                        .font(Typography.label)
-                        .foregroundStyle(event.read ? Palette.textSecondary : Palette.textPrimary)
+                        .font(.system(size: 12.5, weight: event.read ? .regular : .semibold))
+                        .foregroundStyle(event.read ? Palette.ink2 : Palette.ink)
                         .lineLimit(1)
                     Spacer()
                     Text(timeString(event.ts))
-                        .font(Typography.monoMicro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                         .monospacedDigit()
                 }
                 if !event.body.isEmpty {
                     Text(event.body)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
                         .lineLimit(3)
                 }
                 HStack(spacing: 6) {
@@ -184,8 +234,10 @@ private struct NotificationRow: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.bgElev)
         .contentShape(Rectangle())
         .contextMenu {
             Button("Copy title") {
@@ -208,19 +260,23 @@ private struct NotificationRow: View {
     private func chip(_ text: String, icon: String? = nil) -> some View {
         HStack(spacing: 3) {
             if let icon { Image(systemName: icon).font(.system(size: 8)) }
-            Text(text).font(Typography.monoMicro)
+            Text(text).font(Font.system(size: 10, weight: .regular, design: .monospaced))
         }
-        .foregroundStyle(Palette.textTertiary)
+        .foregroundStyle(Palette.ink4)
         .padding(.horizontal, 5)
         .padding(.vertical, 1)
-        .background(Palette.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .background(Palette.bgPage)
+        .overlay(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .stroke(Palette.rule, lineWidth: DK.ruleW)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     private var severityColor: Color {
         switch event.severity {
         case .info:    return Palette.accent
-        case .success: return Palette.success
+        case .success: return Palette.green
         case .warning: return Palette.warning
         case .error:   return Palette.danger
         }

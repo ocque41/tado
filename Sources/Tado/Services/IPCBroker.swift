@@ -22,6 +22,14 @@ final class IPCBroker {
     /// Timers that each woke the main thread.
     private var pollTimer: Timer?
     var onSpawnRequest: ((SpawnRequest) -> Void)?
+    /// Coordinator-driven Unix-socket server. Started in `init()`,
+    /// receives length-prefixed JSON request envelopes from the
+    /// Rust CLIs (`tado-eternal`, `tado-dispatch`, `tado-bootstrap`,
+    /// `tado-system`, `tado-projects`). The actual handler closure
+    /// (which mutates SwiftData) is installed by `ContentView` at
+    /// scene-onAppear, mirroring how `onSpawnRequest` is wired —
+    /// IPCBroker doesn't itself hold a `ModelContext`.
+    let controlSocket: ControlSocketServer
     private weak var terminalManager: TerminalManager?
     private var processedFiles: Set<String> = []
 
@@ -29,6 +37,16 @@ final class IPCBroker {
         self.terminalManager = terminalManager
         let pid = ProcessInfo.processInfo.processIdentifier
         self.ipcRoot = URL(fileURLWithPath: "/tmp/tado-ipc-\(pid)")
+        self.controlSocket = ControlSocketServer(ipcRoot: self.ipcRoot)
+
+        // Prune /tmp/tado-ipc-<dead-pid> directories from prior
+        // crashed instances before we mint our own. A long-running
+        // user can otherwise accumulate one cruft directory per
+        // unclean Tado quit; the stable `/tmp/tado-ipc` symlink we
+        // re-create below would still find us, but external CLI
+        // tools sometimes scan the whole namespace and surface
+        // ghost sessions from dead pids.
+        BackgroundLifecycle.cleanupStaleIPCDirectories(currentPid: pid)
 
         createDirectoryStructure()
         writeHelperScripts()
@@ -38,6 +56,7 @@ final class IPCBroker {
         startTopicsWatcher()
         startSpawnRequestWatcher()
         startConsolidatedPoller()
+        controlSocket.start()
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -742,6 +761,60 @@ final class IPCBroker {
         // `~/.local/bin` install target so users get them on $PATH
         // alongside the IPC tools.
         CLIConfigMemoryNotify.writeAll(to: binDir, localBin: localBin)
+
+        // Coordinator-driven Rust CLIs (`tado-projects`,
+        // `tado-eternal`, `tado-dispatch`, `tado-bootstrap`,
+        // `tado-system`). These are real Rust binaries built by
+        // `cargo build -p tado-cli`; we don't write shell scripts —
+        // we symlink the built executable from the workspace
+        // target dir or the bundled resource into ~/.local/bin so
+        // it's on $PATH for any agent.
+        installRustCLIs(to: localBin)
+    }
+
+    /// Symlinks each `tado-cli` binary from the `tado-core/target`
+    /// dir (development) or the app bundle's Resources (installed)
+    /// into `~/.local/bin`. Idempotent: removes any existing symlink
+    /// or file at the destination first so a stale build never
+    /// shadows a fresh one.
+    private func installRustCLIs(to localBin: URL) {
+        let names = ["tado-projects", "tado-eternal", "tado-dispatch", "tado-bootstrap", "tado-system"]
+
+        // Prefer release build (the Makefile's `make dev` produces
+        // it); fall back to debug for everyday `swift run` cycles
+        // that haven't built release yet.
+        let candidateDirs: [URL] = [
+            // Bundled with the .app
+            Bundle.main.resourceURL?.appendingPathComponent("cli"),
+            // Installed Tado.app/Contents/MacOS — same layout as
+            // tado-mcp / dome-mcp Rust binaries.
+            Bundle.main.executableURL?.deletingLastPathComponent(),
+            // Development: tado-core/target/release
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("tado-core/target/release"),
+            // Development: tado-core/target/debug (cargo build without --release)
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("tado-core/target/debug"),
+        ].compactMap { $0 }
+
+        let fm = FileManager.default
+        for name in names {
+            guard let srcDir = candidateDirs.first(where: {
+                fm.fileExists(atPath: $0.appendingPathComponent(name).path)
+            }) else {
+                continue
+            }
+            let src = srcDir.appendingPathComponent(name)
+            let dest = localBin.appendingPathComponent(name)
+            try? fm.removeItem(at: dest)
+            try? fm.createSymbolicLink(at: dest, withDestinationURL: src)
+        }
     }
 
     private func installMCPServer() {

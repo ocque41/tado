@@ -18,6 +18,21 @@ struct GlobalSettings: Codable, Equatable {
     var canvas: Canvas = Canvas()
     var notifications: Notifications = Notifications()
     var dome: Dome = Dome()
+    var templates: [LibraryEntry] = []
+    var snippets: [LibraryEntry] = []
+
+    /// Composer library entry. One struct backs both Templates (full
+    /// prompt presets that REPLACE the editor buffer) and Snippets
+    /// (short fragments INSERTED at the caret) — the kind is implied
+    /// by which array the entry lives in. `body` is plain text in v1;
+    /// no placeholder substitution.
+    struct LibraryEntry: Codable, Equatable, Identifiable {
+        var id: UUID = UUID()
+        var name: String = ""
+        var body: String = ""
+        var createdAt: Date = Date()
+        var updatedAt: Date = Date()
+    }
 
     struct UI: Codable, Equatable {
         var defaultThemeId: String = "ember"

@@ -25,6 +25,21 @@ enum StorePaths {
     static var eventsCurrent: URL { eventsDir.appendingPathComponent("current.ndjson") }
     static var versionFile: URL { root.appendingPathComponent("version") }
 
+    /// `<root>/projects.json` — the project index file mirrored from
+    /// SwiftData by `ProjectIndexService`. Read by the Rust CLIs
+    /// (`tado-projects list/resolve`) and the coordinator agent so name
+    /// resolution doesn't require IPC into the running app.
+    static var projectsIndexFile: URL { root.appendingPathComponent("projects.json") }
+
+    /// `/tmp/tado-ipc/active-pid` — pid file the running app writes at
+    /// startup so external CLI clients can find the per-pid IPC root
+    /// (`/tmp/tado-ipc-<pid>/`). Unlinked on willTerminate. Stable
+    /// path so any caller can locate the live app without scanning
+    /// /tmp. Lives under /tmp (volatile by design) rather than under
+    /// the storage root — the file is meaningful only while the app
+    /// is running and must vanish on hard shutdown.
+    static var activePidFile: URL { URL(fileURLWithPath: "/tmp/tado-ipc/active-pid") }
+
     /// `<root>/dome` — vault root opened by bt-core. v0.12+
     /// surfaces (`dome-eval` runner, audit log viewer) need the
     /// path to compose the SQLite-file URL, so it lives here next

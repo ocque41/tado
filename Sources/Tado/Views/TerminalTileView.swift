@@ -82,19 +82,19 @@ struct TerminalTileView: View {
             width: isResizing ? visualWidth : session.tileWidth,
             height: isResizing ? visualHeight : session.tileHeight
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: DK.radius)
                 .stroke(Palette.divider, lineWidth: 1)
         )
         .compositingGroup()
         .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
         .overlay {
             if isResizing {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: DK.radius)
                     .stroke(Palette.accent.opacity(0.7), lineWidth: 2)
             } else if isFocused {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: DK.radius)
                     .stroke(Palette.accent, lineWidth: 2)
             }
         }

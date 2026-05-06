@@ -1,3 +1,13 @@
+// JetBrains Mono migration deferred — see /Users/miguel/Documents/tado/BRAND.md
+// "Tado deviations". The Cumulus master brand
+// (/Users/miguel/Documents/cumulus/CUMULUS-BRAND.md) names JetBrains Mono
+// as the data partner; SF Mono is documented as the brand-wide exception
+// only for the terminal cell grid. Until JetBrains Mono TTFs are bundled
+// into Sources/Tado/Resources/Fonts/, every UI mono helper below resolves
+// through `Font.system(... design: .monospaced)` (SF Mono on macOS),
+// which is the correct fallback that lets the rest of the alignment ship
+// without a font asset checkout.
+
 import SwiftUI
 import AppKit
 import CoreText

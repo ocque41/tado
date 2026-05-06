@@ -20,8 +20,14 @@ struct EternalState: Codable, Equatable {
     var sprints: Int = 0
     /// Count of `SessionStart` "compact" hook firings.
     var compactions: Int = 0
-    /// `working | evaluating | compacting | idle | completed | stopped`.
+    /// `working | evaluating | compacting | idle | completed | stopped | failed`.
     var phase: String = "working"
+    /// Set by `eternal-loop.sh` when the wrapper bails after N consecutive
+    /// CLI invocations that exited non-zero with no output (config wedge —
+    /// bad flag, missing CLI, broken model). Surfaced in the dashboard so
+    /// the operator sees *why* the run flipped to `phase = "failed"` rather
+    /// than having to grep loop.log.
+    var lastError: String?
     /// Tail of the most recent progress.md line — useful as a one-glance summary
     /// in the dashboard card.
     var lastProgressNote: String?
@@ -31,6 +37,35 @@ struct EternalState: Codable, Equatable {
     var completionMarker: String = "ETERNAL-DONE"
     /// Sprint mode only. Bracketed to discourage accidental false hits.
     var sprintMarker: String = "[SPRINT-DONE]"
+
+    // MARK: - Performance step (kind == "perf")
+    //
+    // The four fields below are populated only when the run was created
+    // with `EternalRun.kind == "perf"`. They feed the Cross-Run Browser
+    // Perf column, the ProjectEternalSection badge, and the Dome retros
+    // emitted by RunEventWatcher whenever `perfCycles` increments. All
+    // are optional / default-zero so old `state.json` files written
+    // before v0.19 decode unchanged.
+
+    /// Count of `[PERF-OK]` markers seen across the run. Incremented by
+    /// `stop.sh` (in-session) and `eternal-loop.sh` (external loopKind)
+    /// each time the perf gate clears. Surfaces in the dashboard as a
+    /// third counter alongside `iterations` / `sprints`.
+    var perfCycles: Int = 0
+    /// Most recent composite perf score, in `[0, 2]`. Capped at 2.0 by
+    /// the suite (see `perf-suite/src/scoring.rs`) so a giant one-off
+    /// win cannot inflate the running summary forever. `nil` before
+    /// the first cycle.
+    var lastPerfScore: Double?
+    /// Set by `perf-gate.sh` on regression: `composite_baseline -
+    /// composite_new`. Cleared on the next PASS. Drives the "you
+    /// regressed N points last iteration, pay it back" nudge added to
+    /// the worker prompt.
+    var perfRegressionDelta: Double?
+    /// Path under `.tado/eternal/runs/<id>/perf-report.json` — useful
+    /// for the Cross-Run Browser to deep-link to the per-metric
+    /// breakdown, and for the Dome retro mirror to cite.
+    var lastPerfReportPath: String?
 
     /// Runtime derived from `startedAt`. Zero while the eternal hasn't started.
     var runtime: TimeInterval {
@@ -50,8 +85,17 @@ struct EternalState: Codable, Equatable {
 
     /// Phase pill colour class consumed by the dashboard. Kept here so the UI
     /// doesn't re-duplicate the string-to-enum dance.
+    ///
+    /// `perfPending` and `perfRegressed` are added in the v0.19 Performance
+    /// step. The bash hooks set `phase = "perfPending"` immediately before
+    /// invoking `perf-gate.sh` and `phase = "perfRegressed"` when the gate
+    /// reports a regression — both flip back to `"working"` once `[PERF-OK]`
+    /// lands. The dashboard pill colour-shifts accordingly so the operator
+    /// sees the gate status without having to read perf-report.json.
     enum PhaseKind: String {
-        case working, evaluating, compacting, idle, completed, stopped, unknown
+        case working, evaluating, compacting, idle, completed, stopped, failed
+        case perfPending, perfRegressed
+        case unknown
     }
 
     var phaseKind: PhaseKind {

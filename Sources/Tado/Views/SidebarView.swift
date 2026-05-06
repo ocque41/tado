@@ -284,7 +284,7 @@ private struct SessionRow: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 1)
         .background(Palette.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     // MARK: Derived fields
@@ -436,7 +436,7 @@ private struct NotificationsBell: View {
                 if unread > 0 {
                     Text(unread > 99 ? "99+" : String(unread))
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Palette.foreground)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
                         .background(Capsule().fill(Palette.danger))

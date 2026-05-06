@@ -1,6 +1,15 @@
 import SwiftUI
 
 enum ViewMode: String, CaseIterable, Equatable {
+    /// The "go home" landing page reached via the Tado wordmark in the
+    /// top-left of the nav bar. Renders the live status dashboard
+    /// (running agents, queued prompts, aggregate token / cost stats).
+    /// Deliberately listed first so `Ctrl+Tab` cycling treats it as
+    /// the canonical home; the four contextual workspaces follow.
+    /// Note: `TopNavBar` iterates an explicit list `[.canvas, .projects,
+    /// .todos, .extensions]` for the four-cell strip — the wordmark is
+    /// the affordance for `.details`, not a fifth cell.
+    case details
     case canvas
     case projects
     case todos
@@ -8,6 +17,7 @@ enum ViewMode: String, CaseIterable, Equatable {
 
     var label: String {
         switch self {
+        case .details: "Details"
         case .canvas: "Canvas"
         case .projects: "Projects"
         case .todos: "Todos"
@@ -17,6 +27,7 @@ enum ViewMode: String, CaseIterable, Equatable {
 
     var icon: String {
         switch self {
+        case .details: "chart.bar.doc.horizontal"
         case .canvas: "square.grid.3x3"
         case .projects: "folder"
         case .todos: "checklist"
@@ -269,7 +280,27 @@ final class AppState {
     var showTrashList: Bool = false
     var pendingNavigationID: UUID? = nil
     var forwardTargetTodoID: UUID? = nil
-    var activeProjectID: UUID? = nil
+    /// Persisted across launches via `UserDefaults` so the "fresh launch
+    /// feel" after macOS terminates the suspended app doesn't also lose
+    /// the user's project context. Other in-memory UI flags (forwarding,
+    /// modals, sheets) stay transient — those are one-shot intents that
+    /// should not survive a relaunch.
+    var activeProjectID: UUID? = AppState.loadPersistedActiveProjectID() {
+        didSet {
+            if let id = activeProjectID {
+                UserDefaults.standard.set(id.uuidString, forKey: AppState.activeProjectIDKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppState.activeProjectIDKey)
+            }
+        }
+    }
+    private static let activeProjectIDKey = "tado.activeProjectID"
+    private static func loadPersistedActiveProjectID() -> UUID? {
+        guard let raw = UserDefaults.standard.string(forKey: activeProjectIDKey) else {
+            return nil
+        }
+        return UUID(uuidString: raw)
+    }
     /// Set to true from the top nav bar's actions menu to ask
     /// `ProjectDetailView` to expand its inline new-team form. The
     /// detail view binds its `showNewTeamInProject` flag to this so the

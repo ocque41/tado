@@ -61,24 +61,12 @@ struct ProjectEternalSection: View {
     }
 
     var body: some View {
+        // Section header (ETERNAL label + count + "New Mega" /
+        // "New Sprint" buttons) is now drawn by the parent
+        // `SectionRail` in `ProjectDetailView`. The body only
+        // renders the runs list + archived disclosure + the
+        // empty-state block.
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("ETERNAL")
-                    .font(Typography.callout)
-                    .tracking(0.6)
-                    .foregroundStyle(Palette.textSecondary)
-
-                if !activeRuns.isEmpty {
-                    Text("·  \(activeRuns.count) active")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textTertiary)
-                }
-
-                Spacer()
-
-                newRunButtons
-            }
-
             if activeRuns.isEmpty && archivedRuns.isEmpty {
                 emptyCard
             } else {
@@ -157,7 +145,7 @@ struct ProjectEternalSection: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Palette.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
             }
             .buttonStyle(.plain)
 
@@ -171,7 +159,7 @@ struct ProjectEternalSection: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Palette.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
             }
             .buttonStyle(.plain)
         }
@@ -192,10 +180,10 @@ struct ProjectEternalSection: View {
         .padding(16)
         .background(Palette.surface)
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: DK.radius)
                 .stroke(Palette.divider, style: StrokeStyle(lineWidth: 1, dash: [4]))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     // MARK: - Run rows
@@ -205,28 +193,47 @@ struct ProjectEternalSection: View {
         let displayState = effectiveState(for: run)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                statePill(state: displayState)
+                StatusPill.runState(displayState)
                 Text(run.label)
-                    .font(Typography.bodyBold)
-                    .foregroundStyle(Palette.textPrimary)
+                    .font(Font.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Palette.ink)
                     .lineLimit(1)
-                Text("·  \(run.mode == "sprint" ? "Sprint" : "Mega")")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
+                HStack(spacing: 6) {
+                    KindGlyph(kind: run.mode == "sprint" ? .sprint : .mega)
+                    Text(run.mode == "sprint" ? "sprint" : "mega")
+                        .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
+                }
                 Spacer()
                 actionButtons(run: run, state: displayState)
             }
             if displayState == "running", let state = EternalService.readState(run) {
                 runningMetaRow(run: run, state: state)
+            } else if displayState == "failed",
+                      let lastError = EternalService.readState(run)?.lastError,
+                      !lastError.isEmpty {
+                Text(lastError)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.danger.opacity(0.85))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(12)
-        .background(Palette.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(borderColor(for: displayState), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.bgElev)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(borderColor(for: displayState))
+                .frame(width: 2)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
+        }
     }
 
     @ViewBuilder
@@ -276,17 +283,10 @@ struct ProjectEternalSection: View {
         .help("Resume this run — re-spawn the worker using the existing crafted.md and progress.md.")
     }
 
+    /// Legacy alias — see ProjectDispatchSection for rationale.
     @ViewBuilder
     private func statePill(state: String) -> some View {
-        let (label, color) = statePillStyle(state: state)
-        Text(label)
-            .font(Typography.microBold)
-            .tracking(0.6)
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        StatusPill.runState(state)
     }
 
     private func statePillStyle(state: String) -> (String, Color) {
@@ -298,6 +298,7 @@ struct ProjectEternalSection: View {
         case "running":         return ("RUNNING",   Palette.success)
         case "completed":       return ("COMPLETED", Palette.success)
         case "stopped":         return ("STOPPED",   Palette.textSecondary)
+        case "failed":          return ("FAILED",    Palette.danger)
         default:                return (state.uppercased(), Palette.textSecondary)
         }
     }
@@ -395,7 +396,7 @@ struct ProjectEternalSection: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(tint.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
         .buttonStyle(.plain)
     }
@@ -412,6 +413,15 @@ struct ProjectEternalSection: View {
                 metaPair(label: "SPRINT", value: "\(effectiveSprint)")
                 if let last = metrics.last?.metric {
                     metaPair(label: "METRIC", value: last.display)
+                }
+            }
+            // Perf step counters — only shown for kind=perf runs so
+            // the row stays compact for general runs.
+            if run.kind == "perf" {
+                metaPair(label: "PERF", value: "\(state.perfCycles)")
+                if let composite = state.lastPerfScore {
+                    let label = state.perfRegressionDelta != nil ? "PERF Δ" : "PERF Σ"
+                    metaPair(label: label, value: String(format: "%.2f", composite))
                 }
             }
             Spacer()
@@ -495,6 +505,14 @@ struct ProjectEternalSection: View {
             if snapshot.phase == "stopped" {
                 healIfNeeded(run: run, target: "stopped")
                 return "stopped"
+            }
+            // Wrapper hit the persistent-failure threshold (3 consecutive
+            // CLI invocations that exited non-zero with no output) — heal
+            // the cached SwiftData state so the dashboard pill switches
+            // off "running" instead of staying stuck while nothing runs.
+            if snapshot.phase == "failed" {
+                healIfNeeded(run: run, target: "failed")
+                return "failed"
             }
         }
 

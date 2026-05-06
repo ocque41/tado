@@ -177,7 +177,7 @@ struct TodoRowView: View {
     }
 
     private var rowBackground: some View {
-        RoundedRectangle(cornerRadius: 4)
+        RoundedRectangle(cornerRadius: DK.radius)
             .fill(rowColor)
     }
 

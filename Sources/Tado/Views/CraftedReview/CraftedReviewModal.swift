@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import os
 
 /// Branded review modal for the architect-authored `crafted.md` plan.
 /// Used by both Dispatch and Eternal — the kind passed in disambiguates
@@ -9,6 +10,13 @@ import SwiftData
 /// shared top-bar (Cancel / title / Accept) and footer (Re-plan / hint
 /// / shortcuts) chrome that mirrors `DispatchFileModal` and
 /// `EternalFileModal` byte-for-byte.
+///
+/// v0.18 — file IO + markdown parsing moved off the main thread via
+/// `.task` + `Task.detached`, gated by a `LoadState` enum so the
+/// initial layout renders a skeleton with the same geometry as the
+/// final state. Eliminates the visible "empty two-pane → real
+/// content" reflow that operators reported. Process-lifetime cache
+/// keyed by file URL + mtime makes re-opening the same plan free.
 struct CraftedReviewModal: View {
     let runID: UUID
     let kind: CraftedReviewKind
@@ -18,10 +26,8 @@ struct CraftedReviewModal: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
-    @State private var blocks: [MarkdownBlock] = []
-    @State private var sections: [(text: String, slug: String)] = []
+    @State private var loadState: LoadState = .loading
     @State private var selectedSlug: String? = nil
-    @State private var loadError: String? = nil
     @State private var titleSubject: String = ""
 
     var body: some View {
@@ -34,7 +40,9 @@ struct CraftedReviewModal: View {
         }
         .frame(minWidth: 980, minHeight: 720)
         .background(Palette.background)
-        .onAppear(perform: loadDocument)
+        .task(id: runID) {
+            await loadDocumentAsync()
+        }
     }
 
     // MARK: - Chrome
@@ -56,7 +64,7 @@ struct CraftedReviewModal: View {
             Spacer()
 
             VStack(spacing: 2) {
-                Text(titleSubject)
+                Text(titleSubject.isEmpty ? "Loading…" : titleSubject)
                     .font(Typography.heading)
                     .foregroundStyle(Palette.textPrimary)
                     .lineLimit(1)
@@ -88,9 +96,10 @@ struct CraftedReviewModal: View {
 
     @ViewBuilder
     private var content: some View {
-        if let loadError {
-            errorBanner(loadError)
-        } else {
+        switch loadState {
+        case .loading:
+            loadingPane
+        case .ready(let blocks, let sections):
             HStack(spacing: 0) {
                 CraftedReviewIndex(
                     sections: sections,
@@ -112,6 +121,41 @@ struct CraftedReviewModal: View {
                     }
                 }
             }
+        case .error(let message):
+            errorBanner(message)
+        }
+    }
+
+    /// Skeleton placeholder rendered while the architect plan is
+    /// loading. Mirrors the geometry of the final two-pane content
+    /// (220px index column + flexible body) so the inner layout
+    /// settles once on first present, no reflow when real content
+    /// arrives.
+    private var loadingPane: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(0..<3, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Palette.surfaceElevated)
+                        .frame(height: 14)
+                        .padding(.horizontal, 14)
+                }
+                Spacer()
+            }
+            .frame(width: 220)
+            .padding(.top, 18)
+            .background(Palette.background)
+            Divider()
+            VStack(spacing: 12) {
+                Spacer()
+                ProgressView()
+                    .progressViewStyle(.circular)
+                Text("Loading plan…")
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.textTertiary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -171,44 +215,116 @@ struct CraftedReviewModal: View {
 
     // MARK: - State
 
-    private var canAccept: Bool { loadError == nil && !blocks.isEmpty }
-
-    private func loadDocument() {
-        switch kind {
-        case .dispatch:
-            guard let run = fetchDispatchRun(runID),
-                  let project = run.project else {
-                loadError = "Run is missing or has been deleted."
-                return
-            }
-            titleSubject = "Dispatch — \(project.name) · \(run.label)"
-            let url = DispatchPlanService.craftedFileURL(run)
-            loadFromDisk(url: url)
-        case .eternal:
-            guard let run = fetchEternalRun(runID),
-                  let project = run.project else {
-                loadError = "Run is missing or has been deleted."
-                return
-            }
-            titleSubject = "Eternal — \(project.name) · \(run.label)"
-            let url = EternalService.craftedFileURL(run)
-            loadFromDisk(url: url)
+    private var canAccept: Bool {
+        switch loadState {
+        case .ready(let blocks, _): return !blocks.isEmpty
+        default: return false
         }
     }
 
-    private func loadFromDisk(url: URL) {
+    /// Async load entry point. Resolves the run, picks the right
+    /// crafted.md URL, then hands off to `parseOffMain` so the
+    /// expensive parse never touches the main actor. The signpost
+    /// + logger lines are debug-only — release builds stay quiet.
+    private func loadDocumentAsync() async {
+        let signposter = OSSignposter(subsystem: "tado", category: "CraftedReview")
+        let signpostID = signposter.makeSignpostID()
+        let interval = signposter.beginInterval("loadDocument", id: signpostID)
+        defer { signposter.endInterval("loadDocument", interval) }
+
+        let resolved: (title: String, url: URL)?
+        switch kind {
+        case .dispatch:
+            if let run = fetchDispatchRun(runID), let project = run.project {
+                resolved = (
+                    title: "Dispatch — \(project.name) · \(run.label)",
+                    url: DispatchPlanService.craftedFileURL(run)
+                )
+            } else {
+                resolved = nil
+            }
+        case .eternal:
+            if let run = fetchEternalRun(runID), let project = run.project {
+                resolved = (
+                    title: "Eternal — \(project.name) · \(run.label)",
+                    url: EternalService.craftedFileURL(run)
+                )
+            } else {
+                resolved = nil
+            }
+        }
+
+        guard let resolved else {
+            loadState = .error("Run is missing or has been deleted.")
+            return
+        }
+
+        titleSubject = resolved.title
+        debugLog("opened url=\(resolved.url.path) kind=\(kind == .dispatch ? "dispatch" : "eternal")")
+
+        let url = resolved.url
+        let result: ParseResult = await Task.detached(priority: .userInitiated) {
+            CraftedReviewModal.parseOffMain(url: url)
+        }.value
+
+        if Task.isCancelled { return }
+
+        switch result {
+        case .success(let blocks, let sections, let cacheHit, let durationMs):
+            signposter.emitEvent("parsed", id: signpostID)
+            debugLog("parsed cache=\(cacheHit ? "hit" : "miss") blocks=\(blocks.count) duration=\(durationMs)ms")
+            loadState = .ready(blocks: blocks, sections: sections)
+            selectedSlug = sections.first?.slug
+        case .missing:
+            loadState = .error("Architect has not finished — crafted.md is not on disk yet.")
+        case .ioFailure(let message):
+            loadState = .error(message)
+        }
+    }
+
+    /// File IO + parse runs here. Always invoked from a detached
+    /// task — never on the main actor. Hits the cache first, falls
+    /// through to a fresh parse + cache write otherwise.
+    nonisolated private static func parseOffMain(url: URL) -> ParseResult {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            loadError = "Architect has not finished — crafted.md is not on disk yet."
-            return
+            return .missing
         }
-        guard let body = try? String(contentsOf: url, encoding: .utf8) else {
-            loadError = "Could not read \(url.path)."
-            return
+        let mtime: Date
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            mtime = (attrs[.modificationDate] as? Date) ?? .distantPast
+        } catch {
+            return .ioFailure("Could not stat \(url.path).")
         }
+
+        if let cached = MarkdownParseCache.shared.lookup(url: url, mtime: mtime) {
+            return .success(blocks: cached.blocks, sections: cached.sections, cacheHit: true, durationMs: 0)
+        }
+
+        let body: String
+        do {
+            body = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            return .ioFailure("Could not read \(url.path).")
+        }
+
+        let parseStart = DispatchTime.now()
         let parsed = MarkdownBlocks.parse(body)
-        blocks = parsed
-        sections = MarkdownBlocks.sectionIndex(parsed)
-        selectedSlug = sections.first?.slug
+        let sections = MarkdownBlocks.sectionIndex(parsed)
+        let durationMs = Double(DispatchTime.now().uptimeNanoseconds - parseStart.uptimeNanoseconds) / 1_000_000.0
+
+        MarkdownParseCache.shared.store(url: url, mtime: mtime, blocks: parsed, sections: sections)
+
+        return .success(blocks: parsed, sections: sections, cacheHit: false, durationMs: durationMs)
+    }
+
+    private func debugLog(_ message: String) {
+        #if DEBUG
+        Logger(subsystem: "tado", category: "CraftedReview").debug("\(message, privacy: .public)")
+        if ProcessInfo.processInfo.environment["TADO_DEBUG_REVIEW_MODAL"] != nil {
+            FileHandle.standardError.write(Data("[CraftedReview] \(message)\n".utf8))
+        }
+        #endif
     }
 
     // MARK: - Fetches
@@ -262,5 +378,62 @@ struct CraftedReviewModal: View {
             appState.eternalModalRunID = runID
         }
         dismiss()
+    }
+
+    // MARK: - Types
+
+    /// Three-state loader: `.loading` while the file is being read +
+    /// parsed off the main actor, `.ready` with the parsed blocks +
+    /// section index, `.error` with a message for the operator.
+    enum LoadState {
+        case loading
+        case ready(blocks: [MarkdownBlock], sections: [(text: String, slug: String)])
+        case error(String)
+    }
+
+    /// Result from `parseOffMain` — what was learned during the
+    /// detached task. The view-side `LoadState` is derived from
+    /// this; keeping the two separate stops the view from having
+    /// to know about cache instrumentation.
+    enum ParseResult {
+        case success(blocks: [MarkdownBlock], sections: [(text: String, slug: String)], cacheHit: Bool, durationMs: Double)
+        case missing
+        case ioFailure(String)
+    }
+}
+
+/// Process-lifetime cache for parsed crafted.md plans, keyed by
+/// file URL + mtime. Hits return immediately; misses parse +
+/// store. Never persists to disk — re-launching the app re-parses
+/// once per file. A misorder against mtime simply forces a fresh
+/// parse, never returns stale.
+private final class MarkdownParseCache: @unchecked Sendable {
+    static let shared = MarkdownParseCache()
+
+    private struct Entry {
+        let mtime: Date
+        let blocks: [MarkdownBlock]
+        let sections: [(text: String, slug: String)]
+    }
+
+    private let lock = NSLock()
+    private var entries: [URL: Entry] = [:]
+
+    func lookup(url: URL, mtime: Date) -> (blocks: [MarkdownBlock], sections: [(text: String, slug: String)])? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[url], entry.mtime == mtime else { return nil }
+        return (entry.blocks, entry.sections)
+    }
+
+    func store(
+        url: URL,
+        mtime: Date,
+        blocks: [MarkdownBlock],
+        sections: [(text: String, slug: String)]
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries[url] = Entry(mtime: mtime, blocks: blocks, sections: sections)
     }
 }

@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v0.16.1. It is grouped so you can
+This file is the canonical map of Tado at v1.0.0. It is grouped so you can
 navigate by purpose rather than by feature: build mechanics first, then the
 product surface, then the cross-cutting subsystems (state, knowledge, A2A),
 then the operational playbooks (bootstraps, releases, history). When two
@@ -22,6 +22,7 @@ to **Key Files** for the quickest "where do I edit?" answer.
 - [Context Lifecycle (full agent journey)](#context-lifecycle-full-agent-journey)
 - [Knowledge & Memory (Dome second brain + spawn-time context)](#knowledge--memory-dome-second-brain--spawn-time-context)
 - [Tado A2A (CLI + MCP + real-time events)](#tado-a2a-cli--mcp--real-time-events)
+- [Performance step (Eternal `kind = perf`)](#performance-step-eternal-kind--perf)
 - [Bootstrapping a project (the four `Bootstrap …` actions)](#bootstrapping-a-project-the-four-bootstrap--actions)
 - [Extensions (Notifications, Dome, Cross-Run Browser)](#extensions-notifications-dome-cross-run-browser)
 - [Execution (build matrix, verification, rollback)](#execution-build-matrix-verification-rollback)
@@ -94,11 +95,14 @@ swift build                                  # Build the Swift app
 swift run                                    # Build and run
 make dev                                     # Build Rust core (release) + sync header + run Swift app
 make mcp                                     # Build dome-mcp + tado-mcp stdio bridges (Rust [[bin]]s)
+make perf-suite                              # Build perf-suite binary (Eternal Performance step)
+make perf-test                               # Run perf-suite full test matrix
+make perf-bench                              # Self-bench (Criterion harness, <30s)
 cargo test -p tado-ipc -p tado-settings      # Rust unit tests for IPC + settings crates
 ```
 
 The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+)
-plus a Cargo workspace under `tado-core/` with nine crates:
+plus a Cargo workspace under `tado-core/` with ten crates:
 `tado-terminal` (PTY + grid + VT parser + cbindgen FFI),
 `tado-shared` (cross-crate primitives),
 `tado-ipc` (IPC contract types + registry serialization),
@@ -106,8 +110,12 @@ plus a Cargo workspace under `tado-core/` with nine crates:
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
-and `dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
-`replay`, `corpus run`, `explain` subcommands; the v0.10.0 Phase 2 CI gate).
+`dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
+`replay`, `corpus run`, `explain` subcommands; the v0.10.0 Phase 2 CI gate),
+and `perf-suite` (Rust [[bin]] + [[lib]] for the v0.19.0 Eternal
+Performance step — auto-detects project stack and measures eight
+curated performance dimensions; invoked from
+`.tado/eternal/hooks/perf-gate.sh`).
 Every member links into the same `libtado_core.a` Package.swift consumes.
 
 ## What This Is
@@ -294,10 +302,11 @@ What MUST pass before a release ships. Listed in dependency order.
 
 | Gate | Command | Catches |
 |---|---|---|
-| Rust compile | `cargo build --release -p bt-core -p tado-core` | FFI shim drift, missing header sync |
+| Rust compile | `cargo build --release -p bt-core -p tado-core -p perf-suite` | FFI shim drift, missing header sync, perf-suite drift |
 | Swift build | `cd /Users/miguel/Documents/tado && swift build` | C-header / Swift binding drift |
 | bt-core unit | `cargo test -p bt-core` | service.rs invariants, migration drift |
 | dome-eval lib | `cargo test -p dome-eval` | retrieval-quality regression (Phase 2 corpus) |
+| perf-suite full | `cargo test -p perf-suite` | composite scoring, baseline ratchet, stack detection, proposal patterns |
 | Spawn-pack contract | `cargo test -p bt-core --test spawn_pack_byte_equiv` | byte-stability of preamble (rule 6) |
 | Ingest scope contract | `cargo test -p bt-core --test ingest_scope_contract` | accidental global pollution rule |
 | Live smoke | manual: launch app → Knowledge → System renders without errors | wiring drift, daemon-down behavior |
@@ -434,7 +443,24 @@ human surface: `Dome → Recipes` lists every recipe in the active
 scope, shows the policy summary, runs the recipe with one click,
 and renders the `GovernedAnswer` with citations + missing-authority
 callouts. FFI: `tado_dome_recipe_list`, `tado_dome_recipe_apply`,
-`tado_dome_recipe_seed_defaults`.
+`tado_dome_recipe_seed_defaults`. **v0.17+** adds inline
+success/failure feedback to the Seed defaults / Reset to default
+button so the operator can see the click landed even when the
+recipe set was already seeded at app launch.
+
+**Data cleanup surfaces (v0.17+)** — every Knowledge surface that
+shows persisted state now has a delete affordance, with a strict
+"Tado data only" scope. `Dome → Knowledge → Topics` cards have a
+⋯ menu with "Delete topic data…" that fires `vault.purge_topic_scope`
+(cascades through `note_chunks → graph_nodes → graph_edges → docs`
++ on-disk topic dirs). `Dome → Knowledge → Packs` detail pane has
+a "Delete pack" button backed by `tado_dome_context_delete` /
+`bt-core::context_delete` (DB rows + cascaded `context_pack_sources`
++ on-disk manifest/summary). `Settings → Reset Tado data`
+type-`DELETE`-to-confirm wipes the entire Tado storage root and
+hard-quits the app. Files outside the storage root — including
+each project's `.tado/` folder inside its own tree — are
+deliberately untouched.
 
 **Automation (v0.11+)** — bt-core has shipped an in-process scheduler
 since v0.9 (`automation_*` methods in `service.rs:9663+`,
@@ -781,6 +807,174 @@ file every 5 seconds. External messages go to `/tmp/tado-ipc/a2a-inbox/`.
 See [IPCBroker.swift](Sources/Tado/Services/IPCBroker.swift) and
 [IPCMessage.swift](Sources/Tado/Models/IPCMessage.swift).
 
+## Performance step (Eternal `kind = perf`)
+
+The Performance step is a v0.19.0 addition: an opt-in mode for any
+Eternal run (set `EternalRun.kind = "perf"` via the New Eternal
+sheet's "General | Performance" segment) that measures the project
+the worker is editing on every iteration and refuses to close the
+iteration unless the perf gate clears. Works across all four mode-
+combinations: mega/normal, mega/continuous, sprint/normal,
+sprint/continuous.
+
+### Mental model
+
+The perf step is a **same-turn pay-back gate**. The worker:
+1. Does its work (mega: one unit; sprint: APPLY → EVAL → IMPROVE).
+2. Invokes `bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh`.
+3. Reads the gate's one-line stdout — `PERF: PASS|BASELINE-INIT|
+   REGRESSION|NO-STACK-DETECTED|CORRECTNESS-FAILED ...`.
+4. On PASS / BASELINE-INIT / NO-STACK-DETECTED: copies the
+   `[PERF-OK] composite=<n>` line into the iteration's transcript,
+   then prints the iteration marker.
+5. On REGRESSION: must in the SAME turn either `git revert HEAD
+   --no-edit` or apply ONE refactor proposal from the auto-
+   generated `<run-dir>/perf-proposals.md`, re-run the gate, then
+   print the marker.
+6. The Stop hook + external loop driver both refuse to honor a
+   `[SPRINT-DONE]` / `ETERNAL-DONE` that lacks a preceding
+   `[PERF-OK]` in the same turn — the iteration cannot close
+   while the gate is unsatisfied.
+
+This satisfies "PERFORMANCE AS OPTIMIZED AS POSSIBLE ALWAYS IN
+ALL CASES" (the user's goal for the feature) without violating
+the "no watchdogs / no auto-retry on the dispatch chain" rule —
+the gate enforces by withholding the marker, not by retrying.
+
+### The eight curated dimensions
+
+| metric | unit | direction | weight |
+|---|---|---|---|
+| `algo_complexity` | log-log slope | lower is better | 0.18 |
+| `alloc_per_op` | allocations/op | lower is better | 0.12 |
+| `critical_path_ops` | ops/op | lower is better | 0.12 |
+| `io_syscalls_per_op` | syscalls/op | lower is better | 0.10 |
+| `db_query_cost` | planner cost | lower is better | 0.10 |
+| `xproc_roundtrips` | roundtrips/op | lower is better | 0.10 |
+| `cold_start_ops` | ops to ready | lower is better | 0.13 |
+| `steady_state_rss_ratio` | ratio | lower is better | 0.15 |
+
+Composite is `Σ weight_i × normalize(measured_i, baseline_i)` with
+each per-component normalized score capped to `[0, 2]`. **Per-
+component minimum guard**: any component below 0.85 fails the gate
+even when the composite is fine, stopping hill-climbing trades.
+
+All eight are device-independent by construction: counts, ratios,
+and slopes wherever possible (only `cold_start_ops` is loosely
+time-related, and it counts ops not seconds; `steady_state_rss_ratio`
+is a same-machine measurement that survives hardware changes).
+
+### Stack adapters
+
+`tado-core/crates/perf-suite/src/adapters/` ships six adapters:
+
+| stack | detection | correctness gate | bench tool |
+|---|---|---|---|
+| Rust | `Cargo.toml` | `cargo test --workspace` | `cargo bench` (criterion) |
+| Swift | `Package.swift` or `*.xcodeproj` | `swift test` | XCTest `.measure` |
+| Node | `package.json` | `npm test` (or pnpm/yarn) | `npx vitest bench` |
+| Python | `pyproject.toml` or `setup.py` | `pytest` | `pytest-benchmark` |
+| Go | `go.mod` | `go test ./...` | `go test -bench=.` |
+| Polyglot | ≥2 of above | each present stack's gate | weighted composition |
+
+Polyglot adapter weights per-language samples by lines-of-code
+ratio so a 90% Rust + 10% Node project doesn't get its score
+swamped by Node's slower benches.
+
+### Per-project ratcheting baseline
+
+Each project gets a baseline file at
+`<project>/.tado/perf-baselines/<safe-name>.json`, written
+atomically through `tado_settings::write_json`. The baseline ONLY
+moves in the favorable direction (per-component, not just composite)
+— a regression iteration cannot retroactively lower the bar. History
+is bounded to 50 entries.
+
+**Machine-class drift**: the baseline records the machine class it
+was first written on (`apple-silicon-macos`, `intel-macos`, `linux`,
+`windows`). When a `baseline update` runs on a different class, the
+gate refuses unless `TADO_PERF_ALLOW_DRIFT=1`. Protects the
+ratchet's same-machine assumption when projects move between
+devices.
+
+### Bash hook + perf-suite CLI
+
+`.tado/eternal/hooks/perf-gate.sh` is the integration point. It
+shells out to `perf-suite` (Rust binary in the workspace) which
+exposes:
+
+```text
+perf-suite detect   --project-root <path>             → stack name
+perf-suite measure  --project-root <p> --run-dir <r> --output <report.json>
+perf-suite score    --report <report.json> --baseline <baseline.json>
+perf-suite propose  --project-root <p> --report <r> --output <proposals.md> --since-last-commit
+perf-suite baseline {init,update}  --report <r> --baseline <b>
+perf-suite explain  --report <r> [--baseline <b>] [--metric <name>] [--json]
+```
+
+`score`'s stdout is exactly one line — the bash hook depends on this
+contract (`PERF: PASS composite=<n>` / `PERF: REGRESSION delta=<d>
+hot=<sub>` / `PERF: BASELINE-INIT composite=<n>` / `PERF: NO-STACK-
+DETECTED` / `PERF: CORRECTNESS-FAILED <stack> <error>`).
+
+### State surface
+
+`EternalState` carries four perf fields (all optional, all default
+to zero / nil so old `state.json` files from before v0.19 decode
+unchanged):
+- `perfCycles` — count of `[PERF-OK]` markers seen.
+- `lastPerfScore` — most recent composite, in `[0, 2]`.
+- `perfRegressionDelta` — set on regression, cleared on next pass.
+- `lastPerfReportPath` — pointer to `perf-report.json` for deep-
+  linking from the dashboard.
+
+Plus two new `PhaseKind` cases (`perfPending`, `perfRegressed`) so
+the dashboard pill colour-shifts during the gate's lifecycle.
+
+### Dome retro mirror + events
+
+`RunEventWatcher.handleEternalFire` detects perfCycles increments
+and emits one of three TadoEvents (`eternalPerfImproved` /
+`eternalPerfHeld` / `eternalPerfRegressed`) plus a Dome retro
+under `kind: "eternal-perf"` so future architects can `dome_search`
+past perf cycles. On regression the retro records the delta + the
+offending sub-metric in `cites` so the next architect's IMPROVE
+ladder can target the actual hot path.
+
+### UI
+
+- **`EternalFileModal`** — "General | Performance" segment with an
+  explanatory subtitle. Defaults to General; perf-flagged runs
+  preserve their flag across re-opens.
+- **`ProjectEternalSection`** — perf-cycle counter + composite badge
+  in the running-run row (perf-mode only). The TimelineView's
+  2-second tick auto-updates from state.json — no extra wiring.
+- **`CrossRunBrowserView`** — `perf N` + composite + regression
+  triangle in the row's secondary line, plus four new perf rows in
+  the run-detail status grid (cycles, composite, regression Δ,
+  report path).
+
+### Skill + agent
+
+- `.claude/skills/eternal-performance-step/SKILL.md` — operational
+  guide for the worker. Required reads, standard workflow,
+  validation checks, hard rules.
+- `.claude/agents/eternal-performance-evaluator.md` — optional
+  read-only haiku/max evaluator the worker can spawn via Task tool
+  from inside the perf gate's REGRESSION branch. Re-reads
+  perf-report.json, ranks proposals against the largest-loss
+  sub-metric, replies via `tado-send` with one line:
+  `<composite>|<top-proposal-id>|<rationale>`.
+
+### Reference doc
+
+[bench/PERF_KNOBS.md](bench/PERF_KNOBS.md) — the universal IMPROVE
+ladder (8 rungs, safest → most structural: measurement hygiene,
+algorithmic, allocation, data layout, concurrency, caching, IO/
+syscall, structural) plus per-stack EVAL stencils. The architect
+reads this when generating crafted.md's `## PERFORMANCE` section so
+every project's perf brief uses the same vocabulary.
+
 ## Bootstrapping a project (the four `Bootstrap …` actions)
 
 Every project gets a `⋯` menu (in `ProjectCard` and `TopNavBar`) with
@@ -857,6 +1051,7 @@ cargo test -p bt-core                              # 132+ unit + integration
 cargo test -p bt-core --test spawn_pack_byte_equiv # spawn-pack contract (4 fixtures)
 cargo test -p bt-core --test ingest_scope_contract # ingest scope locked
 cargo test -p dome-eval                            # corpus regression
+cargo test -p perf-suite                           # perf-suite (33 unit + 9 e2e + 8 fixture)
 cargo test -p tado-ipc -p tado-settings            # contract types + atomic IO
 ```
 
@@ -1019,92 +1214,35 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
-- **v0.16.1** (2026-04-28) — *Hardening pass.* Four bugs / gaps
-  fixed: `tado_dome_stop` actually runs `PRAGMA wal_checkpoint
-  (TRUNCATE)` now (was a no-op stub despite v0.15's CHANGELOG
-  claim); `graphLinks` Swift binding shape corrected to match
-  bt-core's `{to, kind}` legacy-table return; orphan
-  `tado_dome_system_runtime_envelope` FFI shim removed (no
-  Swift caller); new **Settings → MCP tools inspector**
-  shipping a static reference list of all 30 dome-mcp +
-  tado-mcp tools with filter-by-prefix.
-- **v0.16.0** (2026-04-28) — *Surface Coverage Pass, phase 6 —
-  CLAUDE.md operations rewrite.* Major doc upgrade: new **Rules**
-  checklist (10 hard rules including the FFI ↔ UI parity rule
-  that drove this whole pass), new **Operations Runbook** (every
-  in-process worker, the migration procedure, the FFI contract,
-  the verification matrix, recovery procedures), new **Memory**
-  section (vault layout, scope hierarchy, graph entity layer,
-  lifecycle primitives, rerank formula), new **Context Lifecycle**
-  walkthrough (the full agent-context journey from spawn → pack
-  → MCP retrieval → consumption → enrichment → supersede → audit
-  → eval), and new **Execution** section (build matrix, test
-  matrix, live verification ritual, rollback procedure). Closes
-  the Surface Coverage Pass.
-- **v0.15.0** (2026-04-28) — *Surface Coverage Pass, phase 5 —
-  collaborative edits + clean shutdown.* Knowledge tab gains a
-  **Suggestions** sub-page (lists pending / applied / rejected
-  suggestions, Accept button with confirmation alert) and the
-  long-stubbed `tado_dome_stop` FFI is finally wired to
-  `NSApplication.willTerminateNotification` so Cmd+Q triggers a
-  clean WAL checkpoint instead of relying on kernel teardown. 2
-  new FFI shims (`suggestion_list/apply`); Tools inspector
-  deferred to v0.16 (needs a real `tools.list` backing method).
-- **v0.14.0** (2026-04-28) — *Surface Coverage Pass, phase 4 —
-  browse what the daemon knows.* Knowledge tab gains **Topics**
-  and **Packs** sub-pages (authoritative topic listing via
-  `topic_list`, full context-pack browser via `context_list` /
-  `context_get`); Calendar tab gains a **Daemon** mode that
-  renders `calendar_range` entries with kind icons + status
-  pills. 5 new FFI shims (`calendar_range`, `topic_list`,
-  `graph_links`, `context_list`, `context_get`) + Swift Codable
-  bindings.
-- **v0.13.0** (2026-04-28) — *Surface Coverage Pass, phase 3 —
-  operator setup + teardown.* New **Vault status** card on
-  Knowledge → System (doc count, topic count, paths, Open in
-  Finder / Snapshot / Bulk import buttons), new **Bulk import
-  wizard** (3-step sheet → preview → review with checkboxes +
-  filter chips → import), new **Agent tokens** settings tab
-  (issue / rotate / revoke with one-time secret display + cap
-  picker, destructive `NSAlert` guard rails). 8 new FFI shims
-  (`vault_status`, `import_preview`, `import_execute`,
-  `token_list/create/rotate/revoke`); `ImportPreviewItem` +
-  `import_execute` promoted to `pub` in bt-core.
-- **v0.12.0** (2026-04-28) — *Surface Coverage Pass, phase 2 —
-  observability.* Knowledge → System surface gains: a **vault
-  health** card (every check from `system_health` rendered with
-  green/red pills); a **scheduler queue** card (ready / scheduled
-  / active counts + stale-lease count); an inline **dome-eval
-  runner** (window picker 1h/24h/7d/all + Run button → P@5/R@10/
-  nDCG/mean-latency/consumption-rate/row-count tiles, all
-  computed in-process via a new `replay_for_vault` lib helper —
-  no subprocess); and an **audit log** viewer with a filter-by-
-  prefix chip showing the last 200 rows + per-row JSON detail.
-  5 new FFI shims (`system_health`, `system_automation_status`,
-  `system_runtime_envelope`, `audit_tail`, `eval_replay`),
-  `StorePaths.domeIndexDB` accessor, dome-eval graduates to a
-  workspace dep of `tado-core`.
-- **v0.11.0** (2026-04-28) — *Surface Coverage Pass, phase 1.* Two
-  big backend subsystems graduate to Dome tabs: the in-process
-  **automation/scheduler** (full CRUD via the new
-  `Dome → Automation` surface — schedule, pause/resume, run-now,
-  retry, delete, with a unified occurrence ledger across every
-  automation) and the Phase 5 **retrieval recipes** (new
-  `Dome → Recipes` surface — browse the 3 baked defaults plus
-  project-scoped overrides, run them with one click, see the
-  `GovernedAnswer` with citations + missing-authority callouts,
-  edit per-project templates). 11 new FFI shims, 1 lifted
-  surface-helpers file (`SurfaceHelpers.swift`), shared by every
-  current and future Dome surface.
-- **v0.10.0** (2026-04-27) — *Knowledge Catalog overlay.* Schema
-  v22→v24 (entity layer + provenance + retrieval log + pending
-  enrichment + retrieval recipes + activation marker), heuristic
-  hybrid-search rerank, four tokio enrichment workers, byte-stable
-  Rust spawn-pack engine (Phase 4 dual-path with Swift fallback),
-  three baked retrieval recipes + governed answers (Phase 5),
-  `dome-eval` CLI as 9th workspace crate. Plus a v0.10.1-style
-  follow-up that scoped the codebase Ingest button to Project vs
-  Global with a one-shot purge for the historical global pollution.
+- **v1.0.0** (2026-05-06) — *The unified release.* Consolidates
+  ten incremental ships (v0.10 through v0.19) into one official
+  v1 tag. Brings together: Qwen3-Embedding-0.6B in-process
+  semantic search; tree-sitter codebase indexing with the live
+  file watcher; the Knowledge Catalog overlay (entity layer +
+  retrieval log + heuristic rerank + governed answers); three
+  baked retrieval recipes (architecture-review, completion-claim,
+  team-handoff) plus per-project overrides; the Surface Coverage
+  Pass full sweep (Automation tab, Recipes tab, Vault status /
+  health / scheduler queue / audit log / dome-eval runner cards,
+  Topics + Packs sub-pages, Suggestions sub-page, Daemon-backed
+  Calendar mode, Bulk import wizard, Agent tokens settings tab,
+  MCP tools inspector); the perf-suite Eternal performance step
+  with same-turn pay-back gate, eight device-independent
+  dimensions, per-project ratcheting baselines, machine-class
+  drift detection, and 30+ refactor proposals; ghost-process
+  eviction (`libc::killpg` process-group teardown on tile Stop +
+  Cmd+Q, Settings → Process hygiene with Kill Zombies + Make
+  Sure); Reset Tado data type-`DELETE`-to-confirm nuclear
+  button; clean WAL checkpoint on shutdown; the ops-grade
+  CLAUDE.md rewrite (10 hard rules, Operations Runbook, Memory
+  section, Context Lifecycle walkthrough, Execution matrix);
+  per-topic and per-pack delete affordances throughout the
+  Knowledge surfaces. Workspace at ten Rust crates
+  (tado-terminal, tado-shared, tado-ipc, tado-settings, bt-core,
+  dome-mcp, tado-mcp, tado-dome, dome-eval, perf-suite). Schema
+  at v24. dome-mcp at 18 tools; tado-mcp at 12 tools. Old
+  per-version tags v0.10.0 through v0.19.0 stay on the remote
+  for archaeology; the changelog narrative starts here.
 - **v0.9.0** (2026-04-25) — *foundation-v2 bundle.* Cargo workspace
   promoted to eight crates, in-process Dome second brain (bt-core
   fused, 21 migrations, Qwen3-Embedding-0.6B replaces hash-noop),

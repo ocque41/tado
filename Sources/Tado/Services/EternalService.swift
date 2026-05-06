@@ -348,6 +348,7 @@ enum EternalService {
         ("pre-compact.sh", preCompactScript),
         ("post-tool.sh", postToolScript),
         ("eternal-loop.sh", workerLoopScript),
+        ("perf-gate.sh", perfGateScript),
     ]
 
     // MARK: - Hook bodies
@@ -431,6 +432,64 @@ enum EternalService {
     LAST=""
     if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
         LAST="$(tail -200 "$TRANSCRIPT" 2>/dev/null | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null | tail -c 8192 || echo "")"
+    fi
+
+    # ─── Perf gate enforcement (kind == "perf") ────────────────────────
+    # When the run was created with kind=perf, the worker is REQUIRED to
+    # clear the perf gate (output `[PERF-OK]`) before printing the
+    # iteration's marker. This block runs BEFORE the sprint-done /
+    # done-marker branches so an out-of-order marker is converted into a
+    # block-and-continue with a pay-back nudge.
+    #
+    # Three sub-cases:
+    #   A. PERF-OK alone (no terminal marker yet) → bump perfCycles +
+    #      lastPerfScore from perf-report.json, then fall through to the
+    #      default block-and-continue branches.
+    #   B. Terminal marker present AND PERF-OK appears earlier in the
+    #      same transcript tail → fall through to the existing branches
+    #      (which will close the iteration normally).
+    #   C. Terminal marker present without a preceding PERF-OK → block
+    #      with a pay-back nudge.
+    if [ "${TADO_PERF_MODE:-0}" = "1" ] && [ -n "$LAST" ]; then
+        PERF_OK_LINE="$(echo "$LAST" | grep -nF -- "[PERF-OK]" | tail -1 | cut -d: -f1)"
+        DONE_LINE="$(echo "$LAST" | grep -nFx -- "$DONE_MARKER" | tail -1 | cut -d: -f1)"
+        SPRINT_DONE_LINE="$(echo "$LAST" | grep -nFx -- "$SPRINT_MARKER" | tail -1 | cut -d: -f1)"
+        TERMINAL_LINE=""
+        if [ -n "$DONE_LINE" ] && { [ -z "$SPRINT_DONE_LINE" ] || [ "$DONE_LINE" -gt "$SPRINT_DONE_LINE" ]; }; then
+            TERMINAL_LINE="$DONE_LINE"
+        elif [ -n "$SPRINT_DONE_LINE" ]; then
+            TERMINAL_LINE="$SPRINT_DONE_LINE"
+        fi
+
+        if [ -n "$TERMINAL_LINE" ]; then
+            if [ -z "$PERF_OK_LINE" ] || [ "$PERF_OK_LINE" -gt "$TERMINAL_LINE" ]; then
+                # Case C — block with pay-back nudge.
+                tmp="$(mktemp 2>/dev/null)" && jq '.phase = "perfPending" | .lastActivityAt = (now|floor)' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+                echo "exit path: perf gate marker-out-of-order block" >> "$LOG" 2>/dev/null || true
+                emit_block_and_exit "[Tado Eternal · perf gate] You printed $DONE_MARKER or $SPRINT_MARKER without first clearing the perf gate. Run \`bash $RUN_DIR/../../hooks/perf-gate.sh\` (or its absolute path: $ROOT/.tado/eternal/hooks/perf-gate.sh). If it prints \`PERF: PASS\`, copy the \`[PERF-OK] composite=...\` line into your output, then re-print the iteration marker. If it prints \`PERF: REGRESSION\`, you MUST in this same turn either revert the offending diff with \`git revert HEAD --no-edit\` or apply ONE refactor from $RUN_DIR/perf-proposals.md, then re-run the gate. Only print the iteration marker after [PERF-OK] is in this turn's output."
+            fi
+            # Case B — terminal marker preceded by PERF-OK; fall through
+            # to existing close-iteration branches below.
+        elif [ -n "$PERF_OK_LINE" ]; then
+            # Case A — PERF-OK alone, this is mid-iteration. Bump
+            # perfCycles + score and let the worker continue.
+            REPORT_JSON="$RUN_DIR/perf-report.json"
+            COMPOSITE="$(jq -r '.composite // null' "$REPORT_JSON" 2>/dev/null || echo "null")"
+            if [ "$COMPOSITE" = "null" ] || [ -z "$COMPOSITE" ]; then
+                COMPOSITE="$(echo "$LAST" | grep -F -- "[PERF-OK]" | tail -1 | sed -nE 's/.*composite=([0-9.]+).*/\1/p')"
+            fi
+            if [ -z "$COMPOSITE" ]; then COMPOSITE="0"; fi
+            tmp="$(mktemp 2>/dev/null)" && jq --argjson c "$COMPOSITE" --arg p "$REPORT_JSON" '
+                .perfCycles = ((.perfCycles // 0) + 1)
+                | .lastPerfScore = (if $c > 0 then $c else .lastPerfScore end)
+                | .perfRegressionDelta = null
+                | .lastPerfReportPath = $p
+                | .phase = "working"
+                | .lastActivityAt = (now|floor)
+            ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "exit path: perf gate cycle bump (mid-iteration)" >> "$LOG" 2>/dev/null || true
+            # Continue to default branches so the worker keeps going.
+        fi
     fi
 
     # Completion marker — whole-line match only. Substring matches are
@@ -616,6 +675,14 @@ enum EternalService {
     echo "════════════════════════════════════════════════════════════"
 
     ITER=0
+    # Counts back-to-back iterations where the CLI exited non-zero AND
+    # produced no useful output. Three in a row = config wedge (bad
+    # flag, missing CLI, broken model name) — bail with phase="failed"
+    # so the UI stops showing "running" while nothing is happening.
+    # Reset to 0 the moment any iteration produces output, so a
+    # transient blip mid-run doesn't kill a long-lived loop.
+    HARDFAIL_STREAK=0
+    HARDFAIL_THRESHOLD=3
     while true; do
         ITER=$((ITER + 1))
 
@@ -667,10 +734,19 @@ enum EternalService {
             done
         fi
 
+        # Per-engine engine display name for the per-iteration prompt
+        # so a Codex worker doesn't read "you are in a Claude Code
+        # session" — small thing but the agent's prose will match the
+        # tooling it actually has.
+        case "${TADO_ENGINE:-claude}" in
+            codex) ENGINE_LABEL="Codex" ;;
+            *)     ENGINE_LABEL="Claude Code" ;;
+        esac
+
         {
             printf '%s\n' "[TADO ETERNAL · loop iteration $ITER · mode=$MODE]"
             printf '%s\n' ""
-            printf '%s\n' "You have been spawned in a FRESH non-interactive Claude Code session by"
+            printf '%s\n' "You have been spawned in a FRESH non-interactive $ENGINE_LABEL session by"
             printf '%s\n' "the Tado Eternal loop driver. Your context is empty except for this"
             printf '%s\n' "prompt. After your turn ends, the driver will spawn you again with an"
             printf '%s\n' "updated prompt; this continues indefinitely until you output"
@@ -724,76 +800,158 @@ enum EternalService {
             printf '%s\n' "Iteration $ITER begins now."
         } > "$PROMPT_FILE"
 
-        # Build claude flags from env.
-        CLAUDE_FLAGS=(
-            "--permission-mode" "bypassPermissions"
-            "--setting-sources" "user,project,local"
-        )
-        [ "${TADO_SKIP_PERMISSIONS:-1}" = "1" ] && CLAUDE_FLAGS+=("--dangerously-skip-permissions")
-        [ -n "$TADO_MODEL" ] && CLAUDE_FLAGS+=("--model" "$TADO_MODEL")
-        [ -n "$TADO_EFFORT" ] && CLAUDE_FLAGS+=("--effort" "$TADO_EFFORT")
+        # Pick the CLI + flags based on which engine the run was
+        # configured with. TADO_ENGINE is exported by
+        # ProcessSpawner.environment() from the session's engine choice;
+        # the codex pre/post flag bundles come from
+        # eternalWorkerEnv() and are pre-shell-escaped by Swift, so
+        # word-splitting them with `eval` reconstructs the right argv.
+        ENGINE="${TADO_ENGINE:-claude}"
+        case "$ENGINE" in
+          codex)
+            CLI=codex
+            # Per-iteration codex invocation routes through `codex exec`
+            # for two reasons: (1) exec mode emits plain text (no TUI
+            # alt-screen), which is what the wrapper expects to tee +
+            # grep for the marker; (2) Codex 0.125.0 interactive mode
+            # rejects gpt-5.5 with "newer Codex required" while exec
+            # accepts the same model fine. We also have to swap flags:
+            # exec rejects `--ask-for-approval`, `--sandbox`, and
+            # `--no-alt-screen` by name, so the codex pre-flags here
+            # use `--dangerously-bypass-approvals-and-sandbox` instead.
+            # (The Swift side encodes this in eternalCodexExecPreFlags
+            # for one-shot tiles; here we just hard-code the right
+            # combination for the loop.)
+            eval "POST_FLAGS=(${TADO_CODEX_POST_FLAGS:-})"
+            PRE_FLAGS=(
+                "exec"
+                "--dangerously-bypass-approvals-and-sandbox"
+                "-c" "shell_environment_policy.inherit=all"
+            )
+            OUTPUT_MODE=plain
+            ;;
+          *)
+            CLI=claude
+            PRE_FLAGS=(
+                "--permission-mode" "bypassPermissions"
+                "--setting-sources" "user,project,local"
+            )
+            [ "${TADO_SKIP_PERMISSIONS:-1}" = "1" ] && PRE_FLAGS+=("--dangerously-skip-permissions")
+            POST_FLAGS=()
+            [ -n "$TADO_MODEL" ] && POST_FLAGS+=("--model" "$TADO_MODEL")
+            # Skip the literal "auto" — same sentinel ClaudeEffort.cliFlags
+            # uses for one-shot tiles. Defense-in-depth so a future caller
+            # that bypasses eternalWorkerEnv() doesn't poison every iter.
+            [ -n "$TADO_EFFORT" ] && [ "$TADO_EFFORT" != "auto" ] && \
+                POST_FLAGS+=("--effort" "$TADO_EFFORT")
+            OUTPUT_MODE=stream-json
+            ;;
+        esac
 
         echo ""
         echo "────────── iteration $ITER (started $(date -u +%H:%M:%SZ)) ──────────"
         echo ""
-        echo "[$(date -u +%FT%TZ)] iter $ITER: invoking claude" >> "$LOG" 2>/dev/null || true
+        echo "[$(date -u +%FT%TZ)] iter $ITER: invoking $CLI (engine=$ENGINE)" >> "$LOG" 2>/dev/null || true
 
         # Streaming strategy:
         #
-        # `claude -p` in the default "text" output format emits NOTHING
-        # until the whole turn finishes. The tile sits blank for minutes.
-        # `script -q /dev/null` doesn't help — claude intentionally
-        # buffers the complete assistant response before printing in
-        # text mode.
+        # Claude branch: `claude -p` in the default "text" output format
+        # emits NOTHING until the whole turn finishes. The tile sits
+        # blank for minutes. `script -q /dev/null` doesn't help —
+        # claude intentionally buffers the complete assistant response
+        # before printing in text mode. Fix: `--output-format stream-json
+        # --include-partial-messages --verbose` makes claude emit one
+        # JSON event per line as work progresses (session init →
+        # thinking → tool_use start → text deltas → result). We tee the
+        # raw NDJSON to a file (for marker detection afterward) and pipe
+        # it through jq to pretty-print a human-readable stream in the
+        # tile.
         #
-        # Fix: `--output-format stream-json --include-partial-messages
-        # --verbose` makes claude emit one JSON event per line as work
-        # progresses (session init → thinking → tool_use start → text
-        # deltas → result). We tee the raw NDJSON to a file (for marker
-        # detection afterward) and pipe it through jq to pretty-print a
-        # human-readable stream in the tile: tool-use names, text
-        # deltas, etc. Every event flushes immediately because jq's
-        # stdout is the terminal (line-buffered) and claude writes one
-        # JSON object per line.
+        # Codex branch: codex prints plain text directly to stdout as
+        # the agent works, so no stream-json gymnastics are needed.
+        # We tee through `sed` to strip ANSI escapes (codex's TUI
+        # decorations) before marker detection, which expects bare lines.
         RAW_OUTPUT="$(mktemp 2>/dev/null)"
         OUTPUT_FILE="$(mktemp 2>/dev/null)"
-        claude -p "$(cat "$PROMPT_FILE")" \
-            --output-format stream-json \
-            --include-partial-messages \
-            --verbose \
-            "${CLAUDE_FLAGS[@]}" 2>&1 \
-          | tee "$RAW_OUTPUT" \
-          | jq -Rr --unbuffered '
-              try fromjson catch null
-              | select(. != null)
-              | if .type == "system" and .subtype == "init" then
-                    "▸ session ready (model: " + (.model // "?") + ")\n"
-                elif .type == "stream_event" then
-                    if .event.type == "content_block_start"
-                       and .event.content_block.type == "tool_use" then
-                        "\n🔧 " + (.event.content_block.name // "tool") + "\n"
-                    elif .event.type == "content_block_delta"
-                         and .event.delta.type == "text_delta" then
-                        .event.delta.text
-                    else empty end
-                elif .type == "result" then
-                    "\n✓ turn complete (" + ((.duration_ms // 0 | tostring) + "ms, $" + (.total_cost_usd // 0 | tostring)) + ")\n"
-                else empty end'
-        RC=${PIPESTATUS[0]}
+        if [ "$OUTPUT_MODE" = "stream-json" ]; then
+            "$CLI" -p "$(cat "$PROMPT_FILE")" \
+                --output-format stream-json \
+                --include-partial-messages \
+                --verbose \
+                "${PRE_FLAGS[@]}" \
+                "${POST_FLAGS[@]}" 2>&1 \
+              | tee "$RAW_OUTPUT" \
+              | jq -Rr --unbuffered '
+                  try fromjson catch null
+                  | select(. != null)
+                  | if .type == "system" and .subtype == "init" then
+                        "▸ session ready (model: " + (.model // "?") + ")\n"
+                    elif .type == "stream_event" then
+                        if .event.type == "content_block_start"
+                           and .event.content_block.type == "tool_use" then
+                            "\n🔧 " + (.event.content_block.name // "tool") + "\n"
+                        elif .event.type == "content_block_delta"
+                             and .event.delta.type == "text_delta" then
+                            .event.delta.text
+                        else empty end
+                    elif .type == "result" then
+                        "\n✓ turn complete (" + ((.duration_ms // 0 | tostring) + "ms, $" + (.total_cost_usd // 0 | tostring)) + ")\n"
+                    else empty end'
+            RC=${PIPESTATUS[0]}
 
-        # Extract the assembled assistant text (every `assistant` event
-        # carries .message.content[] with fully-built text blocks). Used
-        # below for whole-line marker matching.
-        jq -r '
-            select(.type == "assistant")
-            | .message.content[]?
-            | select(.type == "text")
-            | .text
-        ' < "$RAW_OUTPUT" 2>/dev/null > "$OUTPUT_FILE"
+            # Extract the assembled assistant text (every `assistant`
+            # event carries .message.content[] with fully-built text
+            # blocks). Used below for whole-line marker matching.
+            jq -r '
+                select(.type == "assistant")
+                | .message.content[]?
+                | select(.type == "text")
+                | .text
+            ' < "$RAW_OUTPUT" 2>/dev/null > "$OUTPUT_FILE"
+        else
+            # Codex: positional prompt, plain stdout. Echo through to
+            # the tile as-is, then strip ANSI for marker matching so
+            # `grep -qFx ETERNAL-DONE` works on a clean line.
+            "$CLI" "${PRE_FLAGS[@]}" "${POST_FLAGS[@]}" "$(cat "$PROMPT_FILE")" 2>&1 \
+              | tee "$RAW_OUTPUT"
+            RC=${PIPESTATUS[0]}
+            sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' < "$RAW_OUTPUT" > "$OUTPUT_FILE"
+        fi
         rm -f "$RAW_OUTPUT" 2>/dev/null || true
         rm -f "$PROMPT_FILE" 2>/dev/null || true
 
-        echo "[$(date -u +%FT%TZ)] iter $ITER: claude exit=$RC" >> "$LOG" 2>/dev/null || true
+        echo "[$(date -u +%FT%TZ)] iter $ITER: $CLI exit=$RC" >> "$LOG" 2>/dev/null || true
+
+        # Persistent-failure detector. Catches the case where the CLI
+        # rejects an arg, the model name, or fails to launch — the loop
+        # would otherwise spin forever, writing lastActivityAt=now every
+        # 2s and tricking the UI's isHookFresh() check into showing the
+        # run as "running" while no work is actually happening. We only
+        # count iterations that produced literally zero useful output;
+        # any non-empty turn (even with RC != 0) resets the streak so
+        # mid-run blips don't kill long sessions.
+        if [ "$RC" -ne 0 ] && [ ! -s "$OUTPUT_FILE" ]; then
+            HARDFAIL_STREAK=$((HARDFAIL_STREAK + 1))
+            echo "[$(date -u +%FT%TZ)] iter $ITER: hard-fail streak=$HARDFAIL_STREAK" >> "$LOG" 2>/dev/null || true
+            if [ "$HARDFAIL_STREAK" -ge "$HARDFAIL_THRESHOLD" ]; then
+                # Capture the last few lines from RAW_OUTPUT (already
+                # cleaned up above into OUTPUT_FILE — empty here by
+                # construction, so fall back to the loop log tail).
+                ERR_TAIL="$(tail -5 "$LOG" 2>/dev/null | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-400)"
+                LAST_ERROR="$CLI exited $RC with no output (x$HARDFAIL_STREAK in a row); tail: $ERR_TAIL"
+                rm -f "$ACTIVE_FLAG" "$OUTPUT_FILE" 2>/dev/null || true
+                tmp="$(mktemp 2>/dev/null)" && \
+                    jq --arg e "$LAST_ERROR" '.phase = "failed" | .lastError = $e | .iterations = '$ITER \
+                    "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+                echo "[$(date -u +%FT%TZ)] iter $ITER: hard-fail threshold reached, exiting" >> "$LOG" 2>/dev/null || true
+                echo ""
+                echo "=== Tado Eternal: $CLI failed $HARDFAIL_STREAK iterations in a row, stopping ==="
+                echo "    Last exit code: $RC. Check $LOG for details."
+                break
+            fi
+        else
+            HARDFAIL_STREAK=0
+        fi
 
         # Update state.json iteration + lastActivityAt (hook may have already,
         # but this guarantees it even if hooks were disabled).
@@ -801,19 +959,66 @@ enum EternalService {
             jq ".iterations = $ITER | .phase = \"working\" | .lastActivityAt = (now|floor)" \
             "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
 
+        # Perf gate marker: bump perfCycles + lastPerfScore when the
+        # iteration's output contains [PERF-OK ...]. Idempotent per
+        # iteration — multiple PERF-OK lines from sub-runs (revert +
+        # re-gate) only count the most recent.
+        if [ "${TADO_PERF_MODE:-0}" = "1" ] && [ -s "$OUTPUT_FILE" ] && \
+           grep -qF -- "[PERF-OK]" "$OUTPUT_FILE" 2>/dev/null; then
+            REPORT_JSON="$TADO_DIR/perf-report.json"
+            COMPOSITE="$(jq -r '.composite // null' "$REPORT_JSON" 2>/dev/null || echo "null")"
+            if [ "$COMPOSITE" = "null" ] || [ -z "$COMPOSITE" ]; then
+                COMPOSITE="$(grep -F -- "[PERF-OK]" "$OUTPUT_FILE" | tail -1 | sed -nE 's/.*composite=([0-9.]+).*/\1/p')"
+            fi
+            if [ -z "$COMPOSITE" ]; then COMPOSITE="0"; fi
+            tmp="$(mktemp 2>/dev/null)" && \
+                jq --argjson c "$COMPOSITE" --arg p "$REPORT_JSON" '
+                    .perfCycles = ((.perfCycles // 0) + 1)
+                    | .lastPerfScore = (if $c > 0 then $c else .lastPerfScore end)
+                    | .perfRegressionDelta = null
+                    | .lastPerfReportPath = $p
+                ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "[$(date -u +%FT%TZ)] iter $ITER: perf gate cleared (composite=$COMPOSITE)" >> "$LOG" 2>/dev/null || true
+        fi
+
+        # Perf-mode enforcement: a SPRINT_MARKER or DONE_MARKER in the
+        # iteration output WITHOUT a [PERF-OK] earlier in the same
+        # output is a contract violation. The Stop hook handles the
+        # in-session block; here in the external loop we just refuse
+        # to honor the marker (skip increment / break) so the next
+        # iteration gets the existing nudge mechanism.
+        PERF_GATE_MISSED=0
+        if [ "${TADO_PERF_MODE:-0}" = "1" ] && [ -s "$OUTPUT_FILE" ]; then
+            HAS_TERMINAL=0
+            if grep -qFx -- "$SPRINT_MARKER" "$OUTPUT_FILE" 2>/dev/null \
+               || grep -qFx -- "$DONE_MARKER" "$OUTPUT_FILE" 2>/dev/null; then
+                HAS_TERMINAL=1
+            fi
+            if [ "$HAS_TERMINAL" = "1" ]; then
+                if ! grep -qF -- "[PERF-OK]" "$OUTPUT_FILE" 2>/dev/null; then
+                    PERF_GATE_MISSED=1
+                    tmp="$(mktemp 2>/dev/null)" && \
+                        jq '.phase = "perfPending"' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+                    echo "[$(date -u +%FT%TZ)] iter $ITER: perf gate MISSED — refusing to honor terminal marker" >> "$LOG" 2>/dev/null || true
+                fi
+            fi
+        fi
+
         # Sprint marker: increment sprints counter for the UI.
         # $OUTPUT_FILE was built by jq above from the assembled assistant
         # .message.content[].text blocks, so whole-line matching works
         # cleanly — no PTY CRLF to strip.
-        if [ "$MODE" = "sprint" ] && [ -s "$OUTPUT_FILE" ] && \
+        if [ "$PERF_GATE_MISSED" = "0" ] && [ "$MODE" = "sprint" ] && [ -s "$OUTPUT_FILE" ] && \
            grep -qFx -- "$SPRINT_MARKER" "$OUTPUT_FILE" 2>/dev/null; then
             tmp="$(mktemp 2>/dev/null)" && \
                 jq '.sprints += 1' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
             echo "[$(date -u +%FT%TZ)] iter $ITER: sprint marker detected" >> "$LOG" 2>/dev/null || true
         fi
 
-        # Completion marker: exit the loop.
-        if [ -s "$OUTPUT_FILE" ] && \
+        # Completion marker: exit the loop. Suppressed when perf gate
+        # was missed — the next iteration's nudge will re-prompt the
+        # worker to clear the gate before printing the marker again.
+        if [ "$PERF_GATE_MISSED" = "0" ] && [ -s "$OUTPUT_FILE" ] && \
            grep -qFx -- "$DONE_MARKER" "$OUTPUT_FILE" 2>/dev/null; then
             rm -f "$ACTIVE_FLAG" "$OUTPUT_FILE" 2>/dev/null || true
             tmp="$(mktemp 2>/dev/null)" && \
@@ -833,6 +1038,172 @@ enum EternalService {
 
     { date -u +"%FT%TZ eternal-loop.sh exit"; echo ""; } >> "$LOG" 2>/dev/null || true
     exit 0
+    """##
+
+    // The perf gate.
+    //
+    // Invoked from the worker prompt (and indirectly from the perf
+    // skill's standard workflow) when an Eternal run was created with
+    // kind=perf. Runs the project's correctness tests via the
+    // perf-suite adapter, then measures the eight curated dimensions,
+    // scores against `.tado/perf-baselines/<safe-name>.json`, and
+    // either:
+    //   - PASS: updates the baseline atomically (via tado-settings)
+    //     and prints `[PERF-OK] composite=<n>` for the worker to
+    //     include in its turn output.
+    //   - REGRESSION: refuses to update the baseline, generates a
+    //     fresh `perf-proposals.md`, sets state.phase=perfRegressed,
+    //     and prints `PERF: REGRESSION delta=<d> hot=<sub>` so the
+    //     worker can act on it in the same turn.
+    //   - CORRECTNESS-FAILED: tests broke; gate refuses to score,
+    //     state.phase=perfRegressed, worker sees the failure and
+    //     fixes tests next iteration.
+    //   - NO-STACK-DETECTED: no recognizable language fingerprint
+    //     in the project root; gate is a no-op (the worker still
+    //     prints [PERF-OK] manually because a missing stack is not
+    //     a regression).
+    //
+    // Stdout contract is exactly the same as `perf-suite score` so
+    // the worker can `bash perf-gate.sh` and copy the result line.
+    //
+    // FAIL-SAFE — no `set -e`. Every error path prints something
+    // useful and exits 0; the worker's prompt reading the output
+    // decides what to do next.
+    private static let perfGateScript = ##"""
+    #!/bin/bash
+    # FAIL-SAFE — no set -e / pipefail. See stop.sh comment.
+
+    ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+    RUN_ID="${TADO_ETERNAL_RUN_ID:-}"
+    if [ -z "$RUN_ID" ]; then
+        echo "PERF: NO-RUN — perf-gate.sh requires TADO_ETERNAL_RUN_ID env var" >&2
+        exit 0
+    fi
+
+    if [ "${TADO_PERF_MODE:-0}" != "1" ]; then
+        # Run wasn't created with kind=perf. Treat as no-op so a
+        # general-mode worker can call this script defensively.
+        echo "PERF: NOT-PERF-MODE"
+        exit 0
+    fi
+
+    RUN_DIR="$ROOT/.tado/eternal/runs/$RUN_ID"
+    REPORT="$RUN_DIR/perf-report.json"
+    PROPOSALS="$RUN_DIR/perf-proposals.md"
+    STATE="$RUN_DIR/state.json"
+    LOG="$RUN_DIR/perf-gate.log"
+    PROJECT_NAME="$(basename "$ROOT" | tr -c 'A-Za-z0-9_.-' '_' | head -c 64)"
+    BASELINE_DIR="$ROOT/.tado/perf-baselines"
+    BASELINE="$BASELINE_DIR/$PROJECT_NAME.json"
+
+    mkdir -p "$RUN_DIR" "$BASELINE_DIR" 2>/dev/null || true
+    { echo "---"; date -u +"%FT%TZ perf-gate invoked (run=$RUN_ID, project=$PROJECT_NAME)"; } >> "$LOG" 2>/dev/null || true
+
+    # Resolve perf-suite. If the bundled binary path env is set
+    # (TADO_PERF_SUITE_BIN), use that; otherwise try `cargo run -p
+    # perf-suite --release --quiet --` which is correct in the Tado
+    # workspace.
+    if [ -n "${TADO_PERF_SUITE_BIN:-}" ] && [ -x "$TADO_PERF_SUITE_BIN" ]; then
+        PERF_BIN=("$TADO_PERF_SUITE_BIN")
+    elif command -v perf-suite >/dev/null 2>&1; then
+        PERF_BIN=(perf-suite)
+    else
+        # Fallback: run from a Tado-resident workspace clone if available.
+        TADO_REPO="${TADO_REPO_ROOT:-/Users/miguel/Documents/tado}"
+        if [ -d "$TADO_REPO/tado-core" ]; then
+            PERF_BIN=(cargo run --quiet --release --manifest-path "$TADO_REPO/tado-core/Cargo.toml" -p perf-suite --)
+        else
+            echo "PERF: NO-RUNTIME — perf-suite not found (set TADO_PERF_SUITE_BIN or install perf-suite to PATH)" >&2
+            exit 0
+        fi
+    fi
+
+    # Mark phase pending so the dashboard pill shows the gate is in
+    # flight. State always returns to working / perfRegressed below.
+    tmp="$(mktemp 2>/dev/null)" && jq '.phase = "perfPending" | .lastActivityAt = (now|floor)' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+
+    # Step 1 — measure (correctness gate runs internally unless
+    # --skip-correctness was passed by the caller).
+    "${PERF_BIN[@]}" measure --project-root "$ROOT" --run-dir "$RUN_DIR" --output "$REPORT" >> "$LOG" 2>&1
+    MEASURE_EXIT=$?
+    if [ "$MEASURE_EXIT" != "0" ]; then
+        echo "PERF: MEASURE-FAILED exit=$MEASURE_EXIT" >&2
+        tmp="$(mktemp 2>/dev/null)" && jq '.phase = "perfRegressed" | .perfRegressionDelta = 1.0' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+        exit 0
+    fi
+
+    # Step 2 — score against baseline. Capture stdout (the contract
+    # one-liner) and the exit code (0 = PASS/init/no-stack, 2 = regression).
+    SCORE_LINE="$("${PERF_BIN[@]}" score --report "$REPORT" --baseline "$BASELINE" 2>>"$LOG")"
+    SCORE_EXIT=$?
+    echo "$SCORE_LINE" >> "$LOG" 2>/dev/null || true
+
+    case "$SCORE_LINE" in
+        "PERF: PASS"*|"PERF: BASELINE-INIT"*)
+            COMPOSITE="$(echo "$SCORE_LINE" | sed -nE 's/.*composite=([0-9.]+).*/\1/p')"
+            if [ -z "$COMPOSITE" ]; then COMPOSITE="0"; fi
+            # Step 3 — update baseline atomically.
+            if echo "$SCORE_LINE" | grep -q "BASELINE-INIT"; then
+                "${PERF_BIN[@]}" baseline init --report "$REPORT" --baseline "$BASELINE" >> "$LOG" 2>&1
+            else
+                "${PERF_BIN[@]}" baseline update --report "$REPORT" --baseline "$BASELINE" >> "$LOG" 2>&1
+            fi
+            tmp="$(mktemp 2>/dev/null)" && jq --argjson c "$COMPOSITE" --arg p "$REPORT" '
+                .perfRegressionDelta = null
+                | .lastPerfScore = (if $c > 0 then $c else .lastPerfScore end)
+                | .lastPerfReportPath = $p
+                | .phase = "working"
+            ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "$SCORE_LINE"
+            echo "[PERF-OK] composite=$COMPOSITE"
+            exit 0
+            ;;
+        "PERF: REGRESSION"*)
+            DELTA="$(echo "$SCORE_LINE" | sed -nE 's/.*delta=([0-9.]+).*/\1/p')"
+            if [ -z "$DELTA" ]; then DELTA="0"; fi
+            tmp="$(mktemp 2>/dev/null)" && jq --argjson d "$DELTA" --arg p "$REPORT" '
+                .perfRegressionDelta = $d
+                | .lastPerfReportPath = $p
+                | .phase = "perfRegressed"
+            ' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            # Step 4 — generate proposals so the worker has something
+            # actionable to read. Capped at 8.
+            "${PERF_BIN[@]}" propose --project-root "$ROOT" --report "$REPORT" --output "$PROPOSALS" --cap 8 >> "$LOG" 2>&1
+            # Step 5 — auto-spawn the eternal-performance-evaluator
+            # agent so the worker has a second-opinion ranking of
+            # which proposal to apply. Best-effort: tado-deploy may
+            # not be on PATH (in which case the worker still has the
+            # proposals file to read manually). The agent reads
+            # perf-report.json + perf-proposals.md, ranks the
+            # proposals against the regression's hot sub-metric, and
+            # tado-sends a one-line verdict back to the worker.
+            if command -v tado-deploy >/dev/null 2>&1 && [ "${TADO_PERF_AUTO_EVALUATOR:-1}" = "1" ]; then
+                EVAL_PROMPT="[perf-eval] Read $REPORT and $PROPOSALS. The gate detected a regression (delta=$DELTA). Read the report's per-component normalized scores, identify the lowest-normalized sub-metric, pair it with the IMPROVE-ladder rung most likely to address it (alloc → Rung 2, critical-path → Rung 1/3, IO → Rung 6, etc.), and pick the top proposal at that rung. Reply via tado-send to the worker grid with one line: <composite>|<top-proposal-id>|<one-sentence-rationale>. STOP."
+                tado-deploy "$EVAL_PROMPT" --agent eternal-performance-evaluator >> "$LOG" 2>&1 &
+                disown 2>/dev/null || true
+            fi
+            echo "$SCORE_LINE"
+            echo "Proposals written to $PROPOSALS"
+            exit 0
+            ;;
+        "PERF: NO-STACK-DETECTED"*)
+            # Treat as a free pass — there's nothing to measure. Bump
+            # cycles + emit the marker so the iteration can close.
+            tmp="$(mktemp 2>/dev/null)" && jq '.phase = "working" | .perfRegressionDelta = null' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "$SCORE_LINE"
+            echo "[PERF-OK] composite=1.000"
+            exit 0
+            ;;
+        "PERF: CORRECTNESS-FAILED"*)
+            tmp="$(mktemp 2>/dev/null)" && jq '.phase = "perfRegressed" | .perfRegressionDelta = 1.0' "$STATE" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE" 2>/dev/null
+            echo "$SCORE_LINE"
+            exit 0
+            ;;
+        *)
+            echo "PERF: UNKNOWN — score returned exit=$SCORE_EXIT line='$SCORE_LINE'" >&2
+            exit 0
+            ;;
+    esac
     """##
 
     // MARK: - .claude/settings.json merge
@@ -1223,12 +1594,18 @@ enum EternalService {
         // Build the architect prompt. Mode carries through so the architect
         // knows whether to emit Sprint or Mega crafted.md. The prompt uses
         // `.tado/eternal/runs/<id>/user-brief.md` and writes
-        // `.tado/eternal/runs/<id>/crafted.md` — see ProcessSpawner.
+        // `.tado/eternal/runs/<id>/crafted.md` — see ProcessSpawner. Engine
+        // is threaded through so the architect bakes engine-correct
+        // "Hard rules" into crafted.md (Claude bypass-mode quirks vs
+        // Codex sandbox quirks).
+        let architectEngine = TerminalEngine(rawValue: run.engine) ?? .claude
         let prompt = ProcessSpawner.eternalArchitectPrompt(
             projectName: project.name,
             projectRoot: project.rootPath,
             mode: run.mode,
-            runID: run.id
+            runID: run.id,
+            engine: architectEngine,
+            kind: run.kind
         )
 
         // Allocate grid + spawn.
@@ -1263,16 +1640,46 @@ enum EternalService {
         // is the recommended combo; if they pick something else they
         // get exactly what they picked. Permission mode still comes
         // from the run's Full-Auto toggle.
+        //
+        // Engine branches off `run.engine` (stamped at run creation from
+        // the user's `AppSettings.engine` pick). Codex Eternal tiles get
+        // the codex embed shim + `--ask-for-approval never --sandbox
+        // danger-full-access` so they don't stall on approval prompts.
+        let modeFlags: [String]
+        let modelFlags: [String]
+        let effortFlags: [String]
+        let useCodexExec: Bool
+        switch architectEngine {
+        case .claude:
+            modeFlags = ProcessSpawner.eternalPermissionFlags(skipPermissions: run.skipPermissions)
+            modelFlags = ["--model", settings.claudeModel.rawValue]
+            effortFlags = settings.claudeEffort.cliFlags
+            useCodexExec = false
+        case .codex:
+            // The architect is one-shot — write crafted.md and exit.
+            // `codex exec` is a better fit than interactive `codex`:
+            // (a) cleaner scrollable text output (no TUI alt-screen
+            // weirdness), (b) bypasses the Codex 0.125.0 interactive
+            // bug that rejects gpt-5.5 with "newer Codex required",
+            // (c) takes the simpler `--dangerously-bypass-approvals-
+            // and-sandbox` shortcut instead of the standalone
+            // `--ask-for-approval` / `--sandbox` pair (exec rejects
+            // those by name) and skips `--no-alt-screen` (which exec
+            // also rejects).
+            modeFlags = ProcessSpawner.eternalCodexExecPreFlags()
+            modelFlags = settings.codexModel.cliFlags
+            effortFlags = settings.codexEffort.cliFlags
+            useCodexExec = true
+        }
         terminalManager.spawnAndWire(
             todo: todo,
-            engine: .claude,
+            engine: architectEngine,
             cwd: project.rootPath,
             projectName: project.name,
-            modeFlagsOverride: ProcessSpawner.eternalPermissionFlags(
-                skipPermissions: run.skipPermissions
-            ),
-            modelFlagsOverride: ["--model", settings.claudeModel.rawValue],
-            effortFlagsOverride: settings.claudeEffort.cliFlags,
+            modeFlagsOverride: modeFlags,
+            modelFlagsOverride: modelFlags,
+            effortFlagsOverride: effortFlags,
+            eternalUseCodexExec: useCodexExec,
             eternalRunID: run.id,
             runRole: "architect"
         )
@@ -1341,20 +1748,41 @@ enum EternalService {
         modelContext.insert(todo)
         try? modelContext.save()
 
-        // Pin Haiku 4.5 / high. This is a note-distillation job, not
-        // planning — no need for Opus. Same permission-mode flags as the
-        // worker so the interventor can Write to the inbox without
-        // prompts.
+        // Pin Haiku 4.5 / high (Claude) or the user's Codex model + effort
+        // pick. This is a note-distillation job, not planning — no need
+        // for Opus. Same permission-mode flags as the worker so the
+        // interventor can Write to the inbox without prompts. Codex
+        // doesn't have a small/fast model class equivalent to Haiku; the
+        // user's settings drive the engine pick.
+        let engine = TerminalEngine(rawValue: run.engine) ?? .claude
+        let modeFlags: [String]
+        let modelFlags: [String]
+        let effortFlags: [String]
+        let useCodexExec: Bool
+        switch engine {
+        case .claude:
+            modeFlags = ProcessSpawner.eternalPermissionFlags(skipPermissions: run.skipPermissions)
+            modelFlags = ["--model", ClaudeModel.haiku45.rawValue]
+            effortFlags = ["--effort", ClaudeEffort.high.rawValue]
+            useCodexExec = false
+        case .codex:
+            // Same exec-mode rationale as the architect — the
+            // interventor is a one-shot Haiku-equivalent tile that
+            // writes a distilled directive to the inbox and exits.
+            modeFlags = ProcessSpawner.eternalCodexExecPreFlags()
+            modelFlags = settings.codexModel.cliFlags
+            effortFlags = settings.codexEffort.cliFlags
+            useCodexExec = true
+        }
         terminalManager.spawnAndWire(
             todo: todo,
-            engine: .claude,
+            engine: engine,
             cwd: project.rootPath,
             projectName: project.name,
-            modeFlagsOverride: ProcessSpawner.eternalPermissionFlags(
-                skipPermissions: run.skipPermissions
-            ),
-            modelFlagsOverride: ["--model", ClaudeModel.haiku45.rawValue],
-            effortFlagsOverride: ["--effort", ClaudeEffort.high.rawValue],
+            modeFlagsOverride: modeFlags,
+            modelFlagsOverride: modelFlags,
+            effortFlagsOverride: effortFlags,
+            eternalUseCodexExec: useCodexExec,
             eternalRunID: run.id,
             runRole: "interventor"
         )
@@ -1384,9 +1812,12 @@ enum EternalService {
     /// a fresh session with the counter reset — the wrapper can run for
     /// days without tripping that safety.
     ///
-    /// No in-process supervision after spawn — the `EternalWatchdog`
-    /// timer polls state.json every 15 min and respawns if the wrapper
-    /// appears wedged.
+    /// No in-process supervision after spawn. Per CLAUDE.md rule 1
+    /// the dispatch chain runs unchecked: the operator sees a wedged
+    /// wrapper as a non-progressing tile and intervenes manually. The
+    /// previous `EternalWatchdog` was deleted because its wall-clock
+    /// staleness check fired false positives after laptop sleep,
+    /// respawning healthy runs and resetting their `startedAt`.
     @MainActor
     static func spawnWorker(
         run: EternalRun,
@@ -1434,22 +1865,31 @@ enum EternalService {
         // Build the worker prompt. Both builders now reference crafted.md as
         // the source brief — the worker reads that file every iteration. The
         // run id is embedded so the prompt can point the agent at the correct
-        // per-run paths (`.tado/eternal/runs/<id>/...`).
+        // per-run paths (`.tado/eternal/runs/<id>/...`). Engine is threaded
+        // through so the closing "non-stop hygiene" paragraph matches the
+        // CLI the worker is actually running on (Claude's bypass-permissions
+        // foot-gun vs Codex's `--ask-for-approval never` reminders).
+        let workerEngine = TerminalEngine(rawValue: run.engine) ?? .claude
         let prompt: String
+        let perfMode = (run.kind == "perf")
         if run.mode == "sprint" {
             prompt = ProcessSpawner.eternalSprintPrompt(
                 projectName: project.name,
                 projectRoot: project.rootPath,
                 marker: run.completionMarker,
                 sprintMarker: "[SPRINT-DONE]",
-                runID: run.id
+                runID: run.id,
+                engine: workerEngine,
+                perfMode: perfMode
             )
         } else {
             prompt = ProcessSpawner.eternalMegaPrompt(
                 projectName: project.name,
                 projectRoot: project.rootPath,
                 marker: run.completionMarker,
-                runID: run.id
+                runID: run.id,
+                engine: workerEngine,
+                perfMode: perfMode
             )
         }
 
@@ -1488,13 +1928,43 @@ enum EternalService {
         // a smaller model can stall on the first permission prompt. That's
         // an intentional trade-off — the experiment is the point.
         let loopKind = (run.loopKind == "internal") ? "internal" : "external"
-        let workerModelID: String = settings.claudeModel.rawValue
         let continuePrompt: String? = loopKind == "internal"
             ? internalContinuePrompt(run: run, runDir: eternalRoot(run).path)
             : nil
+
+        // For Claude workers, model + effort flow through TADO_MODEL /
+        // TADO_EFFORT env vars (the wrapper appends `--model` / `--effort`
+        // per iteration). For Codex workers, those env vars are inert —
+        // the wrapper instead reads TADO_CODEX_PRE_FLAGS /
+        // TADO_CODEX_POST_FLAGS to assemble a Codex-flavored invocation.
+        // Internal-mode workers consume the same codex flag bundles via
+        // ProcessSpawner.internalCodexEternalCommand (no env vars
+        // because the interactive session has them at spawn time).
+        let workerModelID: String
+        let workerEffortLevel: String
+        let codexPreFlags: [String]?
+        let codexPostFlags: [String]?
+        switch workerEngine {
+        case .claude:
+            workerModelID = settings.claudeModel.rawValue
+            workerEffortLevel = settings.claudeEffort.rawValue
+            codexPreFlags = nil
+            codexPostFlags = nil
+        case .codex:
+            // Stash the model id in TADO_MODEL too so canvas-side UI
+            // labels and any introspection surfaces have a value to show;
+            // the wrapper script ignores it on the codex branch.
+            workerModelID = settings.codexModel.rawValue
+            workerEffortLevel = settings.codexEffort.rawValue
+            codexPreFlags = ProcessSpawner.codexEmbedShim(
+                allowAlternateScreen: settings.codexAlternateScreen
+            ) + ProcessSpawner.eternalCodexPermissionFlags()
+            codexPostFlags = settings.codexModel.cliFlags + settings.codexEffort.cliFlags
+        }
+
         terminalManager.spawnAndWire(
             todo: todo,
-            engine: .claude,
+            engine: workerEngine,
             cwd: project.rootPath,
             projectName: project.name,
             isEternalWorker: true,
@@ -1502,9 +1972,12 @@ enum EternalService {
             eternalMode: run.mode,
             eternalDoneMarker: run.completionMarker,
             eternalModelID: workerModelID,
-            eternalEffortLevel: settings.claudeEffort.rawValue,
+            eternalEffortLevel: workerEffortLevel,
             eternalSkipPermissionsFlag: run.skipPermissions,
             eternalContinuePrompt: continuePrompt,
+            eternalCodexPreFlags: codexPreFlags,
+            eternalCodexPostFlags: codexPostFlags,
+            eternalKind: run.kind,
             eternalRunID: run.id,
             runRole: "worker"
         )
@@ -1536,6 +2009,14 @@ enum EternalService {
         append ONE line to \(runDir)/progress.md in the format `YYYY-MM-DD HH:MM: <one sentence>`. \
         The last progress.md line in the next iteration's prompt should advance from this one. \
         Output `\(marker)` on its own line ONLY when the entire task is fully complete.\(sprintFragment)
+
+        Termination contract: if the run is in a "ship it" / shipped state, or you have already \
+        landed the change on a worktree or branch, or there is genuinely no next unit of work \
+        remaining against crafted.md, you MUST emit `\(marker)` on its own line on THIS turn and \
+        stop — do not re-read the same files, do not append another progress line, do not wait for \
+        a future tick. Repeating "shipped — press Stop" without `\(marker)` is a bug; the loop \
+        only exits when it sees `\(marker)`. If shipping requires a worktree or a branch and one \
+        does not exist yet, create it now, land the change, then emit `\(marker)`.
         """
     }
 
@@ -1811,9 +2292,9 @@ enum EternalService {
     ///      terminal transitions; if we see those, respect them even if
     ///      the timestamp is fresh.
     ///
-    /// Callers: `reconcileActiveFlagsOnLaunch`, `EternalWatchdog.tick`,
-    /// `ProjectEternalSection.currentState`. All three use this as the
-    /// single "is the wrapper really running" predicate so the three
+    /// Callers: `reconcileActiveFlagsOnLaunch` and
+    /// `ProjectEternalSection.currentState`. Both use this as the
+    /// single "is the wrapper really running" predicate so the two
     /// observers stay consistent.
     static func isHookFresh(_ run: EternalRun) -> Bool {
         if FileManager.default.fileExists(atPath: stopFlagURL(run).path) {

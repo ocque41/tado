@@ -61,7 +61,7 @@ struct CraftedReviewIndex: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
             .background(isSelected ? Palette.surfaceAccent : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
             .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)

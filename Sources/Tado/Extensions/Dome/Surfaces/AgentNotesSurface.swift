@@ -64,11 +64,11 @@ struct AgentNotesSurface: View {
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 140, idealWidth: 280, maxWidth: 420)
+                .frame(minWidth: 200, idealWidth: 300, maxWidth: 420)
             detail
-                .frame(minWidth: 180, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
         .task(id: domeScope.id) { await reload() }
         .alert("Delete note?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -82,38 +82,42 @@ struct AgentNotesSurface: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Agent Notes")
-                    .font(Typography.heading)
-                    .foregroundStyle(Palette.textPrimary)
-                Spacer()
-                topicMenu
-                Button(action: startTopicSelection) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                OverlineLabel("Agent notes")
+                HStack(spacing: 6) {
+                    topicMenu
+                    Spacer(minLength: 4)
+                    OutlineButton(
+                        icon: "plus",
+                        size: .small,
+                        variant: .accent,
+                        action: startTopicSelection
+                    )
+                    .help("Choose or create a topic")
+                    OutlineButton(
+                        icon: isLoading ? "hourglass" : "arrow.clockwise",
+                        size: .small,
+                        variant: .standard,
+                        action: { Task { await reload() } }
+                    )
+                    .help("Refresh")
+                    .disabled(isLoading)
                 }
-                .buttonStyle(.plain)
-                .help("Choose or create a topic")
-                Button(action: { Task { await reload() } }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("Refresh")
-                .disabled(isLoading)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            Divider().overlay(Palette.divider)
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
 
             if isChoosingTopic {
                 topicInputRow
-                Divider().overlay(Palette.divider)
+                Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
             }
 
             if let lastError {
                 Text(lastError)
-                    .font(Typography.micro)
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
                     .foregroundStyle(Palette.danger)
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
@@ -126,6 +130,7 @@ struct AgentNotesSurface: View {
                     LazyVStack(spacing: 0) {
                         ForEach(notes) { note in
                             row(for: note)
+                            Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
                         }
                     }
                 }
@@ -133,20 +138,23 @@ struct AgentNotesSurface: View {
             }
             Spacer(minLength: 0)
         }
-        .background(Palette.surfaceElevated)
+        .background(Palette.bgElev)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(Palette.rule).frame(width: DK.ruleW)
+        }
     }
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("No agent writes yet")
                 .font(Typography.caption)
-                .foregroundStyle(Palette.textSecondary)
+                .foregroundStyle(Palette.ink2)
             Text("Current topic: `\(currentTopic)`")
-                .font(Typography.micro)
-                .foregroundStyle(Palette.textTertiary)
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
             Text("Ask an agent to call `dome_note`.")
-                .font(Typography.micro)
-                .foregroundStyle(Palette.textTertiary)
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
         }
         .padding(14)
     }
@@ -154,30 +162,35 @@ struct AgentNotesSurface: View {
     private func row(for note: DomeRpcClient.NoteSummary) -> some View {
         let active = note.id == selectedID
         return Button(action: { select(id: note.id) }) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
                     Text(note.title.isEmpty ? "Untitled" : note.title)
-                        .font(Typography.label)
-                        .foregroundStyle(active ? Palette.accent : Palette.textPrimary)
+                        .font(.system(size: 12.5, weight: active ? .semibold : .medium))
+                        .foregroundStyle(active ? Palette.ink : Palette.ink2)
                         .lineLimit(1)
-                    scopeBadge(note.ownerScope)
                     Spacer()
                     if note.agentActive == true {
                         Circle()
-                            .fill(Palette.success)
+                            .fill(Palette.green)
                             .frame(width: 6, height: 6)
                             .help("Agent wrote here recently")
                     }
+                    scopeBadge(note.ownerScope)
                 }
                 Text(subtitle(for: note))
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(active ? Palette.surfaceAccentSoft : Color.clear)
+            .padding(.vertical, 10)
+            .background(active ? Palette.bgRowHi : Color.clear)
+            .overlay(alignment: .leading) {
+                if active {
+                    Rectangle().fill(Palette.accent).frame(width: 2)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -200,14 +213,17 @@ struct AgentNotesSurface: View {
                 Image(systemName: "number")
                     .font(.system(size: 10, weight: .semibold))
                 Text(currentTopic)
-                    .font(Typography.caption)
+                    .font(Font.system(size: 11, weight: .regular, design: .monospaced))
                     .lineLimit(1)
             }
-            .foregroundStyle(Palette.textSecondary)
+            .foregroundStyle(Palette.ink2)
             .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Palette.surfaceAccentSoft)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .frame(height: 24)
+            .overlay(
+                RoundedRectangle(cornerRadius: DK.radius)
+                    .stroke(Palette.rule, lineWidth: DK.ruleW)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
         .menuStyle(.borderlessButton)
         .help("Current topic")
@@ -217,36 +233,25 @@ struct AgentNotesSurface: View {
         HStack(spacing: 8) {
             Image(systemName: "number")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Palette.textTertiary)
+                .foregroundStyle(Palette.ink4)
             TextField("Topic", text: $topicDraft)
                 .textFieldStyle(.plain)
-                .font(Typography.body)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink)
                 .onSubmit { confirmTopicSelection() }
-            Button(action: cancelTopicSelection) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .buttonStyle(.plain)
-            Button(action: confirmTopicSelection) {
-                Image(systemName: "arrow.right.circle")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .buttonStyle(.plain)
+            OutlineButton(icon: "xmark", size: .small, variant: .ghost, action: cancelTopicSelection)
+            OutlineButton(icon: "arrow.right.circle", size: .small, variant: .accent, action: confirmTopicSelection)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Palette.surface)
+        .background(Palette.bgPage)
     }
 
     private func scopeBadge(_ scope: String?) -> some View {
-        Text(scope == "project" ? "Project" : "Global")
-            .font(Typography.micro)
-            .foregroundStyle(scope == "project" ? Palette.warning : Palette.textTertiary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Palette.surfaceAccentSoft)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        StatusPill(
+            scope == "project" ? "project" : "global",
+            variant: scope == "project" ? .review : .draft
+        )
     }
 
     private static let rel: RelativeDateTimeFormatter = {
@@ -259,31 +264,32 @@ struct AgentNotesSurface: View {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 0) {
             lensModeBar
-            Divider().overlay(Palette.divider)
             detailBody
         }
     }
 
     private var lensModeBar: some View {
-        HStack(spacing: 10) {
-            Picker("Lens", selection: $lensMode) {
-                ForEach(NoteLensMode.allCases) { mode in
-                    Text(mode == .edit ? "Read" : mode.label).tag(mode)
-                }
+        HStack(spacing: 6) {
+            ForEach(NoteLensMode.allCases) { mode in
+                OutlineButton(
+                    mode == .edit ? "Read" : mode.label,
+                    size: .small,
+                    variant: lensMode == mode ? .accent : .standard,
+                    action: { lensMode = mode }
+                )
             }
-            .pickerStyle(.segmented)
-            .frame(minWidth: 160, idealWidth: 280, maxWidth: 320)
-            .accessibilityLabel("Agent Notes lens mode")
-            .accessibilityHint("Switch between the read-only log, the diff against the snapshot at open time, and the merged scope view.")
             Spacer()
             Text(lensMode == .edit ? "Read-only agent log" : lensMode.subtitle)
-                .font(Typography.micro)
-                .foregroundStyle(Palette.textTertiary)
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
                 .accessibilityLabel(lensMode == .edit ? "Read-only agent log" : lensMode.subtitle)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Palette.surface)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Palette.bgPage)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+        }
     }
 
     @ViewBuilder
@@ -305,43 +311,70 @@ struct AgentNotesSurface: View {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(spacing: 10) {
                         Text(d.title.isEmpty ? "Untitled" : d.title)
-                            .font(Typography.display)
-                            .foregroundStyle(Palette.textPrimary)
+                            .font(.system(size: 22, weight: .bold))
+                            .tracking(-0.3)
+                            .foregroundStyle(Palette.ink)
                         Spacer()
                         if isDeleting {
                             ProgressView().controlSize(.small)
+                                .tint(Palette.accent)
                         }
-                        Button(action: { showDeleteConfirmation = true }) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        .buttonStyle(.plain)
+                        OutlineButton(
+                            icon: "trash",
+                            size: .small,
+                            variant: .danger,
+                            action: { showDeleteConfirmation = true }
+                        )
                         .help("Delete note")
                         .disabled(isDeleting || !canDeleteSelected)
                     }
-                    Text("topic: \(d.topic)")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textTertiary)
+                    HStack(spacing: 6) {
+                        Image(systemName: "number")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Palette.ink4)
+                        Text(d.topic)
+                            .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Palette.ink3)
+                    }
                     Text(d.agentContent ?? "")
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textPrimary)
+                        .font(Font.system(size: 12.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(20)
+                .padding(.horizontal, DK.pageGutter)
+                .padding(.vertical, 18)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Palette.bgPage)
         } else {
-            VStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 28, weight: .light))
-                    .foregroundStyle(Palette.textTertiary)
-                Text("Pick a note to read what an agent wrote.")
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textSecondary)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(Palette.ink4)
+                    Text("Pick a note to read what an agent wrote")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                }
+                Text("Agent writes land via the dome-mcp `dome_note` tool. The write barrier blocks UI edits to `agent.md`, so this surface is read-only by design.")
+                    .font(.system(size: 12.5, weight: .regular))
+                    .foregroundStyle(Palette.ink3)
+                    .frame(maxWidth: 540, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("AGENT NOTES  ·  read-only  ·  diff lens shows changes since you opened this note")
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
+                    .padding(.top, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .top) {
+                        Rectangle().fill(Palette.rule).frame(height: 1).padding(.horizontal, -2)
+                    }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Palette.background)
+            .padding(.horizontal, DK.pageGutter)
+            .padding(.vertical, 28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Palette.bgPage)
         }
     }
 
@@ -357,24 +390,25 @@ struct AgentNotesSurface: View {
             }
             .padding(.vertical, 8)
         }
-        .background(Palette.surfaceElevated)
+        .background(Palette.bgElev)
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 8) {
                 Text("\(result.added) added · \(result.removed) removed")
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
                     .accessibilityLabel("\(result.added) lines added, \(result.removed) lines removed")
                 if dirty {
-                    Button("Mark as read") {
-                        snapshotAgentBody = current
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
+                    OutlineButton(
+                        "Mark as read",
+                        size: .small,
+                        variant: .ghost,
+                        action: { snapshotAgentBody = current }
+                    )
                     .help("Reset the diff baseline to the current agent body — useful as a 'I've read what the agent wrote' bookmark.")
                     .accessibilityLabel("Mark current agent body as read")
                 }
             }
-            .padding(8)
+            .padding(10)
         }
     }
 
@@ -385,8 +419,8 @@ struct AgentNotesSurface: View {
                 .foregroundStyle(diffMarkerColor(for: line.origin))
                 .frame(width: 18, alignment: .center)
             Text(line.text.isEmpty ? " " : line.text)
-                .font(Typography.body)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 14)
@@ -413,48 +447,46 @@ struct AgentNotesSurface: View {
             VStack(alignment: .leading, spacing: 0) {
                 if merged.isEmpty {
                     Text("Nothing to merge in this scope.")
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textSecondary)
+                        .font(.system(size: 12.5, weight: .regular))
+                        .foregroundStyle(Palette.ink3)
                         .padding(20)
                 } else {
                     ForEach(merged) { note in
                         togetherRow(note)
-                        Divider().overlay(Palette.divider)
+                        Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
                     }
                 }
             }
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
     }
 
     private func togetherRow(_ note: DomeRpcClient.NoteSummary) -> some View {
         Button(action: {
-            // Mirror the User Notes lens parity from sprint 21: a tap
-            // on a Together row jumps back into the Read lens with the
-            // note loaded so the lens isn't a read-only dead-end.
             lensMode = .edit
             select(id: note.id)
         }) {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
                 scopeBadge(note.ownerScope)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(note.title.isEmpty ? "Untitled" : note.title)
-                        .font(Typography.label)
-                        .foregroundStyle(Palette.textPrimary)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(Palette.ink)
                     Text(note.topic)
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
                 Spacer()
                 if let ts = note.updatedAt ?? note.createdAt {
                     Text(Self.rel.localizedString(for: ts, relativeTo: Date()))
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, DK.pageGutter)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.bgElev)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

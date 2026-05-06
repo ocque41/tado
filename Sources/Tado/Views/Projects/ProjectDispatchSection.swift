@@ -40,24 +40,13 @@ struct ProjectDispatchSection: View {
     @State private var runPendingDelete: DispatchRun? = nil
 
     var body: some View {
+        // Section header (DISPATCH label + count + "New plan" button)
+        // is now drawn by the parent `SectionRail` in
+        // `ProjectDetailView`, so the body renders only the runs list
+        // + the empty-state block. Keeping the outer VStack so the
+        // archived disclosure can sit below the active runs without
+        // bleeding into the sibling section.
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("DISPATCH")
-                    .font(Typography.callout)
-                    .tracking(0.6)
-                    .foregroundStyle(Palette.textSecondary)
-
-                if !activeRuns.isEmpty {
-                    Text("·  \(activeRuns.count) active")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textTertiary)
-                }
-
-                Spacer()
-
-                newRunButton
-            }
-
             if activeRuns.isEmpty && archivedRuns.isEmpty {
                 emptyCard
             } else {
@@ -123,30 +112,55 @@ struct ProjectDispatchSection: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Palette.surfaceAccent)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
         .buttonStyle(.plain)
     }
 
+    /// Empty-state block matching the design's `dispatch-empty` —
+    /// ASCII-art glyph, headline, subhead, and a help line set off
+    /// by a dashed top border. Replaces the previous centered
+    /// description card so an empty Dispatch section reads as
+    /// scannable structure, not a dialog.
     private var emptyCard: some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("""
+            ┌──────────────┐
+            │    ░░░░░     │   no plans
+            │  ░░    ░░    │
+            │    ░░░░░     │
+            └──────────────┘
+            """)
+                .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.bottom, 16)
+
             Text("No dispatch plans yet")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
+                .font(Font.system(size: 14, weight: .semibold))
+                .foregroundStyle(Palette.ink)
+                .padding(.bottom, 4)
+
             Text("Describe a multi-phase super-project. Tado's Dispatch Architect will design the plan and launch the phases on your canvas.")
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
-                .multilineTextAlignment(.center)
+                .font(Font.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .frame(maxWidth: 520, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 14)
+
+            Text("DISPATCH ARCHITECT  ·  runs >1 mega in sequence  ·  auto-spawns sprints between phases")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.top, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Palette.rule)
+                        .frame(height: 1)
+                        .padding(.horizontal, -2)
+                }
         }
-        .frame(maxWidth: .infinity)
-        .padding(16)
-        .background(Palette.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Palette.divider, style: StrokeStyle(lineWidth: 1, dash: [4]))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Run rows
@@ -156,35 +170,45 @@ struct ProjectDispatchSection: View {
         let displayState = effectiveState(for: run)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                statePill(state: displayState)
+                StatusPill.runState(displayState)
                 Text(run.label)
-                    .font(Typography.bodyBold)
-                    .foregroundStyle(Palette.textPrimary)
+                    .font(Font.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Palette.ink)
                     .lineLimit(1)
                 let phaseCount = DispatchPlanService.phaseFileCount(run)
                 if phaseCount > 0 {
                     Text("·  \(phaseCount) phase\(phaseCount == 1 ? "" : "s")")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
                 Spacer()
                 actionButtons(run: run, state: displayState)
             }
             if !run.brief.isEmpty {
                 Text(briefPreview(run.brief))
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
+                    .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink3)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
             }
         }
-        .padding(12)
-        .background(Palette.surfaceElevated)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(borderColor(for: displayState), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.bgElev)
+        .overlay(alignment: .leading) {
+            // Per-state leading accent stripe — same affordance the
+            // ProjectCard uses; a subtle "this run is the one
+            // demanding attention" cue.
+            Rectangle()
+                .fill(borderColor(for: displayState))
+                .frame(width: 2)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
+        }
     }
 
     @ViewBuilder
@@ -211,17 +235,14 @@ struct ProjectDispatchSection: View {
         .padding(.horizontal, 10)
     }
 
+    /// Legacy state-pill helper — superseded by the design-kit
+    /// `StatusPill` which carries the same labels but with proper
+    /// outlined chrome and the design's pill-{variant} colour rules.
+    /// Kept as a thin alias so archived rows that haven't been
+    /// migrated yet still compile through one source of truth.
     @ViewBuilder
     private func statePill(state: String) -> some View {
-        let (label, color) = statePillStyle(state: state)
-        Text(label)
-            .font(Typography.microBold)
-            .tracking(0.6)
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        StatusPill.runState(state)
     }
 
     private func statePillStyle(state: String) -> (String, Color) {
@@ -323,7 +344,7 @@ struct ProjectDispatchSection: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(tint.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
         .buttonStyle(.plain)
     }

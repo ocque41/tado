@@ -36,17 +36,16 @@ struct DomeOnboardingView: View {
 
     var body: some View {
         ZStack {
-            Palette.background.opacity(0.92).ignoresSafeArea()
+            Palette.bgPage.opacity(0.94).ignoresSafeArea()
             content
                 .padding(28)
-                .frame(maxWidth: 540)
-                .background(Palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: 580)
+                .background(Palette.bgElev)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Palette.divider, lineWidth: 1)
+                    Rectangle()
+                        .stroke(Palette.rule, lineWidth: DK.ruleW)
                 )
-                .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+                .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
         }
         .preferredColorScheme(.dark)
         .onAppear {
@@ -60,49 +59,82 @@ struct DomeOnboardingView: View {
 
     @ViewBuilder
     private var content: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header — overline + headline + body, hairline rule below.
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OverlineLabel("Onboarding · Embedding model")
+                    Spacer()
+                    if let status {
+                        statusPillForState(status)
+                    }
+                }
                 Text("Dome needs the embedding model")
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: 22, weight: .bold))
+                    .tracking(-0.3)
+                    .foregroundStyle(Palette.ink)
                 Text("Qwen3-Embedding-0.6B (~1.2 GB, F16) runs locally on your Mac. It's downloaded once and cached under your Dome vault. Until it's loaded, search returns lexical matches only.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12.5, weight: .regular))
+                    .foregroundStyle(Palette.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.bottom, 18)
 
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+
+            // Progress — primary action + total + linear bar + filename.
             progressSection
+                .padding(.vertical, 18)
 
             if let error = status?.error ?? manualPathError {
                 Text(error)
-                    .font(.callout)
-                    .foregroundStyle(Color.red)
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.danger)
                     .padding(.vertical, 4)
             }
 
-            Divider().overlay(Palette.divider)
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
 
             offlineSection
+                .padding(.top, 18)
+        }
+    }
+
+    /// Map the model-status into the structural design's StatusPill
+    /// vocabulary. Ready → done; completed-but-not-ready → review;
+    /// downloading → planning; idle → draft.
+    @ViewBuilder
+    private func statusPillForState(_ status: DomeRpcClient.ModelStatus) -> some View {
+        if status.ready {
+            StatusPill("ready", variant: .running)
+        } else if status.completed {
+            StatusPill("verifying", variant: .review)
+        } else if status.totalBytes > 0 {
+            StatusPill("downloading", variant: .planning)
+        } else {
+            StatusPill("idle", variant: .draft)
         }
     }
 
     @ViewBuilder
     private var progressSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
                 primaryActionButton
                 Spacer()
                 if let status, status.totalBytes > 0 {
                     Text(progressLabel(for: status))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
                 }
             }
             ProgressView(value: status?.fractionComplete ?? 0)
                 .progressViewStyle(.linear)
-                .tint(.accentColor)
+                .tint(Palette.accent)
             if let current = status?.currentFile {
                 Text("Downloading \(current)…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
             }
         }
     }
@@ -110,38 +142,72 @@ struct DomeOnboardingView: View {
     @ViewBuilder
     private var primaryActionButton: some View {
         if status?.ready == true {
-            Label("Ready", systemImage: "checkmark.seal.fill")
-                .foregroundStyle(.green)
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Ready")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(Palette.green)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .overlay(
+                RoundedRectangle(cornerRadius: DK.radius)
+                    .stroke(Palette.greenSoft, lineWidth: DK.ruleW)
+            )
         } else if status?.completed == true {
-            Button("Verify") {
-                refresh()
-            }
-            .buttonStyle(.borderedProminent)
+            OutlineButton(
+                "Verify",
+                icon: "arrow.clockwise",
+                size: .regular,
+                variant: .accent,
+                action: { refresh() }
+            )
         } else {
-            Button(action: startFetch) {
-                Label("Download model", systemImage: "arrow.down.circle.fill")
-            }
-            .buttonStyle(.borderedProminent)
+            OutlineButton(
+                "Download model",
+                icon: "arrow.down.circle.fill",
+                size: .regular,
+                variant: .accent,
+                action: startFetch
+            )
         }
     }
 
     @ViewBuilder
     private var offlineSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Already have the files?")
-                .font(.callout.weight(.medium))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                OverlineLabel("Offline")
+                Spacer()
+                Text("ALREADY HAVE THE FILES?")
+                    .font(Font.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.ink4)
+            }
             Text("Point Dome at any directory containing config.json, tokenizer.json, and model.safetensors. The path is persisted as TADO_DOME_EMBEDDING_MODEL_PATH for the rest of this session.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 TextField("/path/to/qwen3-embedding-0.6b", text: $manualPath)
-                    .textFieldStyle(.roundedBorder)
-                Button("Choose…") {
-                    pickFolder()
-                }
-                Button("Load") {
-                    loadManual()
-                }
+                    .textFieldStyle(.plain)
+                    .font(Font.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(Palette.bgPage)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DK.radius)
+                            .stroke(Palette.rule, lineWidth: DK.ruleW)
+                    )
+                OutlineButton("Choose…", size: .regular, variant: .standard, action: pickFolder)
+                OutlineButton(
+                    "Load",
+                    size: .regular,
+                    variant: .accent,
+                    action: loadManual
+                )
                 .disabled(manualPath.isEmpty)
             }
         }

@@ -153,7 +153,15 @@ enum ProcessSpawner {
         (This setup is required because Continuous Eternal runs need
         `--permission-mode auto` — Claude Code's classifier-gated autonomy
         mode, available for Opus 4.7 on Max/Teams/Enterprise plans. Tado
-        pins Opus 4.7 automatically for Continuous runs.)
+        pins Opus 4.7 automatically for Continuous runs.
+
+        Codex Eternal does NOT need this setup — Codex uses its own
+        `--ask-for-approval never --sandbox danger-full-access` flag set
+        which Tado wires up automatically. Both session styles work for
+        Codex: Normal (per-turn) respawns `codex "<prompt>"` each
+        iteration via the eternal-loop wrapper; Continuous keeps one
+        interactive `codex` session alive and lets Tado's idle injection
+        re-fire the continue prompt every time the session goes idle.)
 
         ═══════════════════════════════════════════════════════════
         CONTEXT — WHAT YOU ARE DOING AND WHY
@@ -430,6 +438,24 @@ enum ProcessSpawner {
         agent in the matching scope; combine with `--project <name>` or `--team <name>` to \
         filter. Pair this with `tado-events "topic:<name>"` for fan-in coordination patterns.
 
+        **Coordinator-driven Tado workflows** (NEW): the user can drive any Tado feature \
+        from the general todo page by typing `tado <natural-language brief>`. That spawns \
+        a Claude Opus 4.7 coordinator agent that interprets the brief, drives Tado via the \
+        coordinator CLI suite, supervises any architect through the human-review gate, \
+        accepts on the user's behalf, and exits. Project agents that want to drive Tado \
+        directly (without going through the user) can use the same CLIs:
+          tado-projects {list, resolve <name>}
+          tado-eternal {propose, status, crafted, accept, reject, list, stop}
+              Pass --coordinator-todo-id <your-todo-id> on propose so the run is audit-\
+              tagged back to its caller.
+          tado-dispatch {propose, status, crafted, accept, reject, list, stop}
+          tado-bootstrap {a2a, team, auto-mode, knowledge} --project <name>
+          tado-system {status, vault}
+        These are real Rust binaries on $PATH (`~/.local/bin/`); JSON output by default, \
+        `--toon` for AXI-style compact output. They talk to the running Tado app over \
+        a Unix domain socket and fail fast with a clear "Tado is not running" message \
+        when the app isn't up.
+
         ═══════════════════════════════════════════════════════════
         CRITICAL RULES — copy these verbatim into the target docs
         ═══════════════════════════════════════════════════════════
@@ -548,6 +574,15 @@ enum ProcessSpawner {
         Reactive coordination \u{2014}
           tado-events "team:core" &
           # now your terminal sees every team-scoped event in real time
+
+        Coordinator-driven runs \u{2014}
+          # The user can spawn a Claude coordinator from the general todo page by typing
+          # `tado <natural-language brief>`. The coordinator drives Tado via the
+          # `tado-eternal` / `tado-dispatch` / `tado-bootstrap` CLIs and accepts the
+          # human-review gate on the user's behalf. Team agents can call those same
+          # CLIs directly (with `--coordinator-todo-id <your-todo-id>` for audit) to
+          # propose runs without involving the user. See `Bootstrap A2A tools` for the
+          # full coordinator CLI surface.
 
         ═══════════════════════════════════════════════════════════
         FINISHED?
@@ -798,6 +833,17 @@ enum ProcessSpawner {
         ⑥ Quick \"who's been reading what\" snapshot —
           dome_agent_status --limit 20
           # Combine with tado-list --toon to map back to grid positions.
+
+        ⑦ Drive Tado from inside an agent (coordinator CLIs) —
+          # Spawn an Eternal sprint without bothering the user:
+          tado-eternal propose --project <name> --feature <feature> \\
+                               --task "<text>" --mode sprint \\
+                               --coordinator-todo-id $TADO_SESSION_ID
+          tado-eternal status <run_id>
+          tado-eternal crafted <run_id>     # read the architect's plan
+          tado-eternal accept <run_id> --note "<one-paragraph rationale>"
+          # See `Bootstrap A2A tools` for the full coordinator CLI surface
+          # (tado-projects, tado-eternal, tado-dispatch, tado-bootstrap, tado-system).
 
         ═══════════════════════════════════════════════════════════
         FINISHED?
@@ -1241,6 +1287,318 @@ enum ProcessSpawner {
         """
     }
 
+    // MARK: - Coordinator (natural-language todo)
+
+    /// System prompt for a coordinator tile spawned from the
+    /// general todo page when the user types `tado <brief>`. The
+    /// agent inside this tile is not a worker — it's a CLI driver
+    /// that interprets the user's natural-language intent, calls
+    /// the right Tado CLI(s), supervises any architect through the
+    /// human-review gate, accepts on the user's behalf, and
+    /// exits.
+    ///
+    /// The prompt names every CLI it expects to use and gives
+    /// concrete worked examples for the most common intents
+    /// (Eternal, Dispatch, bootstraps, agent deployment, status
+    /// queries). The 15-minute supervision rule baked into
+    /// section 5 is the user's literal instruction: wait, check,
+    /// nudge, re-prompt, accept-or-give-up.
+    static func coordinatorPrompt(brief: String, todoID: UUID) -> String {
+        let todoIDStr = todoID.uuidString
+        return """
+        You are the Tado Coordinator. The user is away from the keyboard and \
+        typed a natural-language todo on the general todo page. They are \
+        trusting you to interpret it, drive the right Tado feature(s) end-to-\
+        end via Tado's CLI tools, supervise any architect through the human-\
+        review gate, accept the review on their behalf, and exit cleanly. \
+        You are the user's hands while they're offline.
+
+        Your tile id (the coordinator todo's UUID — pass this to every CLI \
+        that needs `--coordinator-todo-id`):
+
+          \(todoIDStr)
+
+        ═══════════════════════════════════════════════════════════
+        THE USER'S BRIEF (verbatim — your source of truth)
+        ═══════════════════════════════════════════════════════════
+        <<<USER_BRIEF
+        \(brief)
+        USER_BRIEF>>>
+
+        ═══════════════════════════════════════════════════════════
+        YOUR TOOLBOX — the only commands you should run
+        ═══════════════════════════════════════════════════════════
+        Every command below is on $PATH (`~/.local/bin/`). They emit JSON \
+        on stdout by default. Pass `--toon` for compact AXI-style output \
+        when context is tight; `--human` for pretty-printed JSON.
+
+        # Project resolution
+        tado-projects list
+        tado-projects resolve <name>
+            -> exits 1 with `error [no_match]` if the name doesn't match.
+               Try the substring of the name the user typed; if ambiguous,
+               `tado-projects list` and pick.
+
+        # Eternal lifecycle (long-running single-agent loops; mega or sprint)
+        tado-eternal propose --project <name> --feature <feature> \\
+                             --task "<text>" [--mode mega|sprint] \\
+                             [--engine claude|codex] \\
+                             --coordinator-todo-id \(todoIDStr) [--label <text>]
+            -> returns {run_id, project_id, project_name, label, mode, engine, state}
+        tado-eternal status <run_id>
+            -> returns {state, mode, engine, has_crafted, is_active, ...}
+        tado-eternal crafted <run_id>
+            -> returns {run_id, state, crafted}; only succeeds when has_crafted
+        tado-eternal accept <run_id> [--note "<one-paragraph rationale>"]
+            -> ok on accept; error code `state_mismatch` if the human
+               accepted manually first
+        tado-eternal reject <run_id> --reason "<text>" [--rebrief "<new brief>"]
+            -> archives crafted.md, optionally rewrites user-brief.md,
+               re-spawns the architect
+        tado-eternal stop <run_id>
+            -> writes stop-flag; the next loop iteration exits cleanly
+        tado-eternal list [--project <name>] [--state <state>]
+            -> JSON list of every run; useful for sanity-checking before
+               proposing a duplicate
+
+        # Dispatch lifecycle (one-shot multi-phase plan)
+        tado-dispatch propose --project <name> --feature <feature> \\
+                              --task "<text>" \\
+                              --coordinator-todo-id \(todoIDStr) [--label <text>]
+        tado-dispatch status <run_id>
+        tado-dispatch crafted <run_id>
+        tado-dispatch accept <run_id> [--note "<text>"]
+        tado-dispatch reject <run_id> --reason "<text>" [--rebrief "<text>"]
+        tado-dispatch list [--project <name>] [--state <state>]
+
+        # Bootstraps (one-shot project setup; no review gate)
+        tado-bootstrap a2a       --project <name>
+        tado-bootstrap team      --project <name>
+        tado-bootstrap auto-mode --project <name>
+        tado-bootstrap knowledge --project <name>
+
+        # System / vault status
+        tado-system status   # pid, version, storage_root, vault_path, vault_exists
+        tado-system vault    # vault_path + vault_exists only
+
+        # Generic agent deployment (existing — for one-off jobs that don't
+        # need an architect/review gate)
+        tado-deploy "<prompt>" --project <name> [--agent <name>] \\
+                               [--team <name>] [--engine claude|codex]
+
+        # Tile inspection (existing) — useful for supervising a spawned architect
+        tado-list [--project <name>] [--toon]
+        tado-read <target> [--tail N]
+        tado-send <target> <message>
+        tado-broadcast --project <name> "<message>"
+
+        # User-facing messaging (the user is offline — this is how they hear from you)
+        tado-notify send "<title>" --body "<text>" --severity info|success|warning|error
+
+        # Knowledge / memory (audit trail)
+        tado-memory append --scope project --tags coordinator,<verb> "<one-line note>"
+        tado-dome register --topic project-<shortid> --note "<markdown>"
+
+        # Settings / events (rarely useful — usually read-only)
+        tado-config get|set|list <scope> [<key>] [<value>]
+        tado-events query [filter] [--limit N]
+
+        ═══════════════════════════════════════════════════════════
+        COMMON INTENTS — worked examples
+        ═══════════════════════════════════════════════════════════
+        Below are six shapes the user's brief usually takes. Pattern-match \
+        the brief to one (or compose them — "trigger an eternal AND notify \
+        me" is propose + tado-notify on completion).
+
+        1) "Trigger an Eternal sprint on <project> for <feature> to do <task>"
+           -> `tado-projects resolve <project>` (capture rootPath)
+           -> `tado-eternal propose --project <project> --feature <feature> \\
+                --task "<task>" --mode sprint --coordinator-todo-id \(todoIDStr)`
+           -> read `run_id` from the response
+           -> follow the architect-supervision rule (section 5)
+           -> read `tado-eternal crafted <run_id>`, run the review checklist
+              (section 6), accept or reject
+           -> emit a final `tado-notify` and exit
+
+        2) "Trigger Dispatch on <project> to do <task>"
+           -> same shape, swap the verb to `tado-dispatch propose ...`
+           -> phases run automatically after accept; the coordinator does
+              NOT babysit phase tiles
+
+        3) "Bootstrap A2A docs on <project>" (no review gate)
+           -> `tado-bootstrap a2a --project <project>`
+           -> `tado-list --project <project> --toon` to find the spawned
+              bootstrap tile id; `tado-read <tile-id>` until the agent
+              prints completion (or a clear error)
+           -> `tado-notify` with the outcome and exit
+
+        4) "Spawn <agent-name> on <project> to do <task>" (no review gate)
+           -> `tado-deploy "<task>" --project <project> --agent <agent-name>`
+           -> exit immediately; the deployed agent will tado-send back if
+              it has results to report
+
+        5) "What's running on <project>?" / "Status check"
+           -> `tado-list --project <project> --toon`
+           -> optionally `tado-eternal list --project <project>` and
+              `tado-dispatch list --project <project>` for run-state context
+           -> `tado-notify` with a one-paragraph summary; exit
+
+        6) "I don't understand what you want" — when the brief is too vague:
+           -> Don't guess. `tado-notify` with "couldn't determine which Tado
+              feature you wanted; please type a more specific todo.
+              Examples: 'tado run an eternal sprint on X to do Y'."
+           -> Exit. Do NOT spawn anything.
+
+        ═══════════════════════════════════════════════════════════
+        ARCHITECT SUPERVISION RULE (the user's literal instruction)
+        ═══════════════════════════════════════════════════════════
+        After `tado-eternal propose` or `tado-dispatch propose` returns a \
+        `run_id`, the architect tile is spawning. You wait, then check, \
+        then nudge if needed, with strict bounds:
+
+        1. Sleep 15 minutes: `sleep 900`
+        2. Check: `tado-eternal status <run_id>` (or dispatch). Branch:
+
+           a. state == "awaitingReview"
+              -> The architect is done. `tado-eternal crafted <run_id>`,
+                 run the review checklist (section 6), accept or reject.
+
+           b. state == "planning" (still working)
+              -> `tado-list --toon` to find the architect tile id.
+                 `tado-read <architect-tile-id> --tail 100`.
+                 If the output is healthy (recent progress, no obvious
+                 errors): sleep ANOTHER 15 minutes, then re-check.
+                 If the output shows an error or has been silent for
+                 over 5 minutes: `tado-send <architect-tile-id>
+                 "the user is waiting; please describe blockers
+                 concretely or finalize crafted.md"`. Then sleep 15 more.
+                 Cap nudges at 3 (so total wait is ~60 minutes max
+                 from initial propose).
+
+           c. state == "stopped" / "failed" / "completed"
+              -> Architect died unexpectedly. `tado-notify` with a
+                 diagnosis pulled from the architect tile's tail.
+                 Exit. Do NOT propose a new run automatically — the
+                 user can decide whether to retry when they return.
+
+        3. If `tado-system status` shows the app unresponsive, or any \
+           Tado CLI fails outright (returns non-zero with no JSON \
+           response), the process is fundamentally broken. Emit a clear \
+           `tado-notify` diagnosis and EXIT. The user is offline; they \
+           will restart the app when they return.
+
+        ═══════════════════════════════════════════════════════════
+        REVIEW CHECKLIST — what makes crafted.md acceptable
+        ═══════════════════════════════════════════════════════════
+        When `tado-eternal crafted <run_id>` (or dispatch) returns the \
+        plan, decide accept-or-reject by checking ALL of:
+
+        - The plan addresses the user's task verbatim. NOT a generic
+          version of the user's task. NOT "implement OAuth2" when the
+          user asked for "implement OAuth2 with refresh tokens".
+        - For Eternal sprints: there's a clear sprint plan and a done
+          marker. For Mega: there's a coherent long-running goal.
+          For Dispatch: 4-10 phases, each with a single responsibility,
+          each with explicit inputs and outputs.
+        - No obvious gaps: testing/verification phase exists where it
+          should; rollback considered for risky changes.
+        - Phase prompts mention the project's actual stack (language,
+          runtime, package manager). If you can `cat <root>/CLAUDE.md`,
+          spot-check that the plan respects its conventions.
+
+        If acceptable: `tado-eternal accept <run_id> --note "<paragraph>"`. \
+        The note persists to `<run-dir>/review-note.md` and shows in \
+        Cross-Run Browser — write a one-paragraph rationale: what the \
+        plan does, what you liked, what you'd watch for.
+
+        If not acceptable: `tado-eternal reject <run_id> --reason "<concrete>" \
+        --rebrief "<refined brief>"`. The architect re-spawns with the new \
+        brief; loop back to section 5. CAP REBRIEFS AT 1 — if the second \
+        crafted.md is still wrong, accept the closest version with a note \
+        flagging the gap, OR `tado-notify` and exit (your call based on \
+        how badly the plan misses the brief).
+
+        ═══════════════════════════════════════════════════════════
+        ACCEPTANCE AND EXIT
+        ═══════════════════════════════════════════════════════════
+        Once you accept, the worker tile spawns automatically. Eternal \
+        workers can run for hours or days; Dispatch chains phases via \
+        `tado-deploy` handoffs. You do NOT babysit either. Your job ends \
+        at acceptance.
+
+        Final exit:
+          1. `tado-notify send "Coordinator done: <one-line summary>" \\
+              --body "<two-paragraph summary of what you did>" \\
+              --severity success`
+          2. `tado-memory append --scope project --tags coordinator,<verb> \\
+              "Coordinator accepted run <run_id>: <one-line>"`
+          3. Print a final paragraph to your own terminal explaining what \
+             happened (audit trail in the tile's log).
+          4. Stop. Do not re-run anything.
+
+        ═══════════════════════════════════════════════════════════
+        FAILURE MODES — when something goes wrong
+        ═══════════════════════════════════════════════════════════
+        - `tado-projects resolve` returns `no_match`:
+            -> `tado-projects list` to see what exists, suggest the
+               closest match in a `tado-notify` and exit. Do NOT pick
+               a wrong project.
+
+        - The brief is too vague to act on:
+            -> `tado-notify` "couldn't determine your intent; please
+               retype with the project name and verb you want", exit.
+
+        - `state_mismatch` on accept (the human accepted in the modal
+          before you got there):
+            -> Read the error data; you'll see actual=running. Log it,
+               `tado-notify "human accepted manually before coordinator
+               finished review"`, exit cleanly. Do NOT try to revert.
+
+        - App not responding (CLI exits with "Tado is not running"):
+            -> `tado-notify` with the diagnosis, exit. The user will
+               restart the app when they return.
+
+        ═══════════════════════════════════════════════════════════
+        NEVER DO THESE
+        ═══════════════════════════════════════════════════════════
+        - Don't invent CLI flags or commands not listed in section 3.
+        - Don't bypass the review gate (always `tado-eternal crafted`
+          BEFORE `tado-eternal accept`; read the plan, then decide).
+        - Don't loop indefinitely — bounded to 3 architect nudges and
+          1 rebrief. Beyond that, accept-or-exit.
+        - Don't modify project files directly. The CLIs are the only
+          legitimate way to mutate Tado state.
+        - Don't hand-edit `.tado/eternal/runs/<uuid>/state.json` or any
+          on-disk run artifact. Use `tado-eternal accept|reject|stop`.
+        - Don't spawn other coordinators (no recursion). If the brief
+          asks for parallel work, run the CLIs in sequence yourself.
+
+        ═══════════════════════════════════════════════════════════
+        AUDIT AND REPORTING
+        ═══════════════════════════════════════════════════════════
+        At every key transition, print a plain-text paragraph into \
+        your own terminal explaining what you just did and why. The \
+        tile's log is the audit trail — make it readable. Examples:
+
+          "Parsed brief as: trigger an eternal sprint on project tado
+           for the auth feature, task='implement OAuth2 with refresh tokens'."
+
+          "Resolved project 'tado' -> /Users/miguel/Documents/tado.
+           Calling tado-eternal propose with --mode sprint."
+
+          "Architect produced crafted.md after 28 minutes. Plan has 5
+           sprint phases ending with the standard ETERNAL-DONE marker.
+           Phases address the OAuth2 task verbatim and reference the
+           existing token-store at Sources/Auth/. Accepting."
+
+          "Accepted run \(todoIDStr.prefix(8)). Worker tile spawning.
+           Coordinator exiting."
+
+        Begin work now. Read the brief above carefully, identify which \
+        intent shape it fits, run the appropriate CLIs.
+        """
+    }
+
     // MARK: - Eternal
 
     /// Permission-mode flags for an Eternal session's Claude Code spawn.
@@ -1322,10 +1680,44 @@ enum ProcessSpawner {
         return ("/bin/zsh", ["-l", "-c", inner])
     }
 
+    /// Codex's analog of `internalEternalCommand` for Continuous-mode
+    /// Eternal runs. Spawns ONE interactive `codex` session that stays
+    /// alive for the whole run. The session is driven by Tado's idle
+    /// injection (the same primary driver that ticks Claude internal
+    /// mode); there is no Codex equivalent of Claude Code's `/loop`
+    /// scheduler, so the secondary backup driver is omitted (see
+    /// `TerminalSession.refillQueueForInternalEternalIfNeeded` — it
+    /// gates the `/loop` typing on engine).
+    ///
+    /// The flags come pre-bundled from
+    /// `EternalService.spawnWorker` (which assembles
+    /// `codexEmbedShim + eternalCodexPermissionFlags` as the pre-flags
+    /// and `codexModel.cliFlags + codexEffort.cliFlags` as the post-
+    /// flags) so the caller doesn't have to know Codex's flag layout.
+    static func internalCodexEternalCommand(
+        projectRoot: String,
+        codexPreFlags: [String],
+        codexPostFlags: [String]
+    ) -> (executable: String, args: [String]) {
+        _ = projectRoot
+        var parts: [String] = ["codex"]
+        parts.append(contentsOf: codexPreFlags.map(shellEscape))
+        parts.append(contentsOf: codexPostFlags.map(shellEscape))
+        let inner = parts.joined(separator: " ")
+        return ("/bin/zsh", ["-l", "-c", inner])
+    }
+
     /// Env-var dictionary consumed by the eternal-loop wrapper. Merged
     /// with `ProcessSpawner.environment(...)` at spawn time so the
     /// wrapper inherits everything else (Tado IPC, PATH, etc.) AND gets
     /// the eternal-specific knobs.
+    ///
+    /// Codex runs route through `codexPreFlags` / `codexPostFlags` (already
+    /// shell-escaped strings ready to be word-split inside the bash
+    /// wrapper). Claude runs continue to use `TADO_MODEL` / `TADO_EFFORT`
+    /// for back-compat with hooks that read those names. The wrapper picks
+    /// the right path off `$TADO_ENGINE`, which `ProcessSpawner.environment`
+    /// already exports from the session's engine choice.
     static func eternalWorkerEnv(
         runID: UUID,
         mode: String,
@@ -1333,7 +1725,10 @@ enum ProcessSpawner {
         sprintMarker: String = "[SPRINT-DONE]",
         modelID: String?,
         effortLevel: String?,
-        skipPermissions: Bool
+        skipPermissions: Bool,
+        codexPreFlags: [String]? = nil,
+        codexPostFlags: [String]? = nil,
+        perfMode: Bool = false
     ) -> [String: String] {
         var env: [String: String] = [
             // Per-run scope key. Every hook script uses this to resolve
@@ -1349,13 +1744,84 @@ enum ProcessSpawner {
             // reads this to allow-stop (the wrapper owns continuation).
             "TADO_ETERNAL_LOOP_MODE": "1",
         ]
+        // Set when EternalRun.kind == "perf". Read by stop.sh and
+        // eternal-loop.sh to enforce the [PERF-OK]-before-marker
+        // contract, and by the worker prompt to know it should call
+        // perf-gate.sh before printing the iteration marker.
+        if perfMode {
+            env["TADO_PERF_MODE"] = "1"
+        }
         if let modelID, !modelID.isEmpty {
             env["TADO_MODEL"] = modelID
         }
-        if let effortLevel, !effortLevel.isEmpty {
+        // `"auto"` is the same "skip the flag" sentinel that
+        // `ClaudeEffort.cliFlags` / `CodexEffort.cliFlags` already honor
+        // for one-shot tile spawns. Without this filter the wrapper
+        // appends `--effort auto`, which neither CLI accepts (claude:
+        // "must be one of: low, medium, high, xhigh, max"; codex same
+        // shape minus xhigh) — every iteration aborts in milliseconds.
+        if let effortLevel, !effortLevel.isEmpty, effortLevel != "auto" {
             env["TADO_EFFORT"] = effortLevel
         }
+        if let codexPreFlags, !codexPreFlags.isEmpty {
+            env["TADO_CODEX_PRE_FLAGS"] = codexPreFlags.map(shellEscape).joined(separator: " ")
+        }
+        if let codexPostFlags, !codexPostFlags.isEmpty {
+            env["TADO_CODEX_POST_FLAGS"] = codexPostFlags.map(shellEscape).joined(separator: " ")
+        }
         return env
+    }
+
+    /// Codex's analog of `eternalPermissionFlags` for non-interactive
+    /// Eternal runs: `--ask-for-approval never` + `--sandbox danger-full-access`
+    /// give the agent permission to act without prompting, the same way
+    /// `--permission-mode auto` does for Claude. These flags are appended
+    /// to the codex embed shim by the Eternal pipeline so architect /
+    /// worker / interventor tiles never stall on an approval prompt.
+    ///
+    /// **Interactive only.** The `codex exec` subcommand rejects these
+    /// argument names — for exec mode use `eternalCodexExecPreFlags()`
+    /// which substitutes the `--dangerously-bypass-approvals-and-sandbox`
+    /// shortcut.
+    static func eternalCodexPermissionFlags() -> [String] {
+        ["--ask-for-approval", "never", "--sandbox", "danger-full-access"]
+    }
+
+    /// Pre-prompt flags for the `codex exec` subcommand, used by the
+    /// non-interactive Eternal roles (architect, interventor, and the
+    /// per-iteration worker invocation in the eternal-loop wrapper).
+    ///
+    /// `codex exec` bundles "no approval prompts + no sandbox" into the
+    /// single `--dangerously-bypass-approvals-and-sandbox` shortcut and
+    /// rejects the standalone `--ask-for-approval` / `--sandbox` flags
+    /// (and the interactive-only `--no-alt-screen`). Codex 0.125.0
+    /// interactive-mode also rejects gpt-5.5 with "newer Codex required"
+    /// despite the model being available — that error doesn't reproduce
+    /// in `codex exec`, so non-interactive roles route through this flag
+    /// set as a side benefit.
+    static func eternalCodexExecPreFlags() -> [String] {
+        [
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-c", "shell_environment_policy.inherit=all",
+        ]
+    }
+
+    /// Build a `codex exec <flags> "<prompt>"` invocation for a one-shot
+    /// or per-iteration Eternal role. Mirrors `command(for:engine:...)`
+    /// but inserts the `exec` subcommand and skips the
+    /// agent-flag injection (Codex doesn't take `--agent`). The `flags`
+    /// array is shell-escaped element-wise the same way `command()` does
+    /// it so glob-meta characters in model ids survive zsh parsing.
+    static func codexExecCommand(
+        for prompt: String,
+        flags: [String]
+    ) -> (executable: String, args: [String]) {
+        let escaped = shellEscape(prompt)
+        let allFlags = flags.map(shellEscape).joined(separator: " ")
+        let cmd = allFlags.isEmpty
+            ? "codex exec \(escaped)"
+            : "codex exec \(allFlags) \(escaped)"
+        return ("/bin/zsh", ["-l", "-c", cmd])
     }
 
     /// Permission-mode flags for any Eternal-pipeline spawn (architect,
@@ -1394,8 +1860,22 @@ enum ProcessSpawner {
     /// Prompt for a Mega-mode Eternal worker. Plain text — callers shell-escape
     /// when spawning. The Stop hook picks up context from `state.json` so this
     /// prompt only has to tell the worker what the session IS, not how it loops.
-    static func eternalMegaPrompt(projectName: String, projectRoot: String, marker: String, runID: UUID) -> String {
+    ///
+    /// `engine` tailors the closing "non-stop hygiene" paragraph: Claude gets
+    /// the `.claude/`-protected-path warning that's specific to its bypass
+    /// flag; Codex (which uses `--ask-for-approval never --sandbox
+    /// danger-full-access`) doesn't have that foot-gun and gets a Codex-flavored
+    /// reminder instead.
+    static func eternalMegaPrompt(
+        projectName: String,
+        projectRoot: String,
+        marker: String,
+        runID: UUID,
+        engine: TerminalEngine = .claude,
+        perfMode: Bool = false
+    ) -> String {
         let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
+        let perfStep = perfMode ? eternalPerfStepBlock(runDir: runDir, marker: marker, sprintMarker: nil) : ""
         return """
         You are running as a Tado Eternal agent (MEGA mode) for project "\(projectName)" at \(projectRoot).
 
@@ -1419,23 +1899,123 @@ enum ProcessSpawner {
         Don't summarise at the end of turns — progress.md is the summary.
         If you get stuck on a single-turn problem, write what you tried to progress.md and move \
         on to the next independent unit of work; revisit the stuck one later with fresh context.
+        \(perfStep)
+
+        \(eternalNonStopHygiene(engine: engine, runDir: runDir))
+        """
+    }
+
+    /// Performance step instructions appended to mega/sprint worker
+    /// prompts when `EternalRun.kind == "perf"`. Identical content for
+    /// both modes — the only difference is which terminal marker the
+    /// worker pairs with [PERF-OK]. Sprint mode passes its sprint
+    /// marker too so the prompt names both.
+    private static func eternalPerfStepBlock(
+        runDir: String,
+        marker: String,
+        sprintMarker: String?
+    ) -> String {
+        let pairedMarker = sprintMarker ?? marker
+        return """
+
 
         ═══════════════════════════════════════════════════════════
-        NON-STOP HYGIENE — avoid the only prompts bypass can't skip
+        PERFORMANCE STEP (kind=perf — same-turn pay-back required)
         ═══════════════════════════════════════════════════════════
-        Claude Code's `--dangerously-skip-permissions` skips every prompt \
-        EXCEPT writes to protected paths under `.claude/` when the parent \
-        directory has to be created. To keep the loop truly non-stop:
-          • BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)`
-            first. Always. Especially for `.claude/agents/`, `.claude/skills/`,
-            and any new subdirectory tree.
-          • Prefer writing generated files OUTSIDE `.claude/` when possible
-            (scratch files, trial-project outputs, reports, etc.). The
-            `.tado/scratch/` and `\(runDir)/` directories are safe.
-          • If you genuinely need to create something under `.claude/`, create
-            `.claude/` and its full subpath via mkdir FIRST, then Write.
-          • Never use tools that open interactive dialogs or confirmations.
+        This run was created with kind=perf. Before you print "\(pairedMarker)" \
+        OR "\(marker)" on its own line, you MUST clear the perf gate. The gate \
+        is a single bash hook script that runs the project's correctness tests, \
+        measures eight curated performance dimensions (algorithmic complexity, \
+        allocation count per op, critical-path ops, IO syscalls per op, DB \
+        query cost, cross-process roundtrips, cold-start ops, steady-state \
+        RSS ratio), and scores against the project's all-time-best baseline at \
+        \(runDir)/../../../perf-baselines/<project>.json (auto-detected).
+
+        Per-iteration perf protocol:
+          A. Do your work (mega: one unit; sprint: APPLY+EVAL+IMPROVE).
+          B. Run: bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+             The gate prints exactly one of these one-liners to stdout:
+               "PERF: PASS composite=<n>"          followed by
+               "[PERF-OK] composite=<n>"            ← the marker the loop reads
+               "PERF: BASELINE-INIT composite=<n>"  followed by [PERF-OK] (first run)
+               "PERF: REGRESSION delta=<d> hot=<sub-metric> composite=<n>"
+                                                    ← no [PERF-OK] is printed
+               "PERF: NO-STACK-DETECTED"            followed by [PERF-OK] (free pass)
+               "PERF: CORRECTNESS-FAILED <stack> <error>"
+                                                    ← tests broke
+          C. If [PERF-OK] appeared: copy that line into your output AND print \
+             "\(pairedMarker)" on its own line afterward. The Stop hook + loop \
+             driver verify [PERF-OK] precedes "\(pairedMarker)" / "\(marker)".
+          D. If [PERF-OK] did NOT appear: you must, IN THIS SAME TURN, either:
+               (i)  revert the offending diff with `git revert HEAD --no-edit` \
+                    and document the revert reason in progress.md; OR
+               (ii) read \(runDir)/perf-proposals.md (auto-generated by the \
+                    gate when it detects a regression), apply ONE refactor \
+                    proposal, then re-run the gate.
+             After the second run, if [PERF-OK] still hasn't printed, append \
+             a one-line "regressed perf, will pay back next iter" note to \
+             progress.md and DO NOT print "\(pairedMarker)" / "\(marker)" — the \
+             external loop driver and the Stop hook both refuse to honor an \
+             out-of-order marker, and Tado will block-and-continue with a \
+             pay-back nudge.
+
+        Do NOT edit benchmark code in the same iteration where it produces \
+        the metric — that's how you fool yourself. Do NOT disable correctness \
+        tests to make perf pass. The worker's job is to make code FASTER \
+        without making it WRONG.
+
+        See \(runDir)/crafted.md's `## PERFORMANCE` section for the active \
+        baseline numbers, the per-component weights, and the project's \
+        satisfaction threshold (above which printing "\(marker)" is OK).
         """
+    }
+
+    /// Engine-tailored "non-stop hygiene" closing paragraph for Mega and
+    /// Sprint prompts. Claude callers get the `.claude/`-protected-path
+    /// warning specific to `--dangerously-skip-permissions`; Codex callers
+    /// get the equivalent reminder for `--ask-for-approval never --sandbox
+    /// danger-full-access`. Both end with the same "no interactive
+    /// dialogs" line.
+    private static func eternalNonStopHygiene(engine: TerminalEngine, runDir: String) -> String {
+        switch engine {
+        case .claude:
+            return """
+            ═══════════════════════════════════════════════════════════
+            NON-STOP HYGIENE — avoid the only prompts bypass can't skip
+            ═══════════════════════════════════════════════════════════
+            Claude Code's `--dangerously-skip-permissions` skips every prompt \
+            EXCEPT writes to protected paths under `.claude/` when the parent \
+            directory has to be created. To keep the loop truly non-stop:
+              • BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)`
+                first. Always. Especially for `.claude/agents/`, `.claude/skills/`,
+                and any new subdirectory tree.
+              • Prefer writing generated files OUTSIDE `.claude/` when possible
+                (scratch files, trial-project outputs, reports, etc.). The
+                `.tado/scratch/` and `\(runDir)/` directories are safe.
+              • If you genuinely need to create something under `.claude/`, create
+                `.claude/` and its full subpath via mkdir FIRST, then Write.
+              • Never use tools that open interactive dialogs or confirmations.
+            """
+        case .codex:
+            return """
+            ═══════════════════════════════════════════════════════════
+            NON-STOP HYGIENE — Codex CLI specifics
+            ═══════════════════════════════════════════════════════════
+            You're running with `--ask-for-approval never --sandbox \
+            danger-full-access`, so file edits and shell commands proceed \
+            without prompts. To keep the loop truly non-stop:
+              • Do not invoke commands that open an interactive UI (e.g. \
+                `vim`, `less`, `git rebase -i`). They block the PTY without \
+                a path back. Prefer non-interactive equivalents (`git rebase`, \
+                `cat`, the Edit tool).
+              • Don't run watch-mode dev servers in the foreground. If you \
+                need a server, background it (`& disown`).
+              • Prefer writing scratch files under `.tado/scratch/` or \
+                `\(runDir)/` so generated content is easy to inspect.
+              • Never ask the user a question via the CLI — log it to \
+                progress.md and decide.
+            """
+        }
     }
 
     /// Prompt for a Sprint-mode Eternal worker. Each turn = one APPLY → EVAL → IMPROVE \
@@ -1445,9 +2025,15 @@ enum ProcessSpawner {
         projectRoot: String,
         marker: String,
         sprintMarker: String,
-        runID: UUID
+        runID: UUID,
+        engine: TerminalEngine = .claude,
+        perfMode: Bool = false
     ) -> String {
         let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
+        let perfStep = perfMode ? eternalPerfStepBlock(runDir: runDir, marker: marker, sprintMarker: sprintMarker) : ""
+        let evalLine = perfMode
+            ? "2. EVAL    — run the evaluation from the TASK/EVALUATE sections AND `bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh`. Read the gate's output. Append one line to\n                       \(runDir)/metrics.jsonl in this exact shape, with `metric` set to the perf composite and `components` carrying every per-dimension normalized score:\n                       {\"sprint\": N, \"timestamp\": \"<iso>\", \"metric\": <perf-composite-or-task-metric>, \"components\": {\"algo_complexity\": ..., \"alloc_per_op\": ...}, \"note\": \"<one-liner>\"}"
+            : "2. EVAL    — run the evaluation from the TASK/EVALUATE sections. Append one line to\n                       \(runDir)/metrics.jsonl in this exact shape:\n                       {\"sprint\": N, \"timestamp\": \"<iso>\", \"metric\": <number-or-short-string>, \"note\": \"<one-liner>\"}"
         return """
         You are running as a Tado Eternal agent (SPRINT mode) for project "\(projectName)" at \(projectRoot).
 
@@ -1462,9 +2048,7 @@ enum ProcessSpawner {
         You are in a loop of sprints. Each sprint has three phases:
 
           1. APPLY   — implement the current proposal, or apply the last sprint's chosen improvement.
-          2. EVAL    — run the evaluation from the TASK/EVALUATE sections. Append one line to
-                       \(runDir)/metrics.jsonl in this exact shape:
-                       {"sprint": N, "timestamp": "<iso>", "metric": <number-or-short-string>, "note": "<one-liner>"}
+          \(evalLine)
           3. IMPROVE — read the last 5 lines of metrics.jsonl. Decide what to change next, guided by
                        the IMPROVE section. Write your plan as ONE short line in
                        \(runDir)/progress.md.
@@ -1477,22 +2061,9 @@ enum ProcessSpawner {
 
         Don't ask clarifying questions — decide and proceed.
         Don't summarise at the end of turns — metrics.jsonl and progress.md are the summary.
+        \(perfStep)
 
-        ═══════════════════════════════════════════════════════════
-        NON-STOP HYGIENE — avoid the only prompts bypass can't skip
-        ═══════════════════════════════════════════════════════════
-        Claude Code's `--dangerously-skip-permissions` skips every prompt \
-        EXCEPT writes to protected paths under `.claude/` when the parent \
-        directory has to be created. To keep the loop truly non-stop:
-          • BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)`
-            first. Always. Especially for `.claude/agents/`, `.claude/skills/`,
-            and any new subdirectory tree in a fresh trial project.
-          • Prefer writing generated files OUTSIDE `.claude/` when possible
-            (scratch files, reports, trial-project sources). `.tado/scratch/`
-            and `\(runDir)/` are safe.
-          • If you must create something under `.claude/`, create `.claude/`
-            and the full subpath via `mkdir -p` FIRST, then Write.
-          • Never use tools that open interactive dialogs or confirmations.
+        \(eternalNonStopHygiene(engine: engine, runDir: runDir))
         """
     }
 
@@ -1615,14 +2186,22 @@ enum ProcessSpawner {
     /// `.tado/eternal/user-brief.md` and writes a fully-structured worker
     /// brief to `.tado/eternal/crafted.md`, then STOPS. It does not run
     /// sprints — the worker spawns after the user reviews and clicks Start.
+    ///
+    /// `engine` tailors the "Hard rules" the architect bakes into
+    /// crafted.md so a Codex worker doesn't get told to obey
+    /// Claude-Code-specific bypass-mode foot-guns.
     static func eternalArchitectPrompt(
         projectName: String,
         projectRoot: String,
         mode: String,
-        runID: UUID
+        runID: UUID,
+        engine: TerminalEngine = .claude,
+        kind: String = "general"
     ) -> String {
         let isSprint = (mode == "sprint")
+        let isPerf = (kind == "perf")
         let runDir = "\(projectRoot)/.tado/eternal/runs/\(runID.uuidString)"
+        let perfBriefAddendum = isPerf ? eternalPerfArchitectAddendum(projectName: projectName, projectRoot: projectRoot, runDir: runDir, isSprint: isSprint) : ""
 
         let modeSectionSprint = """
 
@@ -1737,6 +2316,7 @@ enum ProcessSpawner {
         stand on its own. Your goal is to be informed by history when \
         history exists, not blocked by its absence.
 
+        \(perfBriefAddendum)
         ═══════════════════════════════════════════════════════════
         STEP 1 — DESIGN THE SPECIFICATION
         ═══════════════════════════════════════════════════════════
@@ -1766,13 +2346,143 @@ enum ProcessSpawner {
         Include these exact rules verbatim — they are the difference between \
         a truly non-stop loop and one that stalls or drifts:
 
-          1. BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)` \
-             first. Always. Claude Code's `--dangerously-skip-permissions` skips \
-             every prompt EXCEPT writes to protected paths under `.claude/` \
-             when the parent directory has to be created. Prefer non-`.claude/` \
-             output locations whenever possible; `.tado/scratch/` and \
-             `\(runDir)/` are safe. If you must write under `.claude/`, \
-             mkdir the full subpath first.
+        \(eternalArchitectHardRules(engine: engine, runDir: runDir))
+
+        These rules go in the "Hard rules" section of crafted.md. Don't \
+        paraphrase — paste them roughly verbatim so the worker can't \
+        misinterpret them after a compaction.
+        """
+    }
+
+    /// Performance Brief Addendum prepended to the architect prompt
+    /// when `EternalRun.kind == "perf"`. Tells the architect to
+    /// auto-detect the project's stack via `perf-suite detect`, read
+    /// `bench/PERF_KNOBS.md` for the universal IMPROVE ladder, and
+    /// produce a `## PERFORMANCE` section in crafted.md with the
+    /// project's baseline numbers, the eight default component weights,
+    /// and the satisfaction threshold above which printing
+    /// `ETERNAL-DONE` is OK. The block is appended to the generic
+    /// architect prompt — the mode section (sprint or mega) handles
+    /// the rest of the structure.
+    private static func eternalPerfArchitectAddendum(
+        projectName: String,
+        projectRoot: String,
+        runDir: String,
+        isSprint: Bool
+    ) -> String {
+        let modeNote = isSprint
+            ? "Each sprint's TASK should drive ONE knob from the IMPROVE ladder. EVALUATE invokes perf-gate.sh and stores the composite + per-component scores into metrics.jsonl. IMPROVE re-reads the last 5 metric lines + perf-proposals.md and picks the next knob."
+            : "Mega's checklist should be ordered by IMPROVE ladder rung — safest (Rung 0 measurement hygiene) first, most structural (Rung 7 algorithm swap) last. Each checklist item ends in a perf-gate.sh invocation that must clear before ticking the box."
+        return """
+
+        ═══════════════════════════════════════════════════════════
+        PERFORMANCE STEP MODE — additional architect responsibilities
+        ═══════════════════════════════════════════════════════════
+        This run was created with kind=perf. The user wants performance \
+        as optimized as possible always in all cases. Your crafted.md \
+        must include a `## PERFORMANCE` section that the worker reads \
+        every iteration. Follow this protocol:
+
+        STEP P0 — Auto-detect the project's stack:
+          bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh — \
+          on first invocation it detects the stack via `perf-suite \
+          detect` and writes `\(runDir)/perf-report.json`. Run this \
+          ONCE during your architect pass to learn what stack you're \
+          designing for (rust / swift / node / python / go / polyglot).
+
+        STEP P1 — Read \(projectRoot)/bench/PERF_KNOBS.md (if it \
+          exists) for the universal IMPROVE ladder + EVAL stencils per \
+          stack. If the file is missing in this project, fall back to \
+          the in-prompt summary at the end of this addendum.
+
+        STEP P2 — Add a `## PERFORMANCE` section to crafted.md with:
+          • **Stack:** (from STEP P0)
+          • **EVAL stencil:** the exact bash command sequence (per the \
+            stack's stencil) the worker uses each iteration. This must \
+            include a literal call to `bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh` \
+            and instructions to copy the resulting `[PERF-OK] composite=<n>` \
+            line into the iteration's output.
+          • **Default weights:** the 8 dimensions and their weights \
+            (algo_complexity 0.18, alloc_per_op 0.12, critical_path_ops \
+            0.12, io_syscalls_per_op 0.10, db_query_cost 0.10, \
+            xproc_roundtrips 0.10, cold_start_ops 0.13, \
+            steady_state_rss_ratio 0.15). If a dimension is irrelevant \
+            to this project (e.g. db_query_cost on a project with no DB), \
+            note that explicitly so the worker doesn't fight ghost regressions.
+          • **Satisfaction threshold:** the composite score above which \
+            the worker may print `ETERNAL-DONE` (default: 1.5 — i.e. \
+            50% above the all-time baseline). Tune per project.
+          • **Mode hint:** \(modeNote)
+
+        STEP P3 — Add to the `## Hard rules` section (verbatim):
+          • Never edit benchmark code in the same iteration where it \
+            produces the metric — that's how you fool yourself.
+          • Never disable correctness tests to make perf pass. The \
+            perf gate runs tests FIRST; if tests fail it refuses to \
+            score and emits `PERF: CORRECTNESS-FAILED`.
+          • Never print `\(isSprint ? "[SPRINT-DONE]" : "ETERNAL-DONE")` \
+            without `[PERF-OK]` already present in the same turn's \
+            transcript. The Stop hook + external loop driver both \
+            refuse out-of-order markers.
+
+        UNIVERSAL IMPROVE LADDER (rungs to recommend in IMPROVE \
+        section, ordered safest → most structural):
+          Rung 0  Measurement hygiene  (warmup, baseline lock, deterministic input)
+          Rung 1  Algorithmic          (Big-O reductions, drop redundant work, hoist invariants)
+          Rung 2  Allocation           (pre-size buffers, reuse, arena/SmallVec, drop clones)
+          Rung 3  Data layout          (struct-of-arrays, cache-line packing)
+          Rung 4  Concurrency          (parallel iter, batching, off the hot path)
+          Rung 5  Caching/memoization  (LRU, interning, lazy compute)
+          Rung 6  IO / syscall         (vectored writes, buffered IO, batching)
+          Rung 7  Structural           (replace algorithm family, swap data structure, codegen)
+
+        EVAL STENCILS (pick the one that matches the detected stack — \
+        every command must end with a perf-gate.sh invocation):
+          rust   →  cargo bench [--bench <name>] && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+          swift  →  swift test --filter '*Bench*' && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+          node   →  npx vitest bench --run && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+          python →  pytest --benchmark-only && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+          go     →  go test -bench=. -benchmem ./... && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+          generic→  hyperfine '<entry-cmd>' --warmup 3 && bash $CLAUDE_PROJECT_DIR/.tado/eternal/hooks/perf-gate.sh
+
+        """
+    }
+
+    /// Engine-tailored "Hard rules" the architect bakes into crafted.md.
+    /// Claude callers get the bypass-mode `.claude/`-protected-path
+    /// warning; Codex callers get the equivalent reminders for
+    /// `--ask-for-approval never --sandbox danger-full-access` (no
+    /// interactive dev servers, no `vim`/`less`, etc.). The progress.md
+    /// rule and the no-interactive-dialogs rule are the same for both.
+    private static func eternalArchitectHardRules(engine: TerminalEngine, runDir: String) -> String {
+        let firstRule: String
+        switch engine {
+        case .claude:
+            firstRule = """
+              1. BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)` \
+                 first. Always. Claude Code's `--dangerously-skip-permissions` skips \
+                 every prompt EXCEPT writes to protected paths under `.claude/` \
+                 when the parent directory has to be created. Prefer non-`.claude/` \
+                 output locations whenever possible; `.tado/scratch/` and \
+                 `\(runDir)/` are safe. If you must write under `.claude/`, \
+                 mkdir the full subpath first.
+            """
+        case .codex:
+            firstRule = """
+              1. Codex runs with `--ask-for-approval never --sandbox \
+                 danger-full-access`, so file edits and shell commands proceed \
+                 without prompts. To keep the loop truly non-stop: do NOT \
+                 invoke commands that block the PTY on an interactive UI \
+                 (`vim`, `less`, `git rebase -i`, watch-mode dev servers in \
+                 the foreground). Prefer non-interactive equivalents \
+                 (`git rebase`, `cat`, the Edit tool). If you need a long-\
+                 running server, background it with `& disown`. Prefer \
+                 writing scratch files under `.tado/scratch/` or \
+                 `\(runDir)/`.
+            """
+        }
+        return """
+        \(firstRule)
 
           2. EVERY turn, BEFORE you end the turn, append at least one concrete \
              line to `\(runDir)/progress.md` in the format \
@@ -1784,10 +2494,146 @@ enum ProcessSpawner {
 
           3. NEVER use tools that open interactive dialogs or confirmations. \
              If a tool asks for input, abort that path and take a different one.
+        """
+    }
 
-        These rules go in the "Hard rules" section of crafted.md. Don't \
-        paraphrase — paste them roughly verbatim so the worker can't \
-        misinterpret them after a compaction.
+    /// Prompt for the v0.18 "Make Sure" verification agent.
+    ///
+    /// Invoked from Settings → Process hygiene → Make Sure. The
+    /// agent runs in a fresh tile, reads the Rust zombie sweeper's
+    /// source as ground truth for what SHOULD have died, then
+    /// independently audits the live process table and kills any
+    /// survivors. This is the operator's safety net for the case
+    /// where the in-process sweeper missed something — for instance
+    /// a process that forked between the enumeration and kill
+    /// passes, or a pattern variant the sweeper's substring list
+    /// doesn't yet cover.
+    ///
+    /// The protected set (the `make dev` ancestor chain plus the
+    /// running Tado app's PID) is provided verbatim — the agent
+    /// MUST treat it as a hard exclusion list. Loose pattern kills
+    /// like `pkill node` are explicitly forbidden because they'd
+    /// match unrelated user processes outside the Tado universe.
+    ///
+    /// - Parameters:
+    ///   - tadoRepoPath: absolute path to the Tado repo root, so the
+    ///     agent can find the sweeper source via a deterministic
+    ///     relative path. Resolved by Settings as the spawn cwd.
+    ///   - ourPid: the live Tado app's PID at sweep time.
+    ///   - protectedPids: ancestor chain (Tado → swift run → make
+    ///     dev → shell → Terminal → launchd) sourced from the same
+    ///     Rust function the in-process sweeper uses. Pass exactly
+    ///     what `ZombieSweepResult.protectedPids` returned.
+    ///   - sweepSummary: human-readable line summarizing what the
+    ///     in-process sweeper just did (or attempted), so the
+    ///     verifier has context. e.g. "Killed 4 of 12 matched
+    ///     processes; 8 protected, 0 survived".
+    static func makeSurePrompt(
+        tadoRepoPath: String,
+        ourPid: Int32,
+        protectedPids: [Int32],
+        sweepSummary: String
+    ) -> String {
+        let protectedList = protectedPids.map(String.init).joined(separator: ", ")
+        return """
+        You are running as the Tado v0.18 "Make Sure" verifier.
+
+        BACKGROUND
+        ----------
+        The user just clicked "Kill Zombies" in Tado's Settings → Process \
+        hygiene panel. The in-process Rust sweeper at \
+        `\(tadoRepoPath)/tado-core/crates/bt-core/src/zombie.rs` ran and \
+        produced this summary: \(sweepSummary). They then clicked "Make Sure", \
+        which spawned you (this tile) to independently verify nothing \
+        Tado-related survived.
+
+        GROUND TRUTH
+        ------------
+        Read the sweeper source FIRST so you understand exactly what it \
+        kills and why. The constant `KILL_PATTERNS` near the top of that \
+        file is the canonical list of substrings that identify a \
+        Tado-related process. The function `build_protected_set` is the \
+        canonical algorithm for what NOT to kill (the ancestor chain that \
+        keeps the live Tado app alive).
+
+        PROTECTED SET (DO NOT KILL — repeat, DO NOT KILL these PIDs)
+        -----------------------------------------------------------
+        Live Tado app PID: \(ourPid)
+        Ancestor chain + sentinels: \(protectedList)
+
+        These are the `make dev` tree (shell → make → swift run → Tado), \
+        plus PID 1 (launchd) and the PGID-0 sentinel. Killing any of \
+        them would close the user's Tado window and likely log them out. \
+        If you find any of these PIDs in the live process table, leave \
+        them alone — they are the user's hosting environment, not zombies.
+
+        YOUR TASK
+        ---------
+        1. Read \
+        `\(tadoRepoPath)/tado-core/crates/bt-core/src/zombie.rs` end-to-end. \
+        Note the kill patterns and the protection algorithm.
+
+        2. Enumerate Tado-related candidates in the live process table:
+           ```
+           ps -eo pid,pgid,ppid,command \\
+             | grep -iE 'release/Tado|/Applications/Tado\\.app/|tado-mcp/dist|target/release/(tado-mcp|dome-mcp|tado-dome)|claude.*--output-format stream-json|codex.*--output-format stream-json' \\
+             | grep -v grep
+           ```
+
+        3. For each row, decide one of:
+           a. **PROTECTED** — PID is in the protected set above. Skip.
+           b. **ZOMBIE** — matches a kill pattern AND not protected. Kill.
+           c. **AMBIGUOUS** — looks suspicious but you're not sure. \
+              Report and skip (do not kill anything you're unsure about).
+
+        4. Kill each ZOMBIE via process-group SIGKILL:
+           ```
+           PGID=$(ps -o pgid= -p <PID> | tr -d ' ')
+           if [ "$PGID" -gt 1 ] && ! echo " \(protectedList) " | grep -q " $PGID "; then
+             kill -9 -$PGID
+           fi
+           ```
+           Never use `pkill` with broad patterns like `pkill node` — that \
+           would match unrelated user processes.
+
+        5. Wait 500ms, then re-enumerate. Anything still alive that should \
+        have died is a survivor. Report it and try once more (a second \
+        SIGKILL to the PG, then to the PID directly if the PG is gone).
+
+        6. Print a final report in this exact shape (the user reads this \
+        verbatim):
+           ```
+           === Make Sure: Verification Report ===
+           Killed: <N> processes
+             - PID <pid> PGID <pgid> [<pattern>]: <command>
+             - ...
+           Protected (left alive): <M> processes
+             - PID <pid> [<reason>]: <command>
+             - ...
+           Survivors after kill: <K> processes
+             - PID <pid>: <command>
+           Ambiguous (skipped, manual review): <A> processes
+             - PID <pid>: <command>
+
+           Verdict: <"✓ Tado is clean" | "⚠ <K> survivors need manual review">
+           ```
+
+        7. After printing the report, your job is done. Do not loop, do not \
+        spawn other agents, do not make Dome notes — this tile is for the \
+        user's eyes only.
+
+        HARD RULES
+        ----------
+        - DO NOT kill any PID in {\(protectedList), \(ourPid)}.
+        - DO NOT use broad pkill patterns. Match by the substrings in \
+          `KILL_PATTERNS` only.
+        - DO NOT touch processes whose command line doesn't match a \
+          KILL_PATTERN substring, even if the name looks Tado-related.
+        - DO NOT make any Dome / settings / file changes outside what \
+          the kill commands require.
+        - If a sudo prompt or interactive dialog appears, abort that \
+          path and continue with the rest. The sweep should never need \
+          sudo — every Tado-related process runs as the current user.
         """
     }
 }

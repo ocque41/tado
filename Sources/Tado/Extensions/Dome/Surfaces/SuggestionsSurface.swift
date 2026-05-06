@@ -32,27 +32,26 @@ struct SuggestionsSurface: View {
             ) {
                 Task { await reload() }
             }
-            Divider().overlay(Palette.divider)
+
+            // Filter strip — segmented OutlineButton.small chips
             HStack(spacing: 6) {
                 ForEach(Self.statusOptions, id: \.self) { option in
-                    Button {
-                        statusFilter = option
-                    } label: {
-                        Text(option.capitalized)
-                            .font(Typography.monoCaption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(statusFilter == option ? Palette.surfaceAccentSoft : Palette.surface)
-                            .foregroundStyle(statusFilter == option ? Palette.accent : Palette.textSecondary)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    }
-                    .buttonStyle(.plain)
+                    OutlineButton(
+                        option.capitalized,
+                        size: .small,
+                        variant: statusFilter == option ? .accent : .standard,
+                        action: { statusFilter = option }
+                    )
                 }
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            Divider().overlay(Palette.divider)
+            .padding(.horizontal, DK.pageGutter)
+            .padding(.vertical, 10)
+            .background(Palette.bgPage)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+            }
+
             if filtered.isEmpty {
                 surfaceEmpty(
                     icon: "pencil.and.list.clipboard",
@@ -62,16 +61,16 @@ struct SuggestionsSurface: View {
                 )
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(filtered) { s in
-                            suggestionCard(s)
+                            suggestionRow(s)
+                            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
                         }
                     }
-                    .padding(20)
                 }
             }
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
         .task(id: domeScope.id) { await reload() }
     }
 
@@ -80,63 +79,73 @@ struct SuggestionsSurface: View {
         return suggestions.filter { $0.status == statusFilter }
     }
 
-    private func suggestionCard(_ s: DomeRpcClient.Suggestion) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                statusBadge(s.status)
+    /// Flat-tabular suggestion row. Replaces the previous rounded
+    /// card with a hairline-bordered structural row that reads as
+    /// part of a table — leading 2 px accent stripe on pending,
+    /// StatusPill, mono docId, mono caption metadata, trailing
+    /// `Accept` OutlineButton.accent on pending rows.
+    private func suggestionRow(_ s: DomeRpcClient.Suggestion) -> some View {
+        let isPending = s.status == "pending"
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                StatusPill(s.status, variant: pillVariant(for: s.status))
                 Text(s.summary.isEmpty ? "(no summary)" : s.summary)
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textPrimary)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(s.status == "rejected" ? Palette.ink3 : Palette.ink)
+                    .lineLimit(2)
                 Spacer()
-                Text(s.format)
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
+                Text(s.format.uppercased())
+                    .font(Font.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.ink4)
             }
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Text(s.docId)
-                    .font(Typography.monoCaption)
-                    .foregroundStyle(Palette.textSecondary)
+                    .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink3)
                     .lineLimit(1)
                 if !s.createdBy.isEmpty {
-                    Text("by \(s.createdBy)")
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                    Text("·  by \(s.createdBy)")
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
                 if let ts = s.createdAt {
-                    Text(Self.relative.localizedString(for: ts, relativeTo: Date()))
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                    Text("·  \(Self.relative.localizedString(for: ts, relativeTo: Date()))")
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
                 Spacer()
-                if s.status == "pending" {
-                    Button(working ? "Applying…" : "Accept") {
-                        runApply(s)
-                    }
-                    .buttonStyle(.borderedProminent)
+                if isPending {
+                    OutlineButton(
+                        working ? "Applying…" : "Accept",
+                        icon: "checkmark.circle",
+                        size: .small,
+                        variant: .accent,
+                        action: { runApply(s) }
+                    )
                     .disabled(working)
                 }
             }
         }
-        .padding(12)
-        .background(s.status == "rejected" ? Palette.surface.opacity(0.6) : Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(s.status == "rejected" ? Palette.bgPage : Palette.bgElev)
+        .overlay(alignment: .leading) {
+            if isPending {
+                Rectangle().fill(Palette.accent).frame(width: 2)
+            }
+        }
     }
 
-    private func statusBadge(_ status: String) -> some View {
-        let color: Color
+    /// Map suggestion status onto the StatusPill variant scale.
+    private func pillVariant(for status: String) -> StatusPill.Variant {
         switch status {
-        case "pending": color = Palette.warning
-        case "applied": color = Palette.success
-        case "rejected": color = Palette.danger
-        default: color = Palette.textTertiary
+        case "pending":  return .planning
+        case "applied":  return .running
+        case "rejected": return .danger
+        default:         return .neutral
         }
-        return Text(status.capitalized)
-            .font(Typography.micro)
-            .foregroundStyle(color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(Palette.surfaceAccentSoft)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private func reload() async {

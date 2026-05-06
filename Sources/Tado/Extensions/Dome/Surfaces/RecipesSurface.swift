@@ -25,6 +25,20 @@ struct RecipesSurface: View {
     @State private var lastAnswerError: String?
     @State private var isLoading = false
     @State private var seedBusy = false
+    /// v0.17 — inline status banner shown after a Seed/Reset click
+    /// so the button has visible success/failure feedback. Without
+    /// this the operator clicked the button, the FFI returned, and
+    /// nothing on screen changed (the recipes were already seeded
+    /// at app launch from `DomeExtension.onAppLaunch`, so the list
+    /// was identical post-call). The user reported this as "I am
+    /// clicking seed defaults and nothing is happening" — this
+    /// state is the fix.
+    @State private var seedFeedback: SeedFeedback?
+
+    private enum SeedFeedback: Equatable {
+        case ok(count: Int)
+        case error(message: String)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -35,116 +49,180 @@ struct RecipesSurface: View {
             ) {
                 Task { await reload() }
             }
-            Divider().overlay(Palette.divider)
             if recipes.isEmpty {
                 emptyState
             } else {
                 HStack(spacing: 0) {
                     leftRail
-                        .frame(minWidth: 260, idealWidth: 320, maxWidth: 360)
-                    Divider().overlay(Palette.divider)
+                        .frame(minWidth: 280, idealWidth: 320, maxWidth: 360)
+                    Rectangle().fill(Palette.rule).frame(width: DK.ruleW)
                     rightPane
                         .frame(maxWidth: .infinity)
                 }
             }
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
         .task(id: domeScope.id) { await reload() }
     }
 
     // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "text.book.closed")
-                .font(.system(size: 32, weight: .light))
-                .foregroundStyle(Palette.textTertiary)
-            Text("No recipes seeded yet")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
-            Text("Recipes are governed-answer templates the app and agents share. Click Seed defaults to install architecture-review, completion-claim, and team-handoff.")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 480)
-            Button(seedBusy ? "Seeding…" : "Seed defaults") {
-                runSeedDefaults()
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "text.book.closed")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Palette.ink4)
+                Text("No recipes seeded yet")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
             }
-            .buttonStyle(.borderedProminent)
+            Text("Recipes are governed-answer templates the app and agents share. Click Seed defaults to install architecture-review, completion-claim, and team-handoff.")
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .frame(maxWidth: 540, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            OutlineButton(
+                seedBusy ? "Seeding…" : "Seed defaults",
+                icon: "sparkles",
+                size: .regular,
+                variant: .accent,
+                action: { runSeedDefaults() }
+            )
             .disabled(seedBusy)
+            seedFeedbackBanner
+            Text("RETRIEVAL RECIPES  ·  intent-keyed policy + template  ·  three baked defaults: architecture-review, completion-claim, team-handoff")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.top, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Palette.rule).frame(height: 1).padding(.horizontal, -2)
+                }
         }
-        .padding(40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// v0.17 — inline confirmation row for the Seed/Reset action.
+    /// Shown both in the empty state (right under the prominent
+    /// button) and in the right-pane "Reset to default" position so
+    /// the operator can tell the click did something even when the
+    /// recipe list was already populated. Auto-dismisses after a few
+    /// seconds via the `task` attached to it.
+    @ViewBuilder
+    private var seedFeedbackBanner: some View {
+        if let feedback = seedFeedback {
+            HStack(spacing: 8) {
+                switch feedback {
+                case .ok(let count):
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Palette.green)
+                    Text("Seeded \(count) default recipe\(count == 1 ? "" : "s") at global scope.")
+                        .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink)
+                case .error(let message):
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .foregroundStyle(Palette.danger)
+                    Text(message)
+                        .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Palette.bgElev)
+            .overlay(
+                RoundedRectangle(cornerRadius: DK.radius)
+                    .stroke(Palette.rule, lineWidth: DK.ruleW)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+            .task(id: feedback) {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if seedFeedback == feedback { seedFeedback = nil }
+            }
+        }
     }
 
     // MARK: - Left rail
 
     private var leftRail: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                OverlineLabel("Recipes")
+                Spacer()
+                Text("\(recipes.count) total")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.ink4)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(recipes) { recipe in
                         recipeRow(recipe)
+                        Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
                     }
                 }
-                .padding(.vertical, 8)
             }
         }
-        .background(Palette.surface)
+        .background(Palette.bgElev)
     }
 
     private func recipeRow(_ recipe: DomeRpcClient.RetrievalRecipe) -> some View {
         let isSelected = recipe.id == selectedID
         return Button(action: {
             selectedID = recipe.id
-            // Reset stale answer when switching recipes so the right
-            // pane never shows a citation set from a different intent.
             if lastAnswer?.intentKey != recipe.intentKey {
                 lastAnswer = nil
                 lastAnswerError = nil
             }
         }) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text(recipe.title)
-                        .font(Typography.title)
-                        .foregroundStyle(isSelected ? Palette.accent : Palette.textPrimary)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? Palette.ink : Palette.ink2)
                         .lineLimit(1)
                     Spacer()
                     if !recipe.enabled {
-                        Text("Disabled")
-                            .font(Typography.micro)
-                            .foregroundStyle(Palette.textTertiary)
+                        StatusPill("disabled", variant: .draft)
                     }
                 }
                 HStack(spacing: 6) {
                     Text(recipe.intentKey)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
                     scopeBadge(recipe.scope)
                     Spacer()
                 }
                 Text(recipe.description)
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Palette.ink4)
                     .lineLimit(2)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? Palette.surfaceAccentSoft : Color.clear)
+            .background(isSelected ? Palette.bgRowHi : Color.clear)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Rectangle().fill(Palette.accent).frame(width: 2)
+                }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
     private func scopeBadge(_ scope: String) -> some View {
-        Text(scope.capitalized)
-            .font(Typography.micro)
-            .foregroundStyle(scope == "project" ? Palette.warning : Palette.textTertiary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(Palette.surfaceAccentSoft)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        StatusPill(
+            scope.lowercased(),
+            variant: scope == "project" ? .review : .draft
+        )
     }
 
     // MARK: - Right pane
@@ -165,147 +243,194 @@ struct RecipesSurface: View {
                     Spacer(minLength: 12)
                 } else {
                     Text("Pick a recipe on the left to see its policy and run it.")
-                        .font(Typography.body)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(.system(size: 12.5, weight: .regular))
+                        .foregroundStyle(Palette.ink3)
                         .padding(20)
                 }
             }
-            .padding(20)
+            .padding(.horizontal, DK.pageGutter)
+            .padding(.vertical, 20)
         }
     }
 
     private func rightHeader(_ recipe: DomeRpcClient.RetrievalRecipe) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(recipe.title)
-                .font(Typography.display)
-                .foregroundStyle(Palette.textPrimary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(recipe.title)
+                    .font(.system(size: 22, weight: .bold))
+                    .tracking(-0.3)
+                    .foregroundStyle(Palette.ink)
+                Spacer()
+                scopeBadge(recipe.scope)
+            }
             HStack(spacing: 8) {
                 Text(recipe.intentKey)
-                    .font(Typography.monoCaption)
-                    .foregroundStyle(Palette.textSecondary)
-                scopeBadge(recipe.scope)
+                    .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink3)
                 if let last = recipe.lastVerifiedAt {
-                    Text("Last verified: \(last.prefix(10))")
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                    Text("·  Last verified \(last.prefix(10))")
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
             }
             Text(recipe.description)
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink2)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func policyCard(_ recipe: DomeRpcClient.RetrievalRecipe) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Retrieval policy")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
-            policyRow(label: "Knowledge scope", value: recipe.policy.knowledgeScope.capitalized)
-            policyRow(label: "Topics", value: recipe.policy.topics.isEmpty ? "any" : recipe.policy.topics.joined(separator: ", "))
-            policyRow(label: "Knowledge kinds", value: recipe.policy.knowledgeKinds.isEmpty ? "any" : recipe.policy.knowledgeKinds.joined(separator: ", "))
-            policyRow(label: "Freshness decay", value: "\(recipe.policy.freshnessDecayDays) days")
-            policyRow(label: "Max tokens", value: "\(recipe.policy.maxTokens)")
-            policyRow(label: "Min combined score", value: String(format: "%.2f", recipe.policy.minCombinedScore))
-            policyRow(label: "Top-K", value: "\(recipe.policy.topK)")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                OverlineLabel("Retrieval policy")
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Palette.bgPage)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                policyRow(label: "Knowledge scope", value: recipe.policy.knowledgeScope.capitalized)
+                policyRow(label: "Topics", value: recipe.policy.topics.isEmpty ? "any" : recipe.policy.topics.joined(separator: ", "))
+                policyRow(label: "Knowledge kinds", value: recipe.policy.knowledgeKinds.isEmpty ? "any" : recipe.policy.knowledgeKinds.joined(separator: ", "))
+                policyRow(label: "Freshness decay", value: "\(recipe.policy.freshnessDecayDays) days")
+                policyRow(label: "Max tokens", value: "\(recipe.policy.maxTokens)")
+                policyRow(label: "Min combined score", value: String(format: "%.2f", recipe.policy.minCombinedScore))
+                policyRow(label: "Top-K", value: "\(recipe.policy.topK)", trailing: true)
+            }
         }
-        .padding(12)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(Palette.bgElev)
+        .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
     }
 
-    private func policyRow(label: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
-                .frame(width: 150, alignment: .leading)
-            Text(value)
-                .font(Typography.monoCaption)
-                .foregroundStyle(Palette.textPrimary)
-            Spacer()
+    private func policyRow(label: String, value: String, trailing: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label.uppercased())
+                    .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.ink4)
+                    .frame(width: 170, alignment: .leading)
+                Text(value)
+                    .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            if !trailing {
+                Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
+            }
         }
     }
 
     private func runCard(_ recipe: DomeRpcClient.RetrievalRecipe) -> some View {
-        HStack(spacing: 10) {
-            Button(runningRecipe ? "Running…" : "Run recipe") {
-                runRecipe(recipe)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(runningRecipe || !recipe.enabled)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                OutlineButton(
+                    runningRecipe ? "Running…" : "Run recipe",
+                    icon: "play.fill",
+                    size: .regular,
+                    variant: .accent,
+                    action: { runRecipe(recipe) }
+                )
+                .disabled(runningRecipe || !recipe.enabled)
 
-            if let path = templatePath(for: recipe), FileManager.default.fileExists(atPath: path) {
-                Button("Edit template") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                if let path = templatePath(for: recipe), FileManager.default.fileExists(atPath: path) {
+                    OutlineButton(
+                        "Edit template",
+                        icon: "square.and.pencil",
+                        size: .regular,
+                        variant: .standard,
+                        action: { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+                    )
+                    .help("Open \(path) in the system editor")
                 }
-                .buttonStyle(.borderless)
-                .help("Open \(path) in the system editor")
-            }
 
-            if recipe.scope == "global" {
-                Button(seedBusy ? "Resetting…" : "Reset to default") {
-                    runSeedDefaults()
+                if recipe.scope == "global" {
+                    OutlineButton(
+                        seedBusy ? "Resetting…" : "Reset to default",
+                        icon: "arrow.counterclockwise",
+                        size: .regular,
+                        variant: .ghost,
+                        action: { runSeedDefaults() }
+                    )
+                    .disabled(seedBusy)
+                    .help("Re-seed all baked default recipes — restores any deleted defaults and refreshes templates.")
                 }
-                .buttonStyle(.borderless)
-                .disabled(seedBusy)
-                .help("Re-seed all baked default recipes — restores any deleted defaults and refreshes templates.")
+                Spacer()
             }
-            Spacer()
+            seedFeedbackBanner
         }
     }
 
     private func answerCard(_ answer: DomeRpcClient.GovernedAnswer) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Governed answer")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                OverlineLabel("Governed answer")
                 Spacer()
-                Button("Copy answer") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(answer.answer, forType: .string)
-                }
-                .buttonStyle(.borderless)
-                Button("Copy as citation") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(citationMarkdown(for: answer), forType: .string)
-                }
-                .buttonStyle(.borderless)
+                OutlineButton(
+                    "Copy answer",
+                    icon: "doc.on.doc",
+                    size: .small,
+                    variant: .ghost,
+                    action: {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(answer.answer, forType: .string)
+                    }
+                )
+                OutlineButton(
+                    "Copy as citation",
+                    icon: "quote.opening",
+                    size: .small,
+                    variant: .ghost,
+                    action: {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(citationMarkdown(for: answer), forType: .string)
+                    }
+                )
             }
             Text(answer.answer)
-                .font(Typography.body)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 12.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(Palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(14)
+                .background(Palette.bgElev)
+                .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
 
             if !answer.citations.isEmpty {
-                Text("Citations (\(answer.citations.count))")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
-                ForEach(answer.citations) { citation in
-                    citationRow(citation)
+                OverlineLabel("Citations · \(answer.citations.count)")
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(answer.citations) { citation in
+                        citationRow(citation)
+                        Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
+                    }
                 }
+                .background(Palette.bgElev)
+                .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
             }
 
             if !answer.missingAuthority.isEmpty {
-                Text("Missing authority")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.warning)
-                ForEach(answer.missingAuthority, id: \.self) { gap in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(Palette.warning)
-                            .font(.system(size: 12))
-                        Text(gap)
-                            .font(Typography.body)
-                            .foregroundStyle(Palette.textSecondary)
+                OverlineLabel("Missing authority", tint: Palette.warning)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(answer.missingAuthority, id: \.self) { gap in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(Palette.warning)
+                                .font(.system(size: 11))
+                            Text(gap)
+                                .font(.system(size: 12, weight: .regular))
+                                .foregroundStyle(Palette.ink2)
+                        }
                     }
                 }
+                .padding(12)
+                .background(Palette.warning.opacity(0.06))
+                .overlay(Rectangle().stroke(Palette.warning.opacity(0.3), lineWidth: DK.ruleW))
             }
         }
     }
@@ -313,44 +438,46 @@ struct RecipesSurface: View {
     private func citationRow(_ citation: DomeRpcClient.Citation) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "quote.opening")
-                .foregroundStyle(Palette.textTertiary)
-            VStack(alignment: .leading, spacing: 2) {
+                .foregroundStyle(Palette.ink4)
+                .font(.system(size: 11))
+            VStack(alignment: .leading, spacing: 4) {
                 Text(citation.title)
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textPrimary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.ink)
                     .lineLimit(1)
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Text(citation.topic)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
                     scopeBadge(citation.scope)
                     Text(String(format: "conf %.2f · fresh %.2f", citation.confidence, citation.freshness))
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
             }
             Spacer()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
 
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.octagon")
                 .foregroundStyle(Palette.danger)
+                .font(.system(size: 12))
             Text(message)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink2)
             Spacer()
-            Button("Dismiss") { lastAnswerError = nil }
-                .buttonStyle(.borderless)
+            OutlineButton("Dismiss", size: .small, variant: .ghost) {
+                lastAnswerError = nil
+            }
         }
-        .padding(10)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Palette.danger.opacity(0.08))
+        .overlay(Rectangle().stroke(Palette.danger.opacity(0.4), lineWidth: DK.ruleW))
     }
 
     // MARK: - Actions
@@ -396,13 +523,19 @@ struct RecipesSurface: View {
 
     private func runSeedDefaults() {
         seedBusy = true
-        Task.detached {
-            let count = DomeRpcClient.recipeSeedDefaults()
-            await MainActor.run {
-                seedBusy = false
-                if count != nil {
-                    Task { await reload() }
-                }
+        seedFeedback = nil
+        Task { @MainActor in
+            let count = await Task.detached {
+                DomeRpcClient.recipeSeedDefaults()
+            }.value
+            seedBusy = false
+            if let count {
+                seedFeedback = .ok(count: count)
+                await reload()
+            } else {
+                seedFeedback = .error(
+                    message: "Couldn't seed defaults. The Dome daemon may still be booting — open Dome → Knowledge → System and check Vault status."
+                )
             }
         }
     }

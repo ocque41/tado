@@ -22,6 +22,15 @@ pub const HARD_SKIP_DIRS: &[&str] = &[
     ".git",
     ".hg",
     ".svn",
+    // Tado's own per-project runtime state. Eternal/Dispatch hooks
+    // write `state.json`, `progress.md`, `user-brief.md`, and the
+    // hook scripts themselves at near-continuous cadence during an
+    // active Mega run — none of which should ever be indexed into
+    // the searchable vault, and all of which were the dominant
+    // source of `database is locked` contention before being
+    // skipped. Skipping by component name covers the directory
+    // wherever it appears (project root, monorepo subpackages, etc).
+    ".tado",
     "node_modules",
     "target",
     ".build",

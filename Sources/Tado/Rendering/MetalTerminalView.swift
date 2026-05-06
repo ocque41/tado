@@ -115,7 +115,13 @@ struct MetalTerminalView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: TerminalMTKView, coordinator: Coordinator) {
-        nsView.stop()
+        // Off-screen virtualization tears down the NSView when its tile
+        // scrolls out of the visible rect, but the underlying
+        // `TadoCore.Session` is owned by the `TerminalSession` model and
+        // must keep running so the agent's PTY survives the pan. Pause
+        // the renderer only — `session.kill()` is reserved for the
+        // explicit terminate paths (tile X button, deleteRun).
+        nsView.pauseRendering()
     }
 }
 
@@ -272,9 +278,13 @@ final class TerminalMTKView: MTKView {
 
     // MARK: - Lifecycle
 
-    func stop() {
+    /// Pause the MTKView render loop without touching the underlying
+    /// PTY. Called when the SwiftUI representable is being dismantled
+    /// (off-screen virtualization). The Rust `TadoCore.Session` keeps
+    /// running and producing output; when the tile is re-mounted a
+    /// fresh `TerminalMTKView` reads the surviving session.
+    func pauseRendering() {
         self.isPaused = true
-        session.kill()
     }
 
     /// Set the Metal clear color from a packed 0xRRGGBBAA. MTKView uses
@@ -325,13 +335,18 @@ final class TerminalMTKView: MTKView {
         super.viewDidMoveToWindow()
         updateDrawableSize()
         reflowGridToBounds()
-        // Intentionally NOT calling `becomeFirstResponder()`. Focus only
-        // transfers to this tile on an explicit user click (see
-        // `mouseDown`). Auto-grabbing on mount is what caused "multiple
-        // terminals eat my arrow keys" — the most-recently-mounted MTKView
-        // would monopolise keyDown system-wide, blocking canvas tile
-        // navigation and even arrow cursor-moves in TextFields on other
-        // views. Let AppKit pick firstResponder based on actual user intent.
+        // Prime the renderer's local cell buffer with a full snapshot of
+        // the live PTY state. Off-screen virtualization tears down the
+        // MTKView but leaves the Rust session alive — when the tile
+        // re-mounts, `MetalTerminalRenderer.localCells` is fresh-zero,
+        // and `snapshotDirty()` only returns rows changed since the
+        // previous call. An idle agent has no dirty rows, so without
+        // this prime the new renderer would draw a blank black tile
+        // until the next output arrived (could be minutes). Mirrors
+        // what the scroll-offset transition does in `draw(in:)`.
+        if window != nil, !isPaused, let snap = session.snapshotFull() {
+            renderer?.upload(snapshot: snap)
+        }
     }
 
     /// Set `drawableSize` to `bounds × backingScaleFactor`. On Retina

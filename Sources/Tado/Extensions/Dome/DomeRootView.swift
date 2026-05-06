@@ -43,16 +43,20 @@ struct DomeRootView: View {
             HStack(spacing: 0) {
                 sidebar(compact: compact)
                     .frame(width: compact ? 52 : 220)
-                Divider().overlay(Palette.divider)
+                Rectangle()
+                    .fill(Palette.rule)
+                    .frame(width: DK.ruleW)
                 VStack(spacing: 0) {
                     domeNavbar(compact: compact)
-                    Divider().overlay(Palette.divider)
+                    Rectangle()
+                        .fill(Palette.rule)
+                        .frame(height: DK.ruleW)
                     surfaceContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
         .preferredColorScheme(.dark)
         .environment(domeState)
         .overlay(alignment: .topLeading) {
@@ -142,6 +146,7 @@ struct DomeRootView: View {
             .pickerStyle(.menu)
             .frame(minWidth: 100, idealWidth: 220, maxWidth: 220, alignment: .leading)
             .layoutPriority(1)
+            .tint(Palette.ink2)
             .help("Choose Global common knowledge or a project overlay.")
 
             if selectedProject != nil {
@@ -149,12 +154,12 @@ struct DomeRootView: View {
                     if compact {
                         Label("Global", systemImage: "globe")
                             .font(Typography.caption)
-                            .foregroundStyle(Palette.textSecondary)
+                            .foregroundStyle(Palette.ink2)
                             .labelStyle(.iconOnly)
                     } else {
                         Label("Global", systemImage: "globe")
                             .font(Typography.caption)
-                            .foregroundStyle(Palette.textSecondary)
+                            .foregroundStyle(Palette.ink2)
                     }
                 }
                 .toggleStyle(.switch)
@@ -165,16 +170,16 @@ struct DomeRootView: View {
                 .help("Include inherited global knowledge in this project view.")
 
                 if !compact {
-                    Divider()
-                        .frame(height: 18)
-                        .overlay(Palette.divider)
+                    Rectangle()
+                        .fill(Palette.rule)
+                        .frame(width: DK.ruleW, height: 18)
                 }
             }
 
             if !compact {
                 Text(scopeSubtitle)
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.ink3)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(0)
@@ -188,7 +193,7 @@ struct DomeRootView: View {
         }
         .padding(.horizontal, compact ? 8 : 16)
         .padding(.vertical, 10)
-        .background(Palette.surface)
+        .background(Palette.bgElev)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Dome navigation")
     }
@@ -255,7 +260,9 @@ struct DomeRootView: View {
     private func sidebar(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             header(compact: compact)
-            Divider().overlay(Palette.divider)
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(DomeSurfaceTab.allCases) { tab in
                     if tab == .knowledge {
@@ -265,24 +272,36 @@ struct DomeRootView: View {
                     }
                 }
             }
-            .padding(.horizontal, compact ? 4 : 10)
+            .padding(.horizontal, compact ? 4 : 8)
             .padding(.top, 12)
             Spacer()
             statusFooter(compact: compact)
         }
-        .background(Palette.surfaceElevated)
+        .background(Palette.bgElev)
     }
 
+    /// Sidebar header — wordmark "Dome" + amber accent square +
+    /// mono "second brain" caption. Mirrors the topbar's brand cell
+    /// from `TopNavBar` so the two chromes read as siblings.
     private func header(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(compact ? "D" : "Dome")
-                .font(Typography.displayXL)
-                .foregroundStyle(Palette.textPrimary)
-                .help("Dome — second brain")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(compact ? "D" : "Dome")
+                    .font(Font.system(size: compact ? 18 : 20, weight: .semibold, design: .monospaced))
+                    .tracking(-0.2)
+                    .foregroundStyle(Palette.ink)
+                    .help("Dome — second brain")
+                if !compact {
+                    Rectangle()
+                        .fill(Palette.accent)
+                        .frame(width: 6, height: 6)
+                }
+            }
             if !compact {
                 Text("second brain")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Font.system(size: 10, weight: .regular, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.ink4)
             }
         }
         .padding(.horizontal, compact ? 8 : 14)
@@ -301,6 +320,10 @@ struct DomeRootView: View {
             .accessibilityHint("Switches the Dome window to the \(tab.label) surface.")
     }
 
+    /// Tab button — flat row with leading 2 px accent stripe on the
+    /// active state instead of a rounded fill, matching the design's
+    /// run-row leading-stripe affordance. Hover state lifts the row
+    /// to `bgRowHi`.
     private func tabButtonLabel(_ tab: DomeSurfaceTab, active: Bool, compact: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: tab.iconSystemName)
@@ -308,24 +331,29 @@ struct DomeRootView: View {
                 .frame(width: 16)
             if !compact {
                 Text(tab.label)
-                    .font(Typography.label)
+                    .font(Font.system(size: 12, weight: .medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
         }
-        .foregroundStyle(active ? Palette.accent : Palette.textSecondary)
+        .foregroundStyle(active ? Palette.ink : Palette.ink2)
         .padding(.horizontal, compact ? 0 : 10)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(active ? Palette.surfaceAccent : Color.clear)
-        )
+        .background(active ? Palette.bgRowHi : Color.clear)
+        .overlay(alignment: .leading) {
+            if active {
+                Rectangle()
+                    .fill(Palette.accent)
+                    .frame(width: 2)
+            }
+        }
         .contentShape(Rectangle())
     }
 
     private func knowledgeButton(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        let active = domeState.activeSurface == .knowledge
+        return VStack(alignment: .leading, spacing: 2) {
             Button(action: {
                 domeState.activeSurface = .knowledge
                 knowledgeExpanded.toggle()
@@ -336,34 +364,38 @@ struct DomeRootView: View {
                         .frame(width: 16)
                     if !compact {
                         Text(DomeSurfaceTab.knowledge.label)
-                            .font(Typography.label)
+                            .font(Font.system(size: 12, weight: .medium))
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         Image(systemName: knowledgeExpanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Palette.textTertiary)
+                            .foregroundStyle(Palette.ink4)
                     }
                 }
-                .foregroundStyle(domeState.activeSurface == .knowledge ? Palette.accent : Palette.textSecondary)
+                .foregroundStyle(active ? Palette.ink : Palette.ink2)
                 .padding(.horizontal, compact ? 0 : 10)
-                .padding(.vertical, 7)
+                .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(domeState.activeSurface == .knowledge ? Palette.surfaceAccent : Color.clear)
-                )
+                .background(active ? Palette.bgRowHi : Color.clear)
+                .overlay(alignment: .leading) {
+                    if active {
+                        Rectangle()
+                            .fill(Palette.accent)
+                            .frame(width: 2)
+                    }
+                }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(DomeSurfaceTab.knowledge.label)
 
-            if !compact, knowledgeExpanded || domeState.activeSurface == .knowledge {
+            if !compact, knowledgeExpanded || active {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(DomeKnowledgePage.allCases) { page in
                         knowledgePageButton(page)
                     }
                 }
-                .padding(.leading, 22)
+                .padding(.leading, 26)
             }
         }
     }
@@ -380,10 +412,10 @@ struct DomeRootView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .frame(width: 14)
                 Text(page.label)
-                    .font(Typography.labelSm)
+                    .font(Font.system(size: 11, weight: .regular))
                 Spacer()
             }
-            .foregroundStyle(active ? Palette.accent : Palette.textTertiary)
+            .foregroundStyle(active ? Palette.ink : Palette.ink3)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
@@ -394,15 +426,20 @@ struct DomeRootView: View {
         .accessibilityHint("Opens the Knowledge surface on the \(page.label) page.")
     }
 
+    /// Sidebar status footer — small live dot + mono micro label.
+    /// Visually aligned with the `UserChip` in TopNavBar so the
+    /// reading is consistent: green = live daemon, amber = work in
+    /// flight, ink4 = idle / starting.
     private func statusFooter(compact: Bool) -> some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(statusTint)
-                .frame(width: 8, height: 8)
+                .frame(width: 6, height: 6)
             if !compact {
-                Text(statusLabel)
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textSecondary)
+                Text(statusLabel.uppercased())
+                    .font(Font.system(size: 10, weight: .regular, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.ink3)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -410,12 +447,12 @@ struct DomeRootView: View {
         .padding(.horizontal, compact ? 8 : 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-        .background(Palette.surface)
+        .background(Palette.bgPage)
         .help(compact ? statusLabel : "")
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(Palette.divider)
-                .frame(height: 1)
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
         }
     }
 
@@ -428,10 +465,10 @@ struct DomeRootView: View {
 
     private var statusTint: Color {
         switch latestDomeEvent?.type {
-        case "dome.daemonStarted": return Palette.success
+        case "dome.daemonStarted": return Palette.green
         case "dome.daemonFailed": return Palette.danger
         case "dome.modelDownloading": return Palette.warning
-        default: return Palette.textTertiary
+        default: return Palette.ink4
         }
     }
 

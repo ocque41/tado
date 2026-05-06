@@ -96,10 +96,10 @@ struct EternalSprintDetailSheet: View {
                 .padding(.vertical, 8)
                 .background(Palette.surface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: DK.radius)
                         .stroke(Palette.divider, lineWidth: 1)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
             }
             .buttonStyle(.plain)
         }
@@ -176,7 +176,7 @@ struct EternalSprintDetailSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     private func dimensionsSection(components: [String: Double]) -> some View {
@@ -193,7 +193,7 @@ struct EternalSprintDetailSheet: View {
             }
             .padding(12)
             .background(Palette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
     }
 
@@ -233,7 +233,7 @@ struct EternalSprintDetailSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
                 .background(Palette.surfaceAccentSoft)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
     }
 

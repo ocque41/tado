@@ -33,6 +33,12 @@ enum DomeBreadcrumbs {
 
 /// Inline view for the trail. Zero state — pulls from the supplied
 /// crumbs and stays hidden when there's only the root.
+///
+/// v0.18: rebuilt on the structural-grid type stack — mono caption
+/// for every crumb, ink3 chevron separator, ink for the active
+/// (final) crumb, ink2 for prior segments. Keeps the same shape
+/// (no border, no fill) so it slots into the topbar without
+/// stealing visual weight from the scope picker.
 struct DomeBreadcrumbsView: View {
     let crumbs: [DomeBreadcrumbs.Crumb]
 
@@ -45,11 +51,11 @@ struct DomeBreadcrumbsView: View {
                     if idx > 0 {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Palette.textTertiary)
+                            .foregroundStyle(Palette.ink4)
                     }
                     Text(crumb.label)
-                        .font(Typography.caption)
-                        .foregroundStyle(idx == crumbs.count - 1 ? Palette.textPrimary : Palette.textSecondary)
+                        .font(Typography.monoCaption)
+                        .foregroundStyle(idx == crumbs.count - 1 ? Palette.ink : Palette.ink3)
                 }
             }
             .accessibilityElement(children: .combine)

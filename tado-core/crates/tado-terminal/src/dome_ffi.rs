@@ -1860,6 +1860,32 @@ pub unsafe extern "C" fn tado_dome_context_get(
     }
 }
 
+/// v0.17 — delete one cached context pack (DB rows + on-disk files).
+/// Operator action from the Packs surface. Returns
+/// `{context_id, deleted: true}` on success or null on missing pack /
+/// daemon down.
+///
+/// # Safety
+/// `context_id_cstr` must be non-null NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn tado_dome_context_delete(
+    context_id_cstr: *const c_char,
+) -> *mut c_char {
+    let Some(service) = DOME_SERVICE.get() else {
+        return std::ptr::null_mut();
+    };
+    if context_id_cstr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(context_id) = CStr::from_ptr(context_id_cstr).to_str() else {
+        return std::ptr::null_mut();
+    };
+    match service.context_delete(&swift_ui_actor(), context_id) {
+        Ok(value) => to_cstr(value.to_string()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 // ── v0.15 — suggestions surface ────────────────────────────────────
 
 /// List pending / applied / rejected suggestions. Both filters
@@ -2561,6 +2587,66 @@ pub unsafe extern "C" fn tado_dome_code_index_status(
 
 fn shell_escape(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+// ─────────────────────────────────────────────────────────────────
+// v0.18 — Zombie-process sweeper FFI shim.
+//
+// Lives on the boundary between Swift's Settings UI and bt-core's
+// `zombie::sweep` routine. Standalone — does NOT require
+// `tado_dome_start` to have been called, because the sweeper has no
+// vault dependency. Safe to invoke any time after the Tado process
+// is running.
+//
+// See `bt_core::zombie` for the kill-pattern list, the self-
+// protection algorithm, and the kill mechanism.
+// ─────────────────────────────────────────────────────────────────
+
+/// Sweep zombie processes spawned (or potentially spawned) by Tado
+/// across this and prior runs.
+///
+/// `options_json_cstr` is a JSON `{"dry_run": bool}` payload. Pass
+/// `null` or an empty string to default both fields to `false`.
+///
+/// Returns a heap-allocated JSON string with the full
+/// `bt_core::zombie::SweepResult` shape. Caller frees with
+/// `tado_string_free`.
+///
+/// # Safety
+/// `options_json_cstr` may be null; if non-null it must be a valid
+/// NUL-terminated UTF-8 string. The returned pointer is non-null on
+/// success and must be freed exactly once via `tado_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn tado_zombie_sweep(
+    options_json_cstr: *const c_char,
+) -> *mut c_char {
+    let opts: bt_core::zombie::SweepOptions = if options_json_cstr.is_null() {
+        bt_core::zombie::SweepOptions::default()
+    } else {
+        match CStr::from_ptr(options_json_cstr).to_str() {
+            Ok(s) if s.trim().is_empty() => bt_core::zombie::SweepOptions::default(),
+            Ok(s) => match serde_json::from_str(s) {
+                Ok(o) => o,
+                Err(_) => bt_core::zombie::SweepOptions::default(),
+            },
+            Err(_) => bt_core::zombie::SweepOptions::default(),
+        }
+    };
+
+    // The sweep itself can take ~50ms on a busy machine (sysinfo
+    // scans /proc on Linux or sysctl on macOS). Wrapping in
+    // `catch_unwind` is defensive — a panic inside the sysinfo /
+    // libc layer would otherwise unwind across the FFI boundary,
+    // which is undefined behavior. Worst case: panic → null
+    // return, UI shows "sweep failed", operator clicks again.
+    let result = std::panic::catch_unwind(|| bt_core::zombie::sweep(opts));
+    let Ok(result) = result else {
+        return std::ptr::null_mut();
+    };
+    match serde_json::to_string(&result) {
+        Ok(json) => to_cstr(json),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 unsafe fn optional_cstr<'a>(ptr: *const c_char) -> Option<&'a str> {

@@ -1,12 +1,10 @@
 import SwiftUI
 import SwiftData
 
-/// Project list view — body is a stack of `ProjectCard`s, or a
-/// centered empty-state CTA when no projects exist. The page header
-/// (title + "+ New Project" button) lives in `TopNavBar` now, so this
-/// view contributes only the scrollable list itself. New Project still
-/// opens as a sheet — `TopNavBar` flips `appState.showNewProjectSheet`
-/// and `ContentView` presents `NewProjectSheet` from there.
+/// Project list view, redesigned in v0.18 to match the structural-grid
+/// design system: a `PageHeader` with a "Projects" title + `MetaStrip`
+/// (totals across the index) and one `SectionRail` ("Projects")
+/// hosting either the empty-state CTA or the cards list.
 ///
 /// Each card calls back via closures for project-tap, dispatch open,
 /// bootstrap tools / team, and delete. The ••• menu on the card
@@ -23,12 +21,28 @@ struct ProjectListView: View {
     @State private var showPlanNotReadyAlert: Bool = false
 
     var body: some View {
-        Group {
-            if projects.isEmpty {
-                emptyState
-            } else {
-                projectCards
+        PageContainer {
+            PageHeader(title: "Projects") {
+                metaStrip
             }
+
+            SectionRail(
+                label: "Projects",
+                count: projectsCount,
+                actions: {
+                    OutlineButton("New Project", icon: "plus", size: .small, variant: .accent) {
+                        appState.showNewProjectSheet = true
+                    }
+                },
+                content: {
+                    if projects.isEmpty {
+                        emptyState
+                    } else {
+                        cardsList
+                    }
+                },
+                bottomDivider: false
+            )
         }
         .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
             Button("OK", role: .cancel) {}
@@ -37,53 +51,81 @@ struct ProjectListView: View {
         }
     }
 
-    // MARK: - Pieces
+    // MARK: - Page meta
 
-    /// Centered empty-state block. Uses Typography.heading for the line
-    /// and body for the subline — matches the visual weight of other
-    /// empty states in the app (Settings, Done/Trash). The primary CTA
-    /// flips the same `appState.showNewProjectSheet` flag the nav bar
-    /// uses, so a fresh install still has one obvious call to action.
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Text("No projects yet")
-                .font(Typography.heading)
-                .foregroundStyle(Palette.textPrimary)
-            Text("Create one to start organizing your AI coding\nsessions by workspace")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(action: { appState.showNewProjectSheet = true }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                    Text("New Project")
-                }
-                .font(Typography.label)
-                .foregroundStyle(Palette.accent)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Palette.surfaceAccent)
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
-            Spacer()
+    private var metaStrip: some View {
+        let totalActiveTodos = todos.filter { $0.listState == .active }.count
+        let totalTeams = teams.count
+        let totalEternalRunning = projects.flatMap(\.eternalRuns).filter { $0.state == "running" }.count
+        let totalDispatching = projects.flatMap(\.dispatchRuns).filter { $0.state == "dispatching" || $0.state == "planning" }.count
+
+        return MetaStrip {
+            MetaCell(
+                key: "Status",
+                value: (totalEternalRunning + totalDispatching) > 0 ? "● Active" : "○ Idle",
+                tint: (totalEternalRunning + totalDispatching) > 0 ? Palette.green : Palette.ink3
+            )
+            MetaCell(key: "Projects", value: "\(projects.count)")
+            MetaCell(key: "Open todos", value: "\(totalActiveTodos)")
+            MetaCell(key: "Teams", value: "\(totalTeams)")
+            MetaCell(key: "Live runs", value: "\(totalEternalRunning + totalDispatching)", trailingDivider: false)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var projectCards: some View {
-        ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(projects) { project in
-                    card(for: project)
+    private var projectsCount: String {
+        switch projects.count {
+        case 0: return "No projects yet"
+        case 1: return "1 project"
+        default: return "\(projects.count) projects"
+        }
+    }
+
+    // MARK: - Cards / empty state
+
+    private var cardsList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(projects.enumerated()), id: \.element.id) { idx, project in
+                card(for: project)
+                if idx < projects.count - 1 {
+                    Rectangle()
+                        .fill(Palette.rule)
+                        .frame(height: DK.ruleW)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 20)
         }
+    }
+
+    /// Empty-state slot fills the section content area with a left-
+    /// aligned heading + subline + outline CTA, matching the design's
+    /// "no plans" / "no agents" pattern (left-aligned, mono help line).
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("No projects yet")
+                .font(Font.system(size: 14, weight: .semibold))
+                .foregroundStyle(Palette.ink)
+            Text("Create one to start organizing your AI coding sessions by workspace.")
+                .font(Font.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .frame(maxWidth: 540, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            OutlineButton("New Project", icon: "plus", size: .small, variant: .accent) {
+                appState.showNewProjectSheet = true
+            }
+            Text("PROJECT REGISTRY  ·  one rootPath per project  ·  agents auto-discovered from .claude/agents and .codex/agents")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.top, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Palette.rule)
+                        .frame(height: 1)
+                        .padding(.horizontal, -2)
+                }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func card(for project: Project) -> some View {

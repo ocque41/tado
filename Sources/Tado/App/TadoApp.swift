@@ -25,6 +25,12 @@ struct TadoApp: App {
     private let settingsSync: AppSettingsSync
     private let projectSync: ProjectSettingsSync
     private let runEventWatcher: RunEventWatcher
+    /// Mirrors the SwiftData `Project` table to
+    /// `<storage-root>/projects.json` so the Rust `tado-projects`
+    /// CLI (and the natural-language coordinator agent that calls
+    /// it) can resolve project names without IPC into the running
+    /// app. Updated automatically on every ModelContext save.
+    private let projectIndexService: ProjectIndexService
 
     init() {
         // Register Plus Jakarta Sans with Core Text before any view
@@ -39,23 +45,58 @@ struct TadoApp: App {
             withIntermediateDirectories: true
         )
 
-        let container: ModelContainer
-        do {
-            let schema = Schema([
-                TodoItem.self, AppSettings.self, Project.self,
-                Team.self, EternalRun.self, DispatchRun.self
-            ])
-            let configuration = ModelConfiguration(
-                schema: schema,
-                url: StorageLocationManager.swiftDataStoreURL
-            )
-            container = try ModelContainer(
-                for: schema,
-                configurations: [configuration]
-            )
-        } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
-        }
+        // SwiftData is a rebuildable cache (canonical state lives in
+        // JSON on disk via AtomicStore). If the on-disk store file is
+        // corrupt — most often because the process was force-quit by
+        // macOS power management mid-`save()` during sleep — the
+        // ModelContainer init throws. Historically we hit `fatalError`
+        // and the app refused to launch. Now we wipe the cache, log
+        // the recovery, and rebuild from JSON on first sync. The user
+        // sees one transient toast instead of a blank window or a
+        // crash-loop dock icon.
+        let schema = Schema([
+            TodoItem.self, AppSettings.self, Project.self,
+            Team.self, EternalRun.self, DispatchRun.self
+        ])
+        let configuration = ModelConfiguration(
+            schema: schema,
+            url: StorageLocationManager.swiftDataStoreURL
+        )
+        let container: ModelContainer = {
+            do {
+                return try ModelContainer(for: schema, configurations: [configuration])
+            } catch {
+                NSLog("[Tado] SwiftData cache corrupt on launch (\(error)); wiping cache/ and rebuilding from canonical JSON.")
+                let storeURL = StorageLocationManager.swiftDataStoreURL
+                let dir = storeURL.deletingLastPathComponent()
+                let fm = FileManager.default
+                // Remove the .store + .store-wal + .store-shm sidecars.
+                // Anything else under cache/ is also disposable; SwiftData
+                // re-materializes the row set from JSON on first sync.
+                if let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                    for entry in entries {
+                        try? fm.removeItem(at: entry)
+                    }
+                }
+                do {
+                    let rebuilt = try ModelContainer(for: schema, configurations: [configuration])
+                    DispatchQueue.main.async {
+                        EventBus.shared.publish(
+                            TadoEvent(
+                                type: "system.cacheRecovered",
+                                severity: .warning,
+                                source: .system,
+                                title: "Rebuilt local cache after corruption",
+                                body: "Tado's SwiftData cache file was unreadable on launch — usually a leftover from a forced shutdown during sleep. Canonical state lives in atomic JSON and is unaffected; the cache rebuilt cleanly."
+                            )
+                        )
+                    }
+                    return rebuilt
+                } catch {
+                    fatalError("Failed to create ModelContainer even after cache wipe: \(error)")
+                }
+            }
+        }()
         self.modelContainer = container
 
         // Packet 1 bootstrap: migrations → ScopedConfig → SwiftData sync.
@@ -88,10 +129,18 @@ struct TadoApp: App {
         self.projectSync = pSync
         let rew = RunEventWatcher(container: container)
         self.runEventWatcher = rew
+        let pIndex = MainActor.assumeIsolated {
+            ProjectIndexService(modelContext: ModelContext(container))
+        }
+        self.projectIndexService = pIndex
         MainActor.assumeIsolated {
             sync.start()
             pSync.start()
             rew.start()
+            // ProjectIndexService instantiates and starts observing
+            // in its initializer; nothing to do here beyond holding
+            // the reference so the observer survives.
+            _ = self.projectIndexService
             // Event deliverers — subscribe once, fire for every
             // event the bus publishes thereafter. Order doesn't
             // matter (each deliverer is independent).
@@ -131,12 +180,30 @@ struct TadoApp: App {
         // leaving the WAL file at a non-checkpointed boundary on
         // every quit. `DomeRpcClient.domeStop` wraps the FFI shim
         // so TadoApp doesn't need to import CTadoCore directly.
+        //
+        // v0.18 — also reap PTY tile children. Pre-v0.18 Cmd+Q
+        // closed Tado's main loop but left every spawned tile
+        // process (claude / codex CLIs and their stdio MCP
+        // bridges) alive as orphans re-parented to launchd, where
+        // they continued holding API connections, accumulating CPU
+        // time, and re-spawning their MCP children invisibly. The
+        // `terminalManager.shutdownAllSessions()` call below uses
+        // the now-process-group-aware `Session::kill` to nuke each
+        // tile's whole sub-tree before the app exits. Capturing
+        // `terminalManager` (a `@MainActor` final class) into the
+        // closure is safe because it's a reference type and SwiftUI
+        // keeps the same instance for the app's lifetime.
+        let tm = terminalManager
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { _ in
             DomeRpcClient.domeStop()
+            MainActor.assumeIsolated {
+                tm.shutdownAllSessions()
+                BackgroundLifecycle.shared.teardown()
+            }
         }
     }
 
@@ -268,6 +335,12 @@ struct MainWindowRoot: View {
             .onAppear {
                 if !ipcBrokerInitialized {
                     terminalManager.ipcBroker = IPCBroker(terminalManager: terminalManager)
+                    // Install the macOS background-lifecycle hub
+                    // alongside the broker so willSleep/didWake hooks
+                    // and the App Nap suppression assertion are armed
+                    // for the rest of the app's lifetime. Idempotent;
+                    // safe across SwiftUI scene rebuilds.
+                    BackgroundLifecycle.shared.install(terminalManager: terminalManager)
                     ipcBrokerInitialized = true
                 }
                 NSApp.setActivationPolicy(.regular)
@@ -316,7 +389,7 @@ struct CrossRunBrowserWindowRoot: View {
         CrossRunBrowserExtension.makeView()
             .environment(appState)
             .preferredColorScheme(.dark)
-            .frame(minWidth: 240, minHeight: 180)
+            .frame(minWidth: 760, minHeight: 480)
             .windowZoom(zoomState)
     }
 }

@@ -145,7 +145,7 @@ struct EternalInterveneModal: View {
         }
         .frame(minHeight: 180)
         .background(Palette.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     private var examplesBlurb: some View {
@@ -160,7 +160,7 @@ struct EternalInterveneModal: View {
         }
         .padding(10)
         .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     // MARK: - Actions

@@ -28,6 +28,7 @@ struct ProjectTodoInput: View {
     @State private var inputText: String = ""
     @State private var selectedAgentName: String? = nil
     @State private var selectedTeamID: UUID? = nil
+    @State private var composerTab: ComposerTab = .compose
     @FocusState private var isFocused: Bool
 
     private var activeTodos: [TodoItem] {
@@ -55,26 +56,164 @@ struct ProjectTodoInput: View {
 
     private var inputEditorHeight: CGFloat {
         let lineHeight: CGFloat = 18
-        let padding: CGFloat = 8
-        return min(CGFloat(inputLineCount) * lineHeight + padding, CGFloat(maxInputLines) * lineHeight + padding)
+        let padding: CGFloat = 20
+        // Floor of 84 px matches the design's `.composer textarea
+        // min-height: 84px` so the composer reads as a true input
+        // box even when empty. Ceiling is the original 8-line cap.
+        let raw = CGFloat(inputLineCount) * lineHeight + padding
+        return max(84, min(raw, CGFloat(maxInputLines) * lineHeight + padding))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            pickerRow
-            editor
-            footerRow
+        // Composer chrome follows the design's `.composer` block:
+        // a header strip with tabs + encoding label, a tall textarea
+        // body (or library pane on the Templates / Snippets tab),
+        // and a footer with kbd hints + Cancel/Submit.
+        VStack(alignment: .leading, spacing: 0) {
+            composerHeader
+            pickerRowIfAvailable
+            switch composerTab {
+            case .compose:
+                editor
+            case .templates:
+                ComposerLibraryPane(
+                    kind: .templates,
+                    projectRoot: URL(fileURLWithPath: project.rootPath),
+                    projectName: project.name,
+                    onUse: applyTemplate,
+                    onClose: { composerTab = .compose }
+                )
+                .frame(height: 240)
+            case .snippets:
+                ComposerLibraryPane(
+                    kind: .snippets,
+                    projectRoot: URL(fileURLWithPath: project.rootPath),
+                    projectName: project.name,
+                    onUse: applySnippet,
+                    onClose: { composerTab = .compose }
+                )
+                .frame(height: 240)
+            }
+            composerFooter
         }
-        .padding(16)
         .frame(maxWidth: .infinity)
-        .background(Palette.surfaceElevated)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(Palette.bgElev)
+        .overlay(
+            Rectangle()
+                .stroke(Palette.rule, lineWidth: DK.ruleW)
+        )
         .onKeyPress(phases: .down) { keyPress in
             if keyPress.key == .return && keyPress.modifiers.contains(.command) {
                 submitTodo()
                 return .handled
             }
             return .ignored
+        }
+    }
+
+    private var composerHeader: some View {
+        HStack(spacing: 0) {
+            tabCell(.compose)
+            tabCell(.templates)
+            tabCell(.snippets)
+            Spacer()
+            Text("UTF-8 · MD")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .tracking(0.6)
+                .foregroundStyle(Palette.ink4)
+                .padding(.horizontal, 12)
+        }
+        .frame(height: 30)
+        .background(Palette.bgPage)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
+        }
+    }
+
+    private func tabCell(_ tab: ComposerTab) -> some View {
+        let on = composerTab == tab
+        return Button(action: { composerTab = tab }) {
+            Text(tab.headerLabel.uppercased())
+                .font(Font.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundStyle(on ? Palette.ink : Palette.ink4)
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(on ? Palette.bgElev : Color.clear)
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Palette.rule)
+                        .frame(width: DK.ruleW)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func applyTemplate(_ body: String) {
+        inputText = body
+        composerTab = .compose
+        isFocused = true
+    }
+
+    private func applySnippet(_ body: String) {
+        if inputText.isEmpty {
+            inputText = body
+        } else {
+            inputText.append(inputText.hasSuffix("\n") ? body : "\n" + body)
+        }
+        composerTab = .compose
+        isFocused = true
+    }
+
+    @ViewBuilder
+    private var pickerRowIfAvailable: some View {
+        if !projectTeams.isEmpty || !availableAgents.isEmpty {
+            HStack(spacing: 14) {
+                pickerRow
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Palette.rule.opacity(0.6))
+                    .frame(height: DK.ruleW)
+            }
+        }
+    }
+
+    private var composerFooter: some View {
+        HStack(spacing: 8) {
+            Text("Type a todo, ⌘⏎ to submit · ⇧⏎ for newline")
+                .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .lineLimit(1)
+            Spacer()
+            HStack(spacing: 6) {
+                if !inputText.isEmpty {
+                    OutlineButton("Cancel", size: .small, variant: .ghost) {
+                        inputText = ""
+                    }
+                }
+                OutlineButton(
+                    "Submit",
+                    icon: "plus",
+                    size: .small,
+                    variant: .accent
+                ) {
+                    submitTodo()
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Palette.bgPage)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Palette.rule)
+                .frame(height: DK.ruleW)
         }
     }
 
@@ -132,34 +271,39 @@ struct ProjectTodoInput: View {
         }
     }
 
+    /// The textarea body of the composer. Drawn flat against the
+    /// composer's outer border (no separate inset card) so the whole
+    /// composer reads as a single rectangle the way the design's
+    /// `.composer textarea` does — header / body / footer stacked
+    /// inside one frame.
     private var editor: some View {
         ZStack(alignment: .topLeading) {
             if inputText.isEmpty {
                 Text("New todo for \(project.name)…")
-                    .font(Typography.monoBody)
-                    .foregroundStyle(Palette.textTertiary)
-                    .padding(.leading, 5)
-                    .padding(.top, 1)
+                    .font(Font.system(size: 12.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
+                    .padding(.leading, 14)
+                    .padding(.top, 14)
                     .allowsHitTesting(false)
             }
 
             TextEditor(text: $inputText)
-                .font(Typography.monoBody)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 12.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink)
                 .scrollContentBackground(.hidden)
                 .focused($isFocused)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
         }
         .frame(height: inputEditorHeight)
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
-        .background(Palette.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(Palette.divider, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .background(Palette.bgElev)
     }
 
+    /// _Legacy footer (deprecated — the composerFooter view replaces
+    /// this; kept as a stub-free placeholder to keep the file diff
+    /// minimal across the design migration). Removed in favour of
+    /// `composerFooter` directly inside `body`._
+    @ViewBuilder
     private var footerRow: some View {
         HStack {
             Spacer()

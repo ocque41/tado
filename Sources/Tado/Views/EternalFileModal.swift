@@ -34,8 +34,10 @@ struct EternalFileModal: View {
     @State private var draft: String = ""
     @State private var mode: String = "mega"
     @State private var loopKind: String = "external"
+    @State private var engine: String = "claude"
     @State private var marker: String = "ETERNAL-DONE"
     @State private var skipPermissions: Bool = true
+    @State private var kind: String = "general"
     @State private var showRedoAlert: Bool = false
 
     var body: some View {
@@ -46,6 +48,8 @@ struct EternalFileModal: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     modeSegmented
+                    kindPicker
+                    enginePicker
                     briefEditor
                     markerField
                     loopKindPicker
@@ -54,8 +58,10 @@ struct EternalFileModal: View {
                     // eternal-loop.sh wrapper reads to add
                     // `--dangerously-skip-permissions` to each `claude -p`).
                     // Internal mode uses `--permission-mode auto` regardless,
-                    // so the toggle would be misleading there.
-                    if loopKind == "external" {
+                    // so the toggle would be misleading there. Codex
+                    // workers don't use this flag — Codex's analog ships
+                    // baked into the codex eternal permission flags.
+                    if loopKind == "external" && engine == "claude" {
                         fullAutoToggle
                     }
                 }
@@ -76,6 +82,22 @@ struct EternalFileModal: View {
             skipPermissions = run.skipPermissions
             let storedKind = run.loopKind.trimmingCharacters(in: .whitespacesAndNewlines)
             loopKind = (storedKind == "internal") ? "internal" : "external"
+            // Engine: existing runs default to whatever was stamped at
+            // creation; brand-new runs (drafted state, never opened
+            // before) inherit the user's global engine pick so the
+            // sheet matches what they'd see for a regular tile.
+            let storedEngine = run.engine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if storedEngine == "codex" {
+                engine = "codex"
+            } else if storedEngine == "claude" {
+                engine = "claude"
+            } else {
+                engine = fetchSettingsEngine().rawValue
+            }
+            // Kind: pre-existing runs default to general; perf-flagged
+            // runs preserve their flag across re-opens of the sheet.
+            let storedRunKind = run.kind.trimmingCharacters(in: .whitespacesAndNewlines)
+            kind = (storedRunKind == "perf") ? "perf" : "general"
         }
         .alert("Delete architect's draft and re-plan?", isPresented: $showRedoAlert) {
             Button("Delete & Re-plan", role: .destructive) { commitAndSpawnArchitect() }
@@ -175,13 +197,122 @@ struct EternalFileModal: View {
         Button(action: { mode = value }) {
             Text(label)
                 .font(Typography.label)
-                .foregroundStyle(mode == value ? .white : Palette.textSecondary)
+                .foregroundStyle(mode == value ? Palette.foreground : Palette.textSecondary)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 7)
                 .background(mode == value ? Palette.accent : Palette.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Engine
+
+    /// Picks the CLI the architect, worker, and interventor all run on.
+    /// Defaults to the user's global engine setting on first open of a
+    /// freshly drafted run; persists onto `run.engine` on Accept so a
+    /// later edit reopens with the same choice. Continuous mode is
+    /// Claude-only today, so the picker disables Codex when
+    /// `loopKind == "internal"` (an explicit constraint surfaced as a
+    /// hint subtitle below).
+    /// Kind picker — `general` (default behavior) vs `perf` (the
+    /// Performance step). Orthogonal to mode and loopKind. When set to
+    /// `perf`, the architect prompt's `## PERFORMANCE` section is
+    /// generated, the worker env carries `TADO_PERF_MODE=1`, and
+    /// `stop.sh` enforces the `[PERF-OK]`-before-marker contract.
+    private var kindPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("KIND")
+                    .font(Typography.microBold)
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.textTertiary)
+                InfoTip(text: "General runs work as before. Performance runs measure the project's eight curated perf dimensions every iteration and refuse to close the iteration until [PERF-OK] is in the transcript. The worker auto-detects the project's stack (Rust, Swift, Node, Python, Go, polyglot) and uses the universal IMPROVE ladder + EVAL stencils from bench/PERF_KNOBS.md.")
+            }
+            HStack(spacing: 8) {
+                kindButton(label: "General", value: "general")
+                kindButton(label: "Performance", value: "perf")
+                Spacer()
+            }
+            Text(kindSubtitle)
+                .font(Typography.bodySm)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var kindSubtitle: String {
+        if kind == "perf" {
+            return "Performance step active. Each iteration runs perf-suite (algorithmic complexity, alloc count, critical-path ops, IO syscalls, DB query cost, cross-process roundtrips, cold-start ops, steady-state RSS ratio) and scores against the project's all-time-best baseline at .tado/perf-baselines/<project>.json. The worker MUST clear the perf gate ([PERF-OK]) before printing [SPRINT-DONE] or ETERNAL-DONE. Same-turn pay-back required on regression."
+        } else {
+            return "Default Eternal behavior — the architect designs the brief, the worker iterates per the chosen mode, no perf gate active."
+        }
+    }
+
+    private func kindButton(label: String, value: String) -> some View {
+        Button(action: { kind = value }) {
+            Text(label)
+                .font(Typography.label)
+                .foregroundStyle(kind == value ? Palette.foreground : Palette.textSecondary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 7)
+                .background(kind == value ? Palette.accent : Palette.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var enginePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("ENGINE")
+                    .font(Typography.microBold)
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.textTertiary)
+                InfoTip(text: "Which CLI runs the architect + worker. Claude Code uses --permission-mode auto / bypassPermissions for non-stop runs. Codex uses --ask-for-approval never --sandbox danger-full-access. Both engines work for Normal (per-turn) AND Continuous (one-session) loops.")
+            }
+            HStack(spacing: 8) {
+                engineButton(label: "Claude Code", value: "claude")
+                engineButton(label: "Codex", value: "codex")
+                Spacer()
+            }
+            Text(engineSubtitle)
+                .font(Typography.bodySm)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var engineSubtitle: String {
+        if engine == "codex" && loopKind == "internal" {
+            return "Continuous Codex: one interactive `codex` session stays alive for the run. Tado's idle-injection re-fires the continue prompt every time the session goes idle. Codex's `--ask-for-approval never --sandbox danger-full-access` keeps the worker non-stop. There's no `/loop` secondary driver — Codex doesn't have one — so the idle injection is the only driver."
+        } else if engine == "codex" {
+            return "Codex runs through the Tado embed shim plus `--ask-for-approval never --sandbox danger-full-access` so the worker never stalls on an approval prompt. Architect, worker, and interventor all use your Codex model + effort settings."
+        } else if loopKind == "internal" {
+            return "Continuous Claude: one interactive `claude --permission-mode auto` session, with Tado's idle injection AND `/loop 30s …` as parallel drivers. Requires Opus 4.7 + Bootstrap Claude auto mode on the project."
+        } else {
+            return "Claude Code runs with `--permission-mode auto` / `bypassPermissions` per-iteration. Architect, worker, and interventor all use your Claude model + effort settings."
+        }
+    }
+
+    private func engineButton(label: String, value: String) -> some View {
+        Button(action: { engine = value }) {
+            Text(label)
+                .font(Typography.label)
+                .foregroundStyle(engine == value ? Palette.foreground : Palette.textSecondary)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 7)
+                .background(engine == value ? Palette.accent : Palette.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func fetchSettingsEngine() -> TerminalEngine {
+        var descriptor = FetchDescriptor<AppSettings>()
+        descriptor.fetchLimit = 1
+        let settings = (try? modelContext.fetch(descriptor))?.first
+        return settings?.engine ?? .claude
     }
 
     // MARK: - Brief editor
@@ -222,7 +353,7 @@ struct EternalFileModal: View {
             }
             .frame(minHeight: 200)
             .background(Palette.surfaceElevated)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
     }
 
@@ -243,7 +374,7 @@ struct EternalFileModal: View {
                 .foregroundStyle(Palette.textPrimary)
                 .padding(10)
                 .background(Palette.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
     }
 
@@ -276,8 +407,12 @@ struct EternalFileModal: View {
     }
 
     private var loopKindSubtitle: String {
-        if loopKind == "internal" {
+        if loopKind == "internal" && engine == "codex" {
+            return "Continuous Codex: one interactive `codex` session stays alive for the run; Tado's idle-injection re-fires the continue prompt on every `.needsInput`. Codex doesn't have an equivalent of Claude's `/loop` secondary driver, so the idle injection is the only driver. Works without any Bootstrap step — `--ask-for-approval never --sandbox danger-full-access` is wired in automatically."
+        } else if loopKind == "internal" {
             return "Uses `--permission-mode auto` — Claude Code's classifier-gated autonomy mode, available for Opus 4.7 on Max/Teams/Enterprise plans. A classifier judges each tool call so the worker runs without babysitting. Run \"Bootstrap Claude auto mode\" from the project ⋯ menu first to install the required settings. Architect and worker both follow your Settings model + effort picks — works best with Opus 4.7 + Auto effort selected; smaller models or non-auto effort can stall on the auto-mode classifier."
+        } else if engine == "codex" {
+            return "Fresh `codex \"<prompt>\"` per turn via the eternal-loop.sh wrapper. Architect and worker both follow your Codex model + effort settings; `--ask-for-approval never --sandbox danger-full-access` is wired in automatically."
         } else {
             return "Fresh `claude -p` per turn via the eternal-loop.sh wrapper. Architect and worker both follow your Settings model + effort picks; the bypass toggle below controls per-turn `--dangerously-skip-permissions`."
         }
@@ -287,11 +422,11 @@ struct EternalFileModal: View {
         Button(action: { loopKind = value }) {
             Text(label)
                 .font(Typography.label)
-                .foregroundStyle(loopKind == value ? .white : Palette.textSecondary)
+                .foregroundStyle(loopKind == value ? Palette.foreground : Palette.textSecondary)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 7)
                 .background(loopKind == value ? Palette.accent : Palette.surfaceElevated)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
         }
         .buttonStyle(.plain)
     }
@@ -316,7 +451,7 @@ struct EternalFileModal: View {
         }
         .padding(12)
         .background(skipPermissions ? Palette.surfaceElevated : Palette.warning.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     // MARK: - Actions
@@ -344,6 +479,8 @@ struct EternalFileModal: View {
         run.completionMarker = trimmedMarker.isEmpty ? "ETERNAL-DONE" : trimmedMarker
         run.skipPermissions = skipPermissions
         run.loopKind = (loopKind == "internal") ? "internal" : "external"
+        run.engine = (engine == "codex") ? "codex" : "claude"
+        run.kind = (kind == "perf") ? "perf" : "general"
         // Refresh the default label when the mode flips (user may have
         // opened the modal via "New Mega" then switched to Sprint).
         run.label = EternalRun.defaultLabel(mode: mode, createdAt: run.createdAt)

@@ -15,6 +15,15 @@ final class TodoItem {
     var isComplete: Bool
     var canvasX: CGFloat
     var canvasY: CGFloat
+    /// Persisted tile size. Defaults match `CanvasLayout.contentWidth/
+    /// contentHeight` so freshly-created todos land at the same size
+    /// the renderer used before v0.18; on relaunch the in-memory
+    /// `TerminalSession.tileWidth/tileHeight` is rehydrated from these
+    /// fields so the user's manual resizes survive a quit. SwiftData
+    /// lightweight migration auto-fills both columns with their
+    /// defaults for pre-v0.18 rows — no migration step required.
+    var tileWidth: CGFloat = CanvasLayout.contentWidth
+    var tileHeight: CGFloat = CanvasLayout.contentHeight
     var gridIndex: Int
     var terminalSessionID: UUID?
     var statusRaw: String = SessionStatus.pending.rawValue
@@ -25,6 +34,15 @@ final class TodoItem {
     var teamID: UUID?
     var agentName: String?
     var name: String?
+    /// Set on todos created by the natural-language coordinator path
+    /// in `TodoListView` when the user types `tado <brief>`. The
+    /// spawned tile receives `ProcessSpawner.coordinatorPrompt` instead
+    /// of the user text directly, becomes a Tado-CLI-driving Claude
+    /// agent that interprets the brief, drives Eternal/Dispatch/etc.,
+    /// supervises through the human-review gate, accepts on the user's
+    /// behalf, and exits. Default false; lightweight SwiftData
+    /// migration auto-fills false on existing rows.
+    var isCoordinator: Bool = false
     static let maxLogSize = 256 * 1024
 
     init(text: String, gridIndex: Int, canvasPosition: CGPoint) {

@@ -63,6 +63,12 @@ uuid = { version = "1", features = ["v4"] }
 # Used by the Dome FFI's runtime-load logger to stamp the fetch.log
 # entries with ISO timestamps when the model attaches or fails.
 chrono = "0.4"
+# Direct libc binding for `killpg(2)` in `Session::kill`. portable-pty's
+# Child::kill() only signals the immediate child PID (a shell wrapper
+# in our case), leaving the agent CLI (claude / codex) and any
+# subprocess descendants (MCP bridges, npm, cargo) orphaned. We need
+# `killpg` to signal the whole foreground process group.
+libc = "0.2"
 
 [build-dependencies]
 cbindgen = "0.28"

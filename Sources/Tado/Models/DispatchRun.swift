@@ -37,6 +37,12 @@ final class DispatchRun {
     /// tracking every hop).
     var currentPhaseTodoID: UUID?
 
+    /// TodoID of the coordinator tile that proposed this run via the
+    /// natural-language `tado <brief>` path. Nil for runs created via
+    /// the project UI's "New Dispatch" button. Mirrors the audit field
+    /// on `EternalRun`.
+    var spawnedByCoordinatorTodoID: UUID?
+
     init(
         id: UUID = UUID(),
         project: Project?,

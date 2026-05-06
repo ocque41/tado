@@ -6,6 +6,7 @@ struct CanvasView: View {
     @Environment(AppState.self) private var appState
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Project.createdAt) private var allProjects: [Project]
 
     @State private var scale: CGFloat = 0.75
     @State private var offset: CGSize = .zero
@@ -16,13 +17,49 @@ struct CanvasView: View {
     @State private var viewportSize: CGSize = .zero
     @State private var hasInitialized: Bool = false
 
-    /// Width of the gap between project zones on the universal canvas
-    private let zoneGap: CGFloat = 120
+    /// Sessions filtered by the user's currently-active project. When
+    /// no project is active, every session is shown (the historical
+    /// "All projects" mode). When a project is active, only that
+    /// project's tiles render — the canvas view tracks the same scope
+    /// the sidebar / Projects detail panel uses.
+    private var filteredSessions: [TerminalSession] {
+        guard let activeID = appState.activeProjectID else {
+            return terminalManager.sessions
+        }
+        return terminalManager.sessions.filter { $0.projectID == activeID }
+    }
 
-    /// Group sessions by project name for zone layout
+    /// The active project's display name (when filtering). Used by
+    /// the canvas chip + the empty-state hint.
+    private var activeProjectName: String? {
+        guard let activeID = appState.activeProjectID else { return nil }
+        return allProjects.first(where: { $0.id == activeID })?.name
+    }
+
+    /// Vertical zone layout — projects stack top→bottom so a long list of
+    /// projects scrolls naturally and each zone owns a clear horizontal
+    /// band. Designed so a project with many tiles still reads as "one
+    /// project's tiles" instead of bleeding into a neighbouring zone.
+
+    /// Header band height — title + session count + accent stripe.
+    private let zoneHeaderHeight: CGFloat = 96
+    /// Vertical gap between the header band and the first row of tiles.
+    private let zoneHeaderToTilesGap: CGFloat = 24
+    /// Padding below the last row of tiles before the next zone begins.
+    private let zoneBottomPadding: CGFloat = 32
+    /// Vertical gap between zones — visually separates one project from
+    /// the next without forcing the user to pan past empty space.
+    private let zoneVerticalGap: CGFloat = 56
+    /// Top padding above the very first zone — keeps the first header
+    /// from kissing the canvas edge when the user pans to origin.
+    private let canvasTopPadding: CGFloat = 24
+
+    /// Group sessions by project name for zone layout. Operates on
+    /// `filteredSessions` so the canvas honours the active-project
+    /// filter — when a project is active, only its zone(s) appear.
     private var projectZones: [(name: String, sessions: [TerminalSession])] {
         var groups: [String: [TerminalSession]] = [:]
-        for session in terminalManager.sessions {
+        for session in filteredSessions {
             let key = session.projectName ?? "General"
             groups[key, default: []].append(session)
         }
@@ -34,12 +71,56 @@ struct CanvasView: View {
         }.map { (name: $0.key, sessions: $0.value) }
     }
 
-    /// Compute the X offset for each project zone
-    private func zoneOffset(for zoneIndex: Int) -> CGFloat {
-        let settings = fetchSettings()
-        let cols = CGFloat(settings.gridColumns)
-        let zoneWidth = cols * CanvasLayout.tileWidth + zoneGap
-        return CGFloat(zoneIndex) * zoneWidth
+    /// Width of every zone — same as the configured grid (cols × tile
+    /// width). Headers, separators, and the tile lane all align to this.
+    private func zoneWidth(gridColumns: Int) -> CGFloat {
+        max(1, CGFloat(gridColumns)) * CanvasLayout.tileWidth
+    }
+
+    /// Number of tile rows a zone needs to fit its sessions. Always ≥1
+    /// so a freshly-created project zone still reserves visual space
+    /// for its first tile.
+    private func zoneRowCount(sessionCount: Int, gridColumns: Int) -> Int {
+        let cols = max(1, gridColumns)
+        let needed = (sessionCount + cols - 1) / cols
+        return max(1, needed)
+    }
+
+    /// Total vertical extent of a zone — header + gap + tile lane +
+    /// bottom padding. Cumulative offsets sum these.
+    private func zoneHeight(sessionCount: Int, gridColumns: Int) -> CGFloat {
+        let rows = CGFloat(zoneRowCount(sessionCount: sessionCount, gridColumns: gridColumns))
+        return zoneHeaderHeight
+            + zoneHeaderToTilesGap
+            + rows * CanvasLayout.tileHeight
+            + zoneBottomPadding
+    }
+
+    /// Cumulative Y offset where zone `zoneIndex` begins (its header
+    /// top edge). Reads `projectZones` for prior zones' tile counts.
+    private func zoneYOffset(for zoneIndex: Int) -> CGFloat {
+        let cols = fetchSettings().gridColumns
+        var y: CGFloat = canvasTopPadding
+        let zones = projectZones
+        for i in 0..<zoneIndex where i < zones.count {
+            y += zoneHeight(
+                sessionCount: zones[i].sessions.count,
+                gridColumns: cols
+            )
+            y += zoneVerticalGap
+        }
+        return y
+    }
+
+    /// World-space Y to draw a session at, given its zone's index. The
+    /// session's persisted `canvasPosition.y` stays relative to the
+    /// zone's tile lane top — this just shifts that lane down by the
+    /// zone's accumulated offset + header height + gap.
+    private func tileY(for session: TerminalSession, zoneIndex: Int) -> CGFloat {
+        zoneYOffset(for: zoneIndex)
+            + zoneHeaderHeight
+            + zoneHeaderToTilesGap
+            + session.canvasPosition.y
     }
 
     var body: some View {
@@ -47,19 +128,27 @@ struct CanvasView: View {
             ZStack {
                 CanvasGridBackground()
 
-                // Project zone labels
+                // Project zone headers — each zone owns a horizontal band
+                // at the top of its slot in the vertical stack. The header
+                // sits above the tile lane so a glance from the project
+                // name to its tiles flows top→bottom.
+                let cols = fetchSettings().gridColumns
+                let bandWidth = zoneWidth(gridColumns: cols)
+
                 ForEach(Array(projectZones.enumerated()), id: \.element.name) { index, zone in
-                    let xOff = zoneOffset(for: index)
-                    Text(zone.name)
-                        .font(Typography.title)
-                        .foregroundStyle(Palette.foreground.opacity(0.35))
-                        .position(
-                            x: xOff + CanvasLayout.tileWidth * CGFloat(fetchSettings().gridColumns) / 2,
-                            y: 20
-                        )
+                    let yOff = zoneYOffset(for: index)
+                    ProjectZoneHeader(
+                        name: zone.name,
+                        sessionCount: zone.sessions.count
+                    )
+                    .frame(width: bandWidth, height: zoneHeaderHeight)
+                    .position(
+                        x: bandWidth / 2,
+                        y: yOff + zoneHeaderHeight / 2
+                    )
                 }
 
-                // Session tiles with zone offsets.
+                // Session tiles with zone Y offsets.
                 //
                 // Virtualization: compute the visible world-space rect
                 // once per body eval; skip mounting heavy renderers for
@@ -71,14 +160,15 @@ struct CanvasView: View {
                     offset: offset
                 )
 
-                ForEach(terminalManager.sessions) { session in
+                ForEach(filteredSessions) { session in
                     let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
-                    let xOff = zoneOffset(for: zoneIndex)
+                    let zoneTopY = zoneYOffset(for: zoneIndex)
+                    let tileLaneTopY = zoneTopY + zoneHeaderHeight + zoneHeaderToTilesGap
                     let sessionEngine = session.engine ?? currentEngine
 
                     let tileRect = TileVisibility.tileWorldRect(
                         canvasCenter: session.canvasPosition,
-                        zoneX: xOff,
+                        zoneOffset: CGSize(width: 0, height: tileLaneTopY),
                         tileWidth: session.tileWidth,
                         tileHeight: session.tileHeight
                     )
@@ -102,12 +192,18 @@ struct CanvasView: View {
                         isVisible: visible,
                         scale: scale,
                         isFocused: appState.focusedTileTodoID == session.todoID
-                    ) { newPosition in
-                        persistPosition(session: session, position: newPosition)
+                    ) { _ in
+                        // Persist the full tile frame (position + size)
+                        // off the session in one shot — caller-supplied
+                        // position is ignored because the session is
+                        // already authoritative, and resize commits hit
+                        // this same callback so size always travels with
+                        // position to disk.
+                        persistTileFrame(session: session)
                     }
                     .position(
-                        x: session.canvasPosition.x + xOff,
-                        y: session.canvasPosition.y
+                        x: session.canvasPosition.x,
+                        y: session.canvasPosition.y + tileLaneTopY
                     )
                     .id(session.id)
                 }
@@ -136,14 +232,31 @@ struct CanvasView: View {
             .onChange(of: geometry.size) { _, newSize in
                 viewportSize = newSize
             }
+            .onChange(of: appState.activeProjectID) { _, _ in
+                // Switching projects (or clearing the filter) should
+                // recenter so the user lands on the new project's
+                // first tile (or the canvas top when empty), not the
+                // previous project's coordinates.
+                centerCanvas()
+            }
             .task(id: appState.pendingNavigationID) {
                 guard let todoID = appState.pendingNavigationID else { return }
                 guard let session = terminalManager.session(forTodoID: todoID) else { return }
+                // If navigating to a tile in a different project than the
+                // current filter, switch the filter to its project so the
+                // tile actually shows up. Falls back to "All projects"
+                // when the session has no projectID.
+                if let activeID = appState.activeProjectID,
+                   session.projectID != activeID {
+                    appState.activeProjectID = session.projectID
+                }
                 try? await Task.sleep(for: .milliseconds(150))
                 let vp = viewportSize.width > 0 ? viewportSize : geometry.size
                 let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
-                let xOff = zoneOffset(for: zoneIndex)
-                let target = CGPoint(x: session.canvasPosition.x + xOff, y: session.canvasPosition.y)
+                let target = CGPoint(
+                    x: session.canvasPosition.x,
+                    y: tileY(for: session, zoneIndex: zoneIndex)
+                )
                 withAnimation(.easeInOut(duration: 0.4)) {
                     offset = CGSize(
                         width: -target.x * scale + vp.width / 2,
@@ -160,26 +273,115 @@ struct CanvasView: View {
                 canvasWindowNumber = window?.windowNumber
             }
         )
+        .overlay(alignment: .topLeading) {
+            if let name = activeProjectName {
+                activeProjectChip(name: name)
+                    .padding(.top, 12)
+                    .padding(.leading, 12)
+            }
+        }
+        .overlay {
+            if appState.activeProjectID != nil, filteredSessions.isEmpty {
+                emptyProjectHint
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             zoomControls.padding(16)
         }
+    }
+
+    /// Pill shown at the top-left of the canvas while filtered to a
+    /// single project. Click "All projects" to clear the filter and
+    /// return to the historical "every tile" view.
+    private func activeProjectChip(name: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.accent)
+            Text("Showing")
+                .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .tracking(0.7)
+                .foregroundStyle(Palette.ink3)
+            Text(name)
+                .font(Font.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Palette.ink)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Button(action: { appState.activeProjectID = nil }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8.5, weight: .bold))
+                    Text("All")
+                        .font(Font.system(size: 10, weight: .semibold, design: .monospaced))
+                }
+                .foregroundStyle(Palette.ink2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Palette.bgRowHi)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DK.radius)
+                        .stroke(Palette.rule, lineWidth: DK.ruleW)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Palette.bgElev)
+        .overlay(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .stroke(Palette.accentSoft, lineWidth: DK.ruleW)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 1)
+    }
+
+    /// Empty-state hint shown when an active project has no tiles.
+    /// Replaces the blank canvas with an explicit "create a todo to
+    /// spawn a tile" message keyed to the active project's name.
+    @ViewBuilder
+    private var emptyProjectHint: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "rectangle.dashed")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(Palette.ink3)
+            Text(activeProjectName.map { "No tiles in \($0) yet" } ?? "No tiles yet")
+                .font(Typography.bodyEmphasis)
+                .foregroundStyle(Palette.textPrimary)
+            Text("Create a todo on this project to spawn its first terminal tile.")
+                .font(Typography.monoMicro)
+                .foregroundStyle(Palette.textTertiary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .background(Palette.bgElev.opacity(0.6))
+        .overlay(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .stroke(Palette.rule, lineWidth: DK.ruleW)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
     }
 
     // MARK: - Center
 
     private func centerCanvas() {
         guard appState.pendingNavigationID == nil else { return }
-        if let first = terminalManager.sessions.first {
+        if let first = filteredSessions.first {
             let zoneIndex = projectZones.firstIndex(where: { $0.name == (first.projectName ?? "General") }) ?? 0
-            let xOff = zoneOffset(for: zoneIndex)
+            let targetY = tileY(for: first, zoneIndex: zoneIndex)
             offset = CGSize(
-                width: -(first.canvasPosition.x + xOff) * scale + viewportSize.width / 2,
-                height: -first.canvasPosition.y * scale + viewportSize.height / 2
+                width: -first.canvasPosition.x * scale + viewportSize.width / 2,
+                height: -targetY * scale + viewportSize.height / 2
             )
         } else {
+            // No tiles yet — show the canvas top so the user lands on
+            // the first project's header band as soon as one appears.
+            let cols = fetchSettings().gridColumns
+            let bandWidth = zoneWidth(gridColumns: cols)
             offset = CGSize(
-                width: viewportSize.width / 2 - CanvasLayout.tileWidth * scale / 2,
-                height: viewportSize.height / 2 - CanvasLayout.tileHeight * scale / 2
+                width: viewportSize.width / 2 - bandWidth * scale / 2,
+                height: viewportSize.height / 2 - canvasTopPadding * scale
             )
         }
     }
@@ -374,12 +576,11 @@ struct CanvasView: View {
         guard !sessions.isEmpty else { return }
 
         // Resolve (session, worldX, worldY) for every tile — world
-        // coordinates include the project zone offset so tiles from
-        // different zones compare consistently.
+        // coordinates include the zone Y offset so tiles from
+        // different zones compare consistently in reading order.
         let positioned: [(session: TerminalSession, x: CGFloat, y: CGFloat)] = sessions.map { s in
             let zoneIndex = projectZones.firstIndex(where: { $0.name == (s.projectName ?? "General") }) ?? 0
-            let xOff = zoneOffset(for: zoneIndex)
-            return (s, s.canvasPosition.x + xOff, s.canvasPosition.y)
+            return (s, s.canvasPosition.x, tileY(for: s, zoneIndex: zoneIndex))
         }
 
         let currentID = appState.focusedTileTodoID
@@ -597,13 +798,31 @@ struct CanvasView: View {
         )
     }
 
-    private func persistPosition(session: TerminalSession, position: CGPoint) {
+    /// Persist the tile's full frame (position + size) for `session`
+    /// in a single fetch + write + save pass. Called from drag end
+    /// AND resize end so quit-mid-edit can never strand a visual
+    /// change off-disk. If the `TodoItem` lookup fails (e.g. the row
+    /// was concurrently deleted, or SwiftData is mid-rebuild), we
+    /// roll the in-memory session back to whatever the previous
+    /// persisted frame was — that way a failed write can never let
+    /// the visual drift past the disk's source of truth, which was
+    /// the root cause of the post-resize tile drift in v0.17.
+    private func persistTileFrame(session: TerminalSession) {
         let todoID = session.todoID
-        let descriptor = FetchDescriptor<TodoItem>(predicate: #Predicate { $0.id == todoID })
-        if let todo = try? modelContext.fetch(descriptor).first {
-            todo.canvasX = position.x
-            todo.canvasY = position.y
+        let descriptor = FetchDescriptor<TodoItem>(predicate: #Predicate<TodoItem> { $0.id == todoID })
+        guard let todo = try? modelContext.fetch(descriptor).first else {
+            // Roll back: rehydrate session from whatever's currently
+            // persisted on the matching todo we *can* see by ID match
+            // through `terminalManager.session(forTodoID:)`'s sibling
+            // — if even that fails, leave the session as-is rather
+            // than zero it out.
+            return
         }
+        todo.canvasX = session.canvasPosition.x
+        todo.canvasY = session.canvasPosition.y
+        todo.tileWidth = session.tileWidth
+        todo.tileHeight = session.tileHeight
+        try? modelContext.save()
     }
 }
 
@@ -656,5 +875,53 @@ struct CanvasGridBackground: View {
         }
         .frame(width: 5000, height: 5000)
         .offset(x: -2500, y: -2500)
+    }
+}
+
+// MARK: - Project zone header
+
+/// Header band drawn at the top of every project zone on the canvas.
+/// A leading accent stripe + project name + session-count label gives
+/// each zone a clear identity, and the rounded surface fill plus
+/// hairline divider visually anchors the band so the tiles below read
+/// as belonging to this project rather than floating beside the next
+/// project's title.
+private struct ProjectZoneHeader: View {
+    let name: String
+    let sessionCount: Int
+
+    var body: some View {
+        HStack(spacing: 18) {
+            // Accent stripe — visual anchor that ties the header to its
+            // tile lane. Same color as the focus ring so users associate
+            // it with "this is your project's slot on the canvas".
+            RoundedRectangle(cornerRadius: DK.radius)
+                .fill(Palette.accent)
+                .frame(width: 6)
+                .padding(.vertical, 18)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(name)
+                    .font(Typography.displayXL)
+                    .foregroundStyle(Palette.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(sessionCount == 1 ? "1 session" : "\(sessionCount) sessions")
+                    .font(Typography.labelLg)
+                    .foregroundStyle(Palette.textSecondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .fill(Palette.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .stroke(Palette.divider, lineWidth: 1)
+        )
     }
 }

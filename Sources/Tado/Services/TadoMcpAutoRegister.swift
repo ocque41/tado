@@ -34,12 +34,22 @@ enum TadoMcpAutoRegister {
 
     private static func register() async {
         guard isClaudeCliAvailable() else { return }
-        if isTadoAlreadyRegistered() { return }
         let binary = resolveBinaryPath()
         guard FileManager.default.fileExists(atPath: binary) else {
             NSLog("tado-mcp: binary not found at \(binary); skipping auto-register")
             return
         }
+        // v0.18: was checking "is there ANY entry named `tado`" — true for
+        // both the legacy Node bridge (command=`node`, args pointing at
+        // `tado-mcp/dist/index.js`) and the current Rust bridge. The
+        // early-exit prevented the registrar from ever overwriting the
+        // stale Node entry, so every Claude Code session that loaded a
+        // pre-v0.9.0 ~/.claude.json kept spawning a `node tado-mcp/dist/
+        // index.js` MCP child. Those children accumulated as orphans
+        // because Claude Code doesn't always reap stdio MCP servers on
+        // exit. Now we compare the registered command path against our
+        // resolved binary path and re-register on mismatch.
+        if isTadoRegisteredAtPath(binary) { return }
         _ = runClaudeMcpAdd(binaryPath: binary)
     }
 
@@ -48,20 +58,29 @@ enum TadoMcpAutoRegister {
         return status == 0
     }
 
-    /// Matches anything that looks like a `tado` MCP entry in the
-    /// output of `claude mcp list`. Node `tado-mcp` shipped under
-    /// the name `tado`; re-registering with the same name is fine
-    /// as long as we catch this first to avoid a noisy duplicate
-    /// warning on every launch.
-    private static func isTadoAlreadyRegistered() -> Bool {
-        let (status, output) = runShell("claude mcp list 2>/dev/null", timeoutSeconds: 5)
-        guard status == 0 else { return false }
-        // Match `^\s*tado[:\s]` — the server name is `tado` in both
-        // Node and Rust packages.
-        if output.range(of: #"(?m)^\s*tado\s*[:\s]"#, options: .regularExpression) != nil {
-            return true
+    /// True iff `~/.claude.json`'s `mcpServers.tado` entry has
+    /// `command == binaryPath` and an empty `args` array — i.e. the
+    /// shape this registrar produces. Anything else (Node entry,
+    /// stale path from an older `.app` location, missing entry, file
+    /// missing) returns false so `register()` runs the remove + add
+    /// cycle and overwrites with the current Rust binary path.
+    ///
+    /// Reading `~/.claude.json` directly is more reliable than
+    /// parsing `claude mcp list` output: the CLI's text format is
+    /// unstable across versions and doesn't expose the full command
+    /// path, only the server name.
+    private static func isTadoRegisteredAtPath(_ binaryPath: String) -> Bool {
+        let claudeJsonURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: claudeJsonURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let mcpServers = json["mcpServers"] as? [String: Any],
+              let tadoEntry = mcpServers["tado"] as? [String: Any],
+              let command = tadoEntry["command"] as? String else {
+            return false
         }
-        return output.contains(" tado ") || output.contains(" tado:")
+        let args = (tadoEntry["args"] as? [String]) ?? []
+        return command == binaryPath && args.isEmpty
     }
 
     private static func runClaudeMcpAdd(binaryPath: String) -> Bool {

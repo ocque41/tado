@@ -90,3 +90,36 @@ bash bench/100-tile-stress.sh   # Manual stress harness
 
 Append new numbers as dated sections here when rerunning (don't
 overwrite — keeping the history makes regressions obvious).
+
+## Performance Step (Eternal `kind=perf`)
+
+When an Eternal run is created with `kind = perf` in the New Eternal
+sheet, every iteration of the worker invokes
+`.tado/eternal/hooks/perf-gate.sh`, which runs the
+`tado-core/crates/perf-suite/` binary. The suite auto-detects the
+project's stack (Rust / Swift / Node / Python / Go / polyglot) and
+measures eight curated dimensions:
+
+| metric | unit | direction | weight |
+|---|---|---|---|
+| algo_complexity | log-log slope | lower is better | 0.18 |
+| alloc_per_op | allocations/op | lower is better | 0.12 |
+| critical_path_ops | ops/op | lower is better | 0.12 |
+| io_syscalls_per_op | syscalls/op | lower is better | 0.10 |
+| db_query_cost | planner cost | lower is better | 0.10 |
+| xproc_roundtrips | roundtrips/op | lower is better | 0.10 |
+| cold_start_ops | ops to ready | lower is better | 0.13 |
+| steady_state_rss_ratio | ratio | lower is better | 0.15 |
+
+The composite is `Σ weight_i × normalized_i` where `normalized_i =
+clamp(0, 2, baseline_i / measured_i)` for lower-is-better metrics.
+Per-component minimum guard: any component normalized below 0.85
+fails the gate even if the composite is fine.
+
+Baselines persist at `<project>/.tado/perf-baselines/<safe-name>.json`
+and only ever move in the favorable direction (the ratchet). The
+worker MUST clear the gate (`[PERF-OK] composite=<n>`) before printing
+`[SPRINT-DONE]` or `ETERNAL-DONE`; the Stop hook + external loop
+driver both refuse out-of-order markers. See
+[bench/PERF_KNOBS.md](PERF_KNOBS.md) for the universal IMPROVE ladder
++ per-stack EVAL stencils.

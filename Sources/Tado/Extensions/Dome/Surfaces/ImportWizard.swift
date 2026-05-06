@@ -2,7 +2,10 @@ import AppKit
 import Foundation
 import SwiftUI
 
-/// v0.13 — Bulk import wizard.
+/// v0.13 — Bulk import wizard. v0.18 — restyled on the structural-grid
+/// design language: PageHeader-style title bar with phase StatusPill,
+/// hairline-bordered phase bodies, OutlineButton actions, flat-tabular
+/// item rows.
 ///
 /// Drives `tado_dome_import_preview` → `tado_dome_import_execute`.
 /// Steps:
@@ -34,131 +37,182 @@ struct ImportWizard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().overlay(Palette.divider)
-            switch phase {
-            case .pickRoot: pickRootView
-            case .review: reviewView
-            case .done: doneView
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+
+            VStack(alignment: .leading, spacing: 14) {
+                switch phase {
+                case .pickRoot: pickRootView
+                case .review: reviewView
+                case .done: doneView
+                }
             }
-            Divider().overlay(Palette.divider)
+            .padding(.horizontal, DK.pageGutter)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
             footer
         }
-        .padding(20)
-        .frame(minWidth: 720, minHeight: 540)
-        .background(Palette.background)
+        .frame(minWidth: 760, minHeight: 560)
+        .background(Palette.bgPage)
     }
 
-    // MARK: - Phase views
+    // MARK: - Header
 
+    /// PageHeader-style title bar with a phase StatusPill on the
+    /// right. Mono caption "Bulk import" overline + 28 pt bold
+    /// title + StatusPill phase tracker.
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Bulk import")
-                .font(Typography.display)
-                .foregroundStyle(Palette.textPrimary)
-            Spacer()
-            Text(phaseLabel)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
+        HStack(alignment: .bottom, spacing: 24) {
+            VStack(alignment: .leading, spacing: 4) {
+                OverlineLabel("Wizard · 3 steps")
+                Text("Bulk import")
+                    .font(.system(size: 28, weight: .bold))
+                    .tracking(-0.4)
+                    .foregroundStyle(Palette.ink)
+                Text(domeScope.label)
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.ink3)
+            }
+            Spacer(minLength: 16)
+            phasePill
+        }
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.top, 24)
+        .padding(.bottom, 14)
+    }
+
+    @ViewBuilder
+    private var phasePill: some View {
+        switch phase {
+        case .pickRoot: StatusPill("step 1 · pick", variant: .draft)
+        case .review:   StatusPill("step 2 · review", variant: .planning)
+        case .done:     StatusPill("step 3 · done", variant: .running)
         }
     }
 
-    private var phaseLabel: String {
-        switch phase {
-        case .pickRoot: return "Step 1 of 3 — pick a folder"
-        case .review: return "Step 2 of 3 — review files"
-        case .done: return "Step 3 of 3 — done"
-        }
-    }
+    // MARK: - Phase 1 — pick root
 
     private var pickRootView: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Pick a folder inside your Dome vault. The daemon walks it, lists every importable file, and you confirm which ones become notes (markdown / txt) or attachments.")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .frame(maxWidth: 580, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 10) {
-                Button(picking ? "Picking…" : "Choose folder…") { pickRoot() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(picking)
+            HStack(spacing: 8) {
+                OutlineButton(
+                    picking ? "Picking…" : "Choose folder…",
+                    icon: "folder",
+                    size: .regular,
+                    variant: .accent,
+                    action: pickRoot
+                )
+                .disabled(picking)
 
-                Button("Scan vault root (everything)") { runPreview(rootPath: nil) }
-                    .buttonStyle(.borderless)
-                    .help("Skip the picker and scan the entire vault root for importable files.")
+                OutlineButton(
+                    "Scan vault root (everything)",
+                    icon: "tray.full",
+                    size: .regular,
+                    variant: .standard,
+                    action: { runPreview(rootPath: nil) }
+                )
+                .help("Skip the picker and scan the entire vault root for importable files.")
             }
 
             if let err = error { errorBanner(err) }
+
+            Text("VAULT IMPORT  ·  paths must live inside the Dome vault root  ·  drop external files into <vault>/inbox/ first")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.top, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Palette.rule).frame(height: 1).padding(.horizontal, -2)
+                }
+
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    // MARK: - Phase 2 — review
+
     private var reviewView: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if let p = preview {
-                HStack {
+                HStack(spacing: 10) {
                     Text(p.rootPath)
                         .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
+                        .foregroundStyle(Palette.ink2)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     Text("\(selectedSourcePaths.count) of \(p.items.count) selected · \(p.skipped.count) skipped")
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
 
-                HStack(spacing: 8) {
-                    Button("Select all") {
+                HStack(spacing: 6) {
+                    OutlineButton("Select all", size: .small, variant: .standard) {
                         selectedSourcePaths = Set(p.items.map(\.sourcePath))
                     }
-                    .buttonStyle(.borderless)
-                    Button("Clear") { selectedSourcePaths.removeAll() }
-                        .buttonStyle(.borderless)
-                    Button("Notes only (.md / .txt)") {
+                    OutlineButton("Clear", size: .small, variant: .ghost) {
+                        selectedSourcePaths.removeAll()
+                    }
+                    OutlineButton("Notes only", size: .small, variant: .standard) {
                         selectedSourcePaths = Set(p.items.filter { $0.mode == "note_text" }.map(\.sourcePath))
                     }
-                    .buttonStyle(.borderless)
-                    Button("Attachments only") {
+                    OutlineButton("Attachments only", size: .small, variant: .standard) {
                         selectedSourcePaths = Set(p.items.filter { $0.mode == "attachment" }.map(\.sourcePath))
                     }
-                    .buttonStyle(.borderless)
                 }
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(p.items) { item in
                             itemRow(item)
+                            Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
                         }
                         if !p.skipped.isEmpty {
-                            Divider().overlay(Palette.divider).padding(.vertical, 8)
-                            Text("Skipped (\(p.skipped.count))")
-                                .font(Typography.caption)
-                                .foregroundStyle(Palette.textTertiary)
+                            HStack {
+                                OverlineLabel("Skipped · \(p.skipped.count)", tint: Palette.ink4)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Palette.bgPage)
                             ForEach(p.skipped, id: \.path) { skipped in
-                                HStack(spacing: 6) {
+                                HStack(spacing: 8) {
                                     Image(systemName: "minus.circle")
-                                        .foregroundStyle(Palette.textTertiary)
-                                        .font(.system(size: 11))
+                                        .foregroundStyle(Palette.ink4)
+                                        .font(.system(size: 10))
                                     Text(skipped.path)
                                         .font(Typography.monoCaption)
-                                        .foregroundStyle(Palette.textTertiary)
-                                    Text(skipped.reason)
-                                        .font(Typography.micro)
-                                        .foregroundStyle(Palette.textTertiary)
+                                        .foregroundStyle(Palette.ink3)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
                                     Spacer()
+                                    Text(skipped.reason)
+                                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                                        .foregroundStyle(Palette.ink4)
                                 }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
                             }
                         }
                     }
-                    .padding(.vertical, 4)
                 }
-                .background(Palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Palette.bgElev)
+                .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
             } else {
                 ProgressView("Scanning…")
+                    .progressViewStyle(.linear)
+                    .tint(Palette.accent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if let err = error { errorBanner(err) }
@@ -174,114 +228,132 @@ struct ImportWizard: View {
                 selectedSourcePaths.insert(item.sourcePath)
             }
         }) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(isSelected ? Palette.accent : Palette.textTertiary)
+                    .foregroundStyle(isSelected ? Palette.accent : Palette.ink4)
                     .font(.system(size: 12))
                 Text(item.relativePath)
-                    .font(Typography.monoCaption)
-                    .foregroundStyle(Palette.textPrimary)
+                    .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer()
                 Text(item.topic)
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
-                Text(item.mode == "note_text" ? "note" : "attachment")
-                    .font(Typography.micro)
-                    .foregroundStyle(item.mode == "note_text" ? Palette.success : Palette.warning)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Palette.surfaceAccentSoft)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink3)
+                StatusPill(
+                    item.mode == "note_text" ? "note" : "attachment",
+                    variant: item.mode == "note_text" ? .running : .review
+                )
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
     }
 
+    // MARK: - Phase 3 — done
+
     private var doneView: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             if let result = executeResult {
-                Text("Imported \(result.imported.count) of \(result.count) files")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
-                if !result.failures.isEmpty {
-                    Text("\(result.failures.count) failure(s)")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.danger)
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(result.failures, id: \.relativePath) { failure in
-                                HStack(spacing: 6) {
-                                    Image(systemName: "exclamationmark.triangle")
-                                        .foregroundStyle(Palette.danger)
-                                        .font(.system(size: 11))
-                                    Text(failure.relativePath ?? "?")
-                                        .font(Typography.monoCaption)
-                                        .foregroundStyle(Palette.textPrimary)
-                                    Text(failure.reason)
-                                        .font(Typography.micro)
-                                        .foregroundStyle(Palette.textSecondary)
-                                    Spacer()
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
+                HStack(spacing: 12) {
+                    StatusPill("imported", variant: .running)
+                    Text("\(result.imported.count) of \(result.count) files")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                    Spacer()
+                    if !result.failures.isEmpty {
+                        StatusPill("\(result.failures.count) failed", variant: .danger)
                     }
-                    .frame(maxHeight: 200)
-                    .background(Palette.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
+                if !result.failures.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(result.failures, id: \.relativePath) { failure in
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(Palette.danger)
+                                    .font(.system(size: 11))
+                                Text(failure.relativePath ?? "?")
+                                    .font(Typography.monoCaption)
+                                    .foregroundStyle(Palette.ink)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                Text(failure.reason)
+                                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                                    .foregroundStyle(Palette.ink3)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(Palette.bgElev)
+                            Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                    .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
                 }
                 Spacer()
             }
         }
     }
+
+    // MARK: - Footer
 
     private var footer: some View {
         HStack {
             Spacer()
             if phase == .review {
-                Button("Back") { phase = .pickRoot }
-                    .buttonStyle(.borderless)
-                    .disabled(executing)
-                Button(executing ? "Importing…" : "Import \(selectedSourcePaths.count) files") {
-                    runExecute()
+                OutlineButton("Back", icon: "chevron.left", size: .small, variant: .ghost) {
+                    phase = .pickRoot
                 }
+                .disabled(executing)
+                OutlineButton(
+                    executing ? "Importing…" : "Import \(selectedSourcePaths.count) files",
+                    icon: "arrow.down.to.line",
+                    size: .small,
+                    variant: .accent,
+                    action: runExecute
+                )
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
                 .disabled(executing || selectedSourcePaths.isEmpty)
             }
             if phase == .done {
-                Button("Close") { onClose() }
+                OutlineButton("Close", icon: "xmark", size: .small, variant: .accent, action: onClose)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
             } else {
-                Button("Cancel") { onClose() }
-                    .buttonStyle(.borderless)
+                OutlineButton("Cancel", size: .small, variant: .ghost, action: onClose)
                     .disabled(executing)
             }
         }
+        .padding(.horizontal, DK.pageGutter)
+        .padding(.vertical, 12)
+        .background(Palette.bgPage)
     }
 
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.octagon")
                 .foregroundStyle(Palette.danger)
+                .font(.system(size: 12))
             Text(message)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textPrimary)
+                .font(.system(size: 11.5, weight: .regular))
+                .foregroundStyle(Palette.ink2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Dismiss") { error = nil }
-                .buttonStyle(.borderless)
+                .fixedSize(horizontal: false, vertical: true)
+            OutlineButton("Dismiss", size: .small, variant: .ghost) {
+                error = nil
+            }
         }
-        .padding(10)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Palette.danger.opacity(0.08))
+        .overlay(Rectangle().stroke(Palette.danger.opacity(0.4), lineWidth: DK.ruleW))
     }
 
-    // MARK: - Actions
+    // MARK: - Actions (unchanged)
 
     private func pickRoot() {
         picking = true

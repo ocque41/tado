@@ -38,7 +38,6 @@ struct AutomationSurface: View {
             ) {
                 Task { await reload() }
             }
-            Divider().overlay(Palette.divider)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     headerActions
@@ -52,10 +51,11 @@ struct AutomationSurface: View {
                     }
                     occurrenceLedger
                 }
-                .padding(20)
+                .padding(.horizontal, DK.pageGutter)
+                .padding(.vertical, 18)
             }
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
         .task(id: domeScope.id) { await reload() }
         .sheet(isPresented: $showCreateSheet) {
             AutomationEditorSheet(
@@ -89,17 +89,18 @@ struct AutomationSurface: View {
 
     private var headerActions: some View {
         HStack(spacing: 10) {
-            Button {
-                showCreateSheet = true
-            } label: {
-                Label("New automation", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-
+            OutlineButton(
+                "New automation",
+                icon: "plus",
+                size: .regular,
+                variant: .accent,
+                action: { showCreateSheet = true }
+            )
             Text("Automations run inside Tado's in-process scheduler. Pause one to stop new occurrences without losing its history.")
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textTertiary)
+                .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -107,50 +108,71 @@ struct AutomationSurface: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.octagon")
                 .foregroundStyle(Palette.danger)
+                .font(.system(size: 12))
             Text(message)
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Dismiss") { actionError = nil }
-                .buttonStyle(.borderless)
+            OutlineButton("Dismiss", size: .small, variant: .ghost) {
+                actionError = nil
+            }
         }
-        .padding(10)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Palette.danger.opacity(0.08))
+        .overlay(Rectangle().stroke(Palette.danger.opacity(0.4), lineWidth: DK.ruleW))
     }
 
     // MARK: - Empty state
 
     private var emptyAutomations: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(Palette.textTertiary)
-            Text("No automations yet")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Palette.ink4)
+                Text("No automations yet")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+            }
             Text("Click + New automation to schedule recurring agent runs, retro writes, or daily summaries.")
-                .font(Typography.body)
-                .foregroundStyle(Palette.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 480)
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(Palette.ink3)
+                .frame(maxWidth: 540, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("AUTOMATION SCHEDULER  ·  in-process tokio loop  ·  occurrences materialised by scheduler_tick")
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+                .padding(.top, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Palette.rule).frame(height: 1).padding(.horizontal, -2)
+                }
         }
-        .frame(maxWidth: .infinity)
-        .padding(40)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - List
 
     private var automationList: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Automations")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
-            ForEach(automations) { automation in
-                automationCard(automation)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                OverlineLabel("Automations")
+                Spacer()
+                Text("\(automations.count) total")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.ink4)
             }
+            .padding(.bottom, 10)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(automations) { automation in
+                    automationCard(automation)
+                    Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
+                }
+            }
+            .background(Palette.bgElev)
+            .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
         }
     }
 
@@ -158,13 +180,13 @@ struct AutomationSurface: View {
         let statusOccurrence = lastOccurrence(for: automation.id)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(automation.title)
-                        .font(Typography.title)
-                        .foregroundStyle(Palette.textPrimary)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
                     Text(automation.executorKind)
-                        .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textSecondary)
+                        .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink3)
                 }
                 Spacer()
                 pausedPill(automation.enabled)
@@ -181,53 +203,55 @@ struct AutomationSurface: View {
                 }
             }
         }
-        .padding(12)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .leading) {
+            if !automation.enabled {
+                Rectangle().fill(Palette.ink4).frame(width: 2)
+            } else if statusOccurrence?.status == "running" {
+                Rectangle().fill(Palette.green).frame(width: 2)
+            } else if let s = statusOccurrence?.status, s == "failed" || s == "cancelled" {
+                Rectangle().fill(Palette.danger).frame(width: 2)
+            }
+        }
     }
 
     private func metaTag(_ label: String, value: String) -> some View {
-        HStack(spacing: 4) {
-            Text(label)
-                .font(Typography.micro)
-                .foregroundStyle(Palette.textTertiary)
+        HStack(spacing: 6) {
+            Text(label.uppercased())
+                .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .tracking(0.6)
+                .foregroundStyle(Palette.ink4)
             Text(value)
-                .font(Typography.monoCaption)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink2)
         }
     }
 
     private func pausedPill(_ enabled: Bool) -> some View {
-        Text(enabled ? "Active" : "Paused")
-            .font(Typography.micro)
-            .foregroundStyle(enabled ? Palette.success : Palette.textTertiary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(enabled ? Palette.surfaceAccentSoft : Palette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        StatusPill(
+            enabled ? "active" : "paused",
+            variant: enabled ? .running : .draft
+        )
     }
 
     private func lastRunPill(_ occurrence: DomeRpcClient.AutomationOccurrence?) -> some View {
-        let label: String = {
-            guard let o = occurrence else { return "—" }
-            return o.status
-        }()
-        let color: Color = {
-            guard let o = occurrence else { return Palette.textTertiary }
+        let variant: StatusPill.Variant
+        let label: String
+        if let o = occurrence {
+            label = o.status
             switch o.status {
-            case "done": return Palette.success
-            case "failed", "cancelled": return Palette.danger
-            case "running": return Palette.accent
-            default: return Palette.warning
+            case "done":                 variant = .running
+            case "failed", "cancelled":  variant = .danger
+            case "running":              variant = .planning
+            default:                     variant = .review
             }
-        }()
-        return Text(label.capitalized)
-            .font(Typography.micro)
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Palette.surfaceAccentSoft)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        } else {
+            label = "—"
+            variant = .draft
+        }
+        return StatusPill(label, variant: variant)
     }
 
     private func automationActionMenu(_ automation: DomeRpcClient.Automation) -> some View {
@@ -252,36 +276,44 @@ struct AutomationSurface: View {
                 Text("Delete…")
             }
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 14))
-                .foregroundStyle(Palette.textSecondary)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.ink3)
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
-        .frame(width: 22)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     // MARK: - Occurrence ledger
 
     private var occurrenceLedger: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Recent occurrences")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
+                OverlineLabel("Recent occurrences")
                 Spacer()
                 Text("\(occurrences.count) shown")
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.ink4)
             }
+            .padding(.bottom, 10)
             if occurrences.isEmpty {
                 Text("Occurrences appear here as automations run. Click Run now on a card above to seed one.")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
-                    .padding(.vertical, 12)
+                    .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
+                    .padding(.vertical, 18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                ForEach(occurrences) { occurrence in
-                    occurrenceRow(occurrence)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(occurrences) { occurrence in
+                        occurrenceRow(occurrence)
+                        Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
+                    }
                 }
+                .background(Palette.bgElev)
+                .overlay(Rectangle().stroke(Palette.rule, lineWidth: DK.ruleW))
             }
         }
     }
@@ -289,45 +321,45 @@ struct AutomationSurface: View {
     private func occurrenceRow(_ occurrence: DomeRpcClient.AutomationOccurrence) -> some View {
         let isExpanded = expandedOccurrenceID == occurrence.id
         let auto = automations.first(where: { $0.id == occurrence.automationID })
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: 0) {
             Button {
                 expandedOccurrenceID = isExpanded ? nil : occurrence.id
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Palette.textTertiary)
+                        .foregroundStyle(Palette.ink4)
                         .frame(width: 12)
                     statusDot(occurrence.status)
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(auto?.title ?? occurrence.automationID)
-                            .font(Typography.body)
-                            .foregroundStyle(Palette.textPrimary)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(Palette.ink)
                             .lineLimit(1)
                         Text("\(occurrence.triggerReason) · attempt \(occurrence.attempt)")
-                            .font(Typography.micro)
-                            .foregroundStyle(Palette.textTertiary)
+                            .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Palette.ink4)
                     }
                     Spacer()
                     Text(Self.relative.localizedString(for: occurrence.plannedAt, relativeTo: Date()))
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if isExpanded {
                 occurrenceDetail(occurrence)
-                    .padding(.leading, 22)
+                    .padding(.horizontal, 32)
                     .padding(.top, 4)
-                    .padding(.bottom, 6)
+                    .padding(.bottom, 10)
+                    .background(Palette.bgPage)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func occurrenceDetail(_ occurrence: DomeRpcClient.AutomationOccurrence) -> some View {
@@ -350,25 +382,29 @@ struct AutomationSurface: View {
                 detailRow("Failure", value: msg)
             }
             if occurrence.status == "failed" || occurrence.status == "cancelled" {
-                Button("Retry occurrence") {
-                    retry(occurrence)
-                }
-                .buttonStyle(.borderless)
-                .padding(.top, 4)
+                OutlineButton(
+                    "Retry occurrence",
+                    icon: "arrow.clockwise",
+                    size: .small,
+                    variant: .accent,
+                    action: { retry(occurrence) }
+                )
+                .padding(.top, 6)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func detailRow(_ label: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .font(Typography.micro)
-                .foregroundStyle(Palette.textTertiary)
-                .frame(width: 96, alignment: .leading)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label.uppercased())
+                .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .tracking(0.6)
+                .foregroundStyle(Palette.ink4)
+                .frame(width: 110, alignment: .leading)
             Text(value)
-                .font(Typography.monoCaption)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink2)
                 .textSelection(.enabled)
                 .lineLimit(3)
             Spacer()
@@ -378,7 +414,7 @@ struct AutomationSurface: View {
     private func statusDot(_ status: String) -> some View {
         let color: Color = {
             switch status {
-            case "done": return Palette.success
+            case "done": return Palette.green
             case "failed", "cancelled": return Palette.danger
             case "running": return Palette.accent
             default: return Palette.warning
@@ -557,9 +593,19 @@ private struct AutomationEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(editing == nil ? "New automation" : "Edit \"\(editing?.title ?? "")\"")
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    OverlineLabel(editing == nil ? "New automation" : "Edit automation")
+                    Text(editing?.title ?? "Untitled automation")
+                        .font(.system(size: 22, weight: .bold))
+                        .tracking(-0.3)
+                        .foregroundStyle(Palette.ink)
+                }
+                Spacer()
+                StatusPill(enabled ? "active" : "paused", variant: enabled ? .running : .draft)
+            }
+            .padding(.bottom, 4)
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
 
             Form {
                 Section {
@@ -581,8 +627,8 @@ private struct AutomationEditorSheet: View {
                         ForEach(Self.scheduleKinds, id: \.self) { Text($0).tag($0) }
                     }
                     Text("Schedule JSON")
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                     TextEditor(text: $scheduleJSON)
                         .font(Typography.monoCaption)
                         .frame(minHeight: 60)
@@ -594,8 +640,8 @@ private struct AutomationEditorSheet: View {
                     }
                     TextField("Timezone", text: $timezone)
                     Text("Retry policy JSON")
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                     TextEditor(text: $retryJSON)
                         .font(Typography.monoCaption)
                         .frame(minHeight: 50)
@@ -603,8 +649,8 @@ private struct AutomationEditorSheet: View {
 
                 Section("Executor config") {
                     Text("JSON forwarded to the executor as-is. agent_run wants `{ \"agent_name\": \"...\", \"prompt\": \"...\" }`.")
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
+                        .font(Font.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink4)
                     TextEditor(text: $executorConfigJSON)
                         .font(Typography.monoCaption)
                         .frame(minHeight: 60)
@@ -613,24 +659,37 @@ private struct AutomationEditorSheet: View {
             .formStyle(.grouped)
 
             if let err = saveError {
-                Text(err)
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.danger)
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.octagon")
+                        .foregroundStyle(Palette.danger)
+                        .font(.system(size: 11))
+                    Text(err)
+                        .font(Font.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Palette.ink2)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Palette.danger.opacity(0.08))
+                .overlay(Rectangle().stroke(Palette.danger.opacity(0.4), lineWidth: DK.ruleW))
             }
 
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { onCancel() }
-                Button(saving ? "Saving…" : (editing == nil ? "Create" : "Save")) {
-                    save()
-                }
+                OutlineButton("Cancel", size: .regular, variant: .ghost, action: onCancel)
+                OutlineButton(
+                    saving ? "Saving…" : (editing == nil ? "Create" : "Save"),
+                    icon: "checkmark.circle",
+                    size: .regular,
+                    variant: .accent,
+                    action: save
+                )
                 .keyboardShortcut(.defaultAction)
                 .disabled(saving || title.isEmpty)
             }
         }
         .padding(20)
-        .frame(minWidth: 560, minHeight: 600)
-        .background(Palette.background)
+        .frame(minWidth: 580, minHeight: 600)
+        .background(Palette.bgPage)
         .onAppear { hydrate() }
     }
 

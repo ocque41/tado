@@ -27,7 +27,6 @@ struct SearchSurface: View {
     var body: some View {
         VStack(spacing: 0) {
             queryBar
-            Divider().overlay(Palette.divider)
             HSplitView {
                 resultsColumn
                     .frame(minWidth: 160, idealWidth: 360, maxWidth: 520)
@@ -35,7 +34,7 @@ struct SearchSurface: View {
                     .frame(minWidth: 180, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(Palette.background)
+        .background(Palette.bgPage)
         .onChange(of: domeState.searchQuery) { _, _ in scheduleQuery() }
         .task(id: domeScope.id) {
             // `.task(id:)` re-fires when the scope identifier changes,
@@ -57,17 +56,20 @@ struct SearchSurface: View {
         }
     }
 
+    /// Composer-style query bar — magnifier glyph + plain TextField
+    /// + clear glyph + mono hit/latency stamp on the right. Sits
+    /// above the HSplit and reads as a unified search affordance.
     @ViewBuilder
     private var queryBar: some View {
         @Bindable var state = domeState
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Palette.textTertiary)
+                .foregroundStyle(Palette.ink3)
             TextField("Search the second brain", text: $state.searchQuery)
                 .textFieldStyle(.plain)
-                .font(Typography.label)
-                .foregroundStyle(Palette.textPrimary)
+                .font(Font.system(size: 13, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink)
                 .submitLabel(.search)
                 .focused($queryFieldFocused)
                 .onSubmit { runQuery() }
@@ -75,7 +77,7 @@ struct SearchSurface: View {
             if !domeState.searchQuery.isEmpty {
                 Button(action: { domeState.searchQuery = "" }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Palette.textTertiary)
+                        .foregroundStyle(Palette.ink4)
                 }
                 .buttonStyle(.plain)
                 .help("Clear query")
@@ -84,57 +86,61 @@ struct SearchSurface: View {
             }
             if lastLatencyMs > 0 {
                 Text("\(hits.count) hits · \(Int(lastLatencyMs)) ms")
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
                     .accessibilityLabel("\(hits.count) results in \(Int(lastLatencyMs)) milliseconds")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Palette.surface)
-        // The TextField, clear button, and result-summary text each
-        // carry their own accessibility labels — wrapping the row in
-        // a `.contain` container groups them as a single navigable
-        // landmark labelled "Search Dome", instead of the previous
-        // single-label override that hid the inner controls.
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(Palette.bgElev)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Palette.rule).frame(height: DK.ruleW)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Search Dome")
     }
 
     private var resultsColumn: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if hits.isEmpty {
                     placeholderRow
                 } else {
                     ForEach(hits, id: \.note.id) { hit in
                         resultRow(hit)
+                        Rectangle().fill(Palette.rule.opacity(0.6)).frame(height: DK.ruleW)
                     }
                 }
             }
-            .padding(.vertical, 8)
         }
-        .background(Palette.surfaceElevated)
+        .background(Palette.bgElev)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(Palette.rule).frame(width: DK.ruleW)
+        }
     }
 
     private var placeholderRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             if domeState.searchQuery.isEmpty {
                 Text("Type to search across the active scope.")
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.textSecondary)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Palette.ink2)
+                Text("HYBRID  ·  cosine + BM25 + freshness rerank  ·  scope-filtered")
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
             } else if let lastError {
                 Text(lastError)
-                    .font(Typography.label)
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(Palette.danger)
             } else {
                 Text("No matches.")
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Palette.ink3)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.vertical, 18)
     }
 
     private func resultRow(_ hit: SearchEngine.Scored) -> some View {
@@ -148,57 +154,65 @@ struct SearchSurface: View {
     }
 
     private func resultRowLabel(_ hit: SearchEngine.Scored, active: Bool) -> some View {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(hit.note.title.isEmpty ? "(untitled)" : hit.note.title)
-                        .font(Typography.label)
-                        .foregroundStyle(active ? Palette.accent : Palette.textPrimary)
-                    Spacer()
-                    Text(String(format: "%.1f", hit.score))
-                        .font(Typography.micro)
-                        .foregroundStyle(Palette.textTertiary)
-                }
-                Text(hit.note.topic)
-                    .font(Typography.micro)
-                    .foregroundStyle(Palette.textTertiary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(hit.note.title.isEmpty ? "(untitled)" : hit.note.title)
+                    .font(.system(size: 12.5, weight: active ? .semibold : .medium))
+                    .foregroundStyle(active ? Palette.ink : Palette.ink2)
+                    .lineLimit(1)
+                Spacer()
+                Text(String(format: "%.1f", hit.score))
+                    .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.ink4)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(active ? Palette.surfaceAccent : Color.clear)
-            )
-            .contentShape(Rectangle())
+            Text(hit.note.topic)
+                .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.ink4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(active ? Palette.bgRowHi : Color.clear)
+        .overlay(alignment: .leading) {
+            if active {
+                Rectangle().fill(Palette.accent).frame(width: 2)
+            }
+        }
+        .contentShape(Rectangle())
     }
 
     private var detailPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if let id = selectedID, let hit = hits.first(where: { $0.note.id == id }) {
+                OverlineLabel("Selected note")
                 Text(hit.note.title.isEmpty ? "(untitled)" : hit.note.title)
-                    .font(Typography.displayXL)
-                    .foregroundStyle(Palette.textPrimary)
-                Text("Topic · \(hit.note.topic)")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
-                if let updated = hit.note.updatedAt {
-                    Text("Updated \(updated.formatted(.dateTime.month().day().hour().minute()))")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textTertiary)
+                    .font(.system(size: 22, weight: .bold))
+                    .tracking(-0.3)
+                    .foregroundStyle(Palette.ink)
+                MetaStrip {
+                    MetaCell(key: "Topic", value: hit.note.topic)
+                    MetaCell(
+                        key: "Updated",
+                        value: hit.note.updatedAt.map { $0.formatted(.dateTime.month().day().hour().minute()) } ?? "—"
+                    )
+                    MetaCell(
+                        key: "Score",
+                        value: String(format: "%.2f", hit.score),
+                        trailingDivider: false
+                    )
                 }
-                Text("Score \(String(format: "%.2f", hit.score))")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
                 Spacer()
             } else {
+                OverlineLabel("Detail")
                 Text("Pick a result to see metadata.")
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(Palette.ink3)
                 Spacer()
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Palette.bgPage)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Search result detail")
     }

@@ -39,18 +39,23 @@ enum TileVisibility {
             .insetBy(dx: -marginPoints, dy: -marginPoints)
     }
 
-    /// Tile rect in world coordinates for a session at `canvasPosition`
-    /// within a zone offset by `zoneX`. `canvasPosition` is the tile's
-    /// CENTER (matches `.position(x:y:)` semantics used in CanvasView).
+    /// Tile rect in world coordinates for a session at `canvasCenter`
+    /// (the tile's persisted CENTER, zone-relative) translated into
+    /// world space by `zoneOffset`. The zone offset is the world-space
+    /// position of the zone's tile-lane top-left — vertical stacking
+    /// uses `zoneOffset.height`; the legacy horizontal stacking used
+    /// `zoneOffset.width`. `.position(x:y:)` in CanvasView places the
+    /// tile center at `canvasCenter + zoneOffset`, so the world rect
+    /// expands ±tileSize/2 around that point.
     static func tileWorldRect(
         canvasCenter: CGPoint,
-        zoneX: CGFloat,
+        zoneOffset: CGSize,
         tileWidth: CGFloat,
         tileHeight: CGFloat
     ) -> CGRect {
         CGRect(
-            x: canvasCenter.x + zoneX - tileWidth / 2,
-            y: canvasCenter.y - tileHeight / 2,
+            x: canvasCenter.x + zoneOffset.width  - tileWidth  / 2,
+            y: canvasCenter.y + zoneOffset.height - tileHeight / 2,
             width: tileWidth,
             height: tileHeight
         )

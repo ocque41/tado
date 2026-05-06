@@ -34,6 +34,11 @@ struct ProjectAgentsSection: View {
         }
     }
 
+    /// Disclosure header for the embedded "All agents" toggle. The
+    /// overline ("AGENTS") + total count are drawn by the parent
+    /// `SectionRail`; this header is the inner expand/collapse
+    /// affordance the design's `agents` block carries below the
+    /// rail label, matching the projects-page mockup.
     private var header: some View {
         Button(action: {
             withAnimation(.easeInOut(duration: 0.18)) {
@@ -43,24 +48,33 @@ struct ProjectAgentsSection: View {
             HStack(spacing: 10) {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Palette.textTertiary)
+                    .foregroundStyle(Palette.ink3)
                     .frame(width: 14)
 
-                Text("AGENTS")
-                    .font(Typography.callout)
-                    .tracking(0.6)
-                    .foregroundStyle(Palette.textSecondary)
+                Text("All agents")
+                    .font(Font.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundStyle(expanded ? Palette.ink : Palette.ink2)
+
+                Text("\(agents.count)")
+                    .font(Typography.monoMicro)
+                    .foregroundStyle(Palette.ink4)
 
                 Spacer()
 
-                Text("\(agents.count) \(agents.count == 1 ? "agent" : "total")")
+                Text("\(agents.count) total")
                     .font(Typography.monoMicro)
-                    .foregroundStyle(Palette.textSecondary)
+                    .foregroundStyle(Palette.ink3)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(isHeaderHovered ? Palette.hoverBackground : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .frame(maxWidth: .infinity)
+            .background(isHeaderHovered ? Palette.bgRowHi : Palette.bgPage)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Palette.rule)
+                    .frame(height: DK.ruleW)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

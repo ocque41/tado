@@ -1,0 +1,65 @@
+#
+# tado-cli — coordinator-driven Tado CLIs.
+#
+# Five binaries, one shared library:
+#
+#   tado-projects   — list / resolve project names → root paths
+#   tado-eternal    — propose/status/crafted/accept/reject/list/stop
+#                     across the Eternal lifecycle
+#   tado-dispatch   — same surface against Dispatch
+#   tado-bootstrap  — drive the four bootstrap actions per project
+#   tado-system     — app + vault status snapshot
+#
+# Read-only operations (list, status, crafted) hit the on-disk
+# index directly: `<storage-root>/projects.json` for projects, and
+# `<project>/.tado/eternal/runs/<id>/state.json` + `crafted.md`
+# for run state. Write operations (propose, accept, reject,
+# bootstrap) connect to the Tado app's Unix domain socket at
+# `/tmp/tado-ipc-<pid>/control.sock`, where the pid is read from
+# `/tmp/tado-ipc/active-pid`.
+#
+# Wire format: length-prefixed JSON. 4-byte big-endian unsigned
+# length, then exactly that many UTF-8 bytes of JSON. The Swift
+# `ControlSocketServer` and the Rust `control_client` here MUST
+# stay byte-compatible.
+#
+
+[package]
+name = "tado-cli"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Coordinator-driven Tado CLIs (projects/eternal/dispatch/bootstrap/system)."
+
+[lib]
+name = "tado_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tado-projects"
+path = "src/bin/tado-projects.rs"
+
+[[bin]]
+name = "tado-eternal"
+path = "src/bin/tado-eternal.rs"
+
+[[bin]]
+name = "tado-dispatch"
+path = "src/bin/tado-dispatch.rs"
+
+[[bin]]
+name = "tado-bootstrap"
+path = "src/bin/tado-bootstrap.rs"
+
+[[bin]]
+name = "tado-system"
+path = "src/bin/tado-system.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tado-settings = { path = "../tado-settings" }

@@ -10982,6 +10982,55 @@ Behavioral Policy\n\
         Ok(json!({ "context_packs": packs }))
     }
 
+    /// v0.17 — delete one cached context pack (DB rows + on-disk
+    /// manifest + summary files when present). Operator action from
+    /// `Dome → Knowledge → Packs`. Cleans both `context_packs` and
+    /// the cascaded `context_pack_sources` rows. The on-disk files
+    /// live under the vault root next to topic dirs, so we use
+    /// `fs_guard::safe_join` to keep deletes inside the vault.
+    pub fn context_delete(&self, actor: &Actor, context_id: &str) -> Result<Value, BtError> {
+        let root = self.require_vault()?;
+        let conn = self.open_conn()?;
+        let pack = db::get_context_pack(&conn, context_id)?
+            .ok_or_else(|| BtError::NotFound(format!("context pack {} not found", context_id)))?;
+        let manifest_path = fs_guard::safe_join(&root, Path::new(&pack.manifest_path)).ok();
+        let summary_path = fs_guard::safe_join(&root, Path::new(&pack.summary_path)).ok();
+        let deleted = db::delete_context_pack(&conn, context_id)?;
+        if !deleted {
+            return Err(BtError::NotFound(format!(
+                "context pack {} not found",
+                context_id
+            )));
+        }
+        if let Some(p) = manifest_path {
+            if p.exists() {
+                let _ = fs::remove_file(&p);
+            }
+        }
+        if let Some(p) = summary_path {
+            if p.exists() {
+                let _ = fs::remove_file(&p);
+            }
+        }
+        let _ = self.audit_no_refresh(
+            actor,
+            "context.delete",
+            &json!({ "context_id": context_id }),
+            None,
+            None,
+            "ok",
+            json!({
+                "brand": pack.brand,
+                "session_id": pack.session_id,
+                "doc_id": pack.doc_id,
+            }),
+        );
+        Ok(json!({
+            "context_id": context_id,
+            "deleted": true,
+        }))
+    }
+
     pub fn scheduler_tick(&self) -> Result<Value, BtError> {
         let actor = Actor::System {
             component: "scheduler".to_string(),
@@ -18021,6 +18070,45 @@ mod scoped_knowledge_tests {
 
         let _ = fs::remove_dir_all(&vault);
         let _ = fs::remove_dir_all(&source);
+    }
+
+    #[test]
+    fn context_delete_removes_pack_row_and_sources() {
+        let vault = temp_vault("context-delete");
+        let service = CoreService::new();
+        service.open_vault(&vault).unwrap();
+        let actor = ui_actor();
+
+        let pack = crate::model::ContextPackRecord {
+            context_id: "ctx_test_delete".into(),
+            brand: "test".into(),
+            session_id: Some("session-1".into()),
+            doc_id: None,
+            status: "active".into(),
+            source_hash: "deadbeef".into(),
+            token_estimate: 0,
+            citation_count: 0,
+            unresolved_citation_count: 0,
+            previous_context_id: None,
+            manifest_path: ".bt/packs/test.json".into(),
+            summary_path: ".bt/packs/test.md".into(),
+            created_at: chrono::Utc::now(),
+            superseded_at: None,
+        };
+        let conn = service.open_conn().unwrap();
+        db::insert_context_pack(&conn, &pack).unwrap();
+        drop(conn);
+
+        let result = service.context_delete(&actor, "ctx_test_delete").unwrap();
+        assert_eq!(result.get("deleted").and_then(Value::as_bool), Some(true));
+
+        let conn = service.open_conn().unwrap();
+        assert!(db::get_context_pack(&conn, "ctx_test_delete")
+            .unwrap()
+            .is_none());
+
+        // Re-deleting yields NotFound — operator can't double-delete.
+        assert!(service.context_delete(&actor, "ctx_test_delete").is_err());
     }
 
     #[test]

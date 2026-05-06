@@ -78,10 +78,10 @@ struct NewProjectSheet: View {
                         .padding(.vertical, 8)
                         .background(Palette.surface)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6)
+                            RoundedRectangle(cornerRadius: DK.radius)
                                 .stroke(Palette.divider, lineWidth: 1)
                         )
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
                         .focused($nameFocused)
                 }
 
@@ -100,10 +100,10 @@ struct NewProjectSheet: View {
                             .padding(.vertical, 8)
                             .background(Palette.surface)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 6)
+                                RoundedRectangle(cornerRadius: DK.radius)
                                     .stroke(Palette.divider, lineWidth: 1)
                             )
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
 
                         Button(action: pickDirectory) {
                             HStack(spacing: 4) {
@@ -116,7 +116,7 @@ struct NewProjectSheet: View {
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                             .background(Palette.surfaceAccent)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
                         }
                         .buttonStyle(.plain)
                     }

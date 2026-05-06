@@ -67,7 +67,7 @@ struct ProjectTeamDisclosure: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 10)
             .background(isHeaderHovered ? Palette.hoverBackground : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

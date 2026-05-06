@@ -138,11 +138,11 @@ private struct BannerCard: View {
         .padding(.vertical, 5)
         .frame(width: 240, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: DK.radius)
                 .fill(Palette.surfaceElevated)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 5)
+            RoundedRectangle(cornerRadius: DK.radius)
                 .strokeBorder(Palette.divider, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)

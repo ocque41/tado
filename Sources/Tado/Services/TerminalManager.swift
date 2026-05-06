@@ -34,6 +34,10 @@ final class TerminalManager {
         eternalEffortLevel: String? = nil,
         eternalSkipPermissionsFlag: Bool = true,
         eternalContinuePrompt: String? = nil,
+        eternalCodexPreFlags: [String]? = nil,
+        eternalCodexPostFlags: [String]? = nil,
+        eternalUseCodexExec: Bool = false,
+        eternalKind: String? = nil,
         eternalRunID: UUID? = nil,
         dispatchRunID: UUID? = nil,
         runRole: String? = nil
@@ -69,6 +73,10 @@ final class TerminalManager {
         session.eternalModelID = eternalModelID
         session.eternalEffortLevel = eternalEffortLevel
         session.eternalSkipPermissionsFlag = eternalSkipPermissionsFlag
+        session.eternalCodexPreFlags = eternalCodexPreFlags
+        session.eternalCodexPostFlags = eternalCodexPostFlags
+        session.eternalUseCodexExec = eternalUseCodexExec
+        session.eternalKind = eternalKind
         session.eternalRunID = eternalRunID
         session.dispatchRunID = dispatchRunID
         session.runRole = runRole
@@ -114,6 +122,33 @@ final class TerminalManager {
         }
     }
 
+    /// Hard-kill every running PTY tile child immediately. Wired to
+    /// `NSApplication.willTerminateNotification` from `TadoApp.init`
+    /// so Cmd+Q doesn't leave orphan agent CLIs (claude / codex) and
+    /// their MCP bridges running invisibly in the background.
+    ///
+    /// Pre-v0.18 Cmd+Q only ran `DomeRpcClient.domeStop()` plus the
+    /// `BackgroundLifecycle` teardown — neither touched
+    /// `TerminalManager`, so any tile process the user hadn't
+    /// individually stopped survived as an orphan re-parented to
+    /// launchd. Combined with the now-fixed process-group kill in
+    /// `Session::kill`, this finally guarantees that every descendant
+    /// of every tile dies with the app.
+    ///
+    /// SIGKILL (not SIGTERM) is correct here: the app is exiting in
+    /// the next few hundred milliseconds, so giving children a chance
+    /// to flush state is moot — the kernel reclaim is faster and
+    /// surer than a SIGTERM-then-wait dance, and rule 1 (no
+    /// watchdogs / timeouts on dispatch) forbids the wait anyway.
+    func shutdownAllSessions() {
+        for session in sessions {
+            session.coreSession?.kill(signal: SIGKILL)
+            session.isRunning = false
+            ipcBroker?.unregisterSession(session.id)
+        }
+        sessions.removeAll()
+    }
+
     func session(forTodoID todoID: UUID) -> TerminalSession? {
         sessions.first { $0.todoID == todoID }
     }
@@ -143,6 +178,10 @@ final class TerminalManager {
         eternalEffortLevel: String? = nil,
         eternalSkipPermissionsFlag: Bool = true,
         eternalContinuePrompt: String? = nil,
+        eternalCodexPreFlags: [String]? = nil,
+        eternalCodexPostFlags: [String]? = nil,
+        eternalUseCodexExec: Bool = false,
+        eternalKind: String? = nil,
         eternalRunID: UUID? = nil,
         dispatchRunID: UUID? = nil,
         runRole: String? = nil
@@ -164,6 +203,10 @@ final class TerminalManager {
             eternalEffortLevel: eternalEffortLevel,
             eternalSkipPermissionsFlag: eternalSkipPermissionsFlag,
             eternalContinuePrompt: eternalContinuePrompt,
+            eternalCodexPreFlags: eternalCodexPreFlags,
+            eternalCodexPostFlags: eternalCodexPostFlags,
+            eternalUseCodexExec: eternalUseCodexExec,
+            eternalKind: eternalKind,
             eternalRunID: eternalRunID,
             dispatchRunID: dispatchRunID,
             runRole: runRole
@@ -176,6 +219,12 @@ final class TerminalManager {
         session.teamID = teamID
         session.projectRoot = cwd
         session.teamAgents = teamAgents
+        // Rehydrate the persisted tile size from the todo so a manual
+        // resize survives quit + relaunch. Pre-v0.18 todos default to
+        // CanvasLayout.contentWidth/Height via SwiftData lightweight
+        // migration, so this is a no-op for them.
+        session.tileWidth = todo.tileWidth
+        session.tileHeight = todo.tileHeight
         todo.terminalSessionID = session.id
         todo.status = .running
 

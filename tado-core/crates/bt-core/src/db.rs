@@ -5037,6 +5037,21 @@ pub fn list_context_pack_sources(
     Ok(out)
 }
 
+/// v0.17 — delete one context pack and all of its source-reference
+/// rows. Returns true if the parent row existed (matches the same
+/// "deleted" boolean shape `delete_doc_row` uses).
+pub fn delete_context_pack(conn: &Connection, context_id: &str) -> Result<bool, BtError> {
+    conn.execute(
+        "DELETE FROM context_pack_sources WHERE context_id=?1",
+        params![context_id],
+    )?;
+    let n = conn.execute(
+        "DELETE FROM context_packs WHERE context_id=?1",
+        params![context_id],
+    )?;
+    Ok(n > 0)
+}
+
 pub fn insert_agent_context_event(
     conn: &Connection,
     event: &AgentContextEventRecord,

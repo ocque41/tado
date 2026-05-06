@@ -1,0 +1,13 @@
+# Fixture: minimal Rust project that the adapter detection tests
+# point at. Not part of the workspace build — referenced by integration
+# tests via include_str!/path manipulation.
+
+[package]
+name = "fixture-rust"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "fixture-rust"
+path = "src/main.rs"
