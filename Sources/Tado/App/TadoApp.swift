@@ -9,6 +9,11 @@ struct TadoApp: App {
     @State private var tadoUseState = TadoUseState()
     @State private var tadoUseEngineHolder = TadoUseEngineHolder()
     @State private var ipcBrokerInitialized = false
+    /// Relay theme store — paper / ink, persisted in AppStorage,
+    /// instant-switch (no relaunch). Replaces six historical
+    /// `.preferredColorScheme(.dark)` calls so the user can flip the
+    /// chrome from the titlebar accessory or the tweaks panel.
+    @State private var themeStore = RelayThemeStore()
     // One zoom-state per WindowGroup. Lifted to the App so the View
     // menu's commands can target the main window's zoom directly;
     // each instance is observed inside the per-window root view it
@@ -266,6 +271,8 @@ struct TadoApp: App {
                 zoomState: mainZoom,
                 ipcBrokerInitialized: $ipcBrokerInitialized
             )
+            .relayTheme(themeStore.theme)
+            .environment(themeStore)
         }
         .modelContainer(modelContainer)
         .commands {
@@ -335,17 +342,23 @@ struct TadoApp: App {
         // ExtensionRegistry.all requires a matching block here.
         WindowGroup(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id)) {
             NotificationsWindowRoot(appState: appState, zoomState: notificationsZoom)
+                .relayTheme(themeStore.theme)
+                .environment(themeStore)
         }
         .windowResizability(NotificationsExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
         WindowGroup(id: ExtensionWindowID.string(for: DomeExtension.manifest.id)) {
             DomeWindowRoot(appState: appState, zoomState: domeZoom)
+                .relayTheme(themeStore.theme)
+                .environment(themeStore)
         }
         .modelContainer(modelContainer)
         .windowResizability(DomeExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
         WindowGroup(id: ExtensionWindowID.string(for: CrossRunBrowserExtension.manifest.id)) {
             CrossRunBrowserWindowRoot(appState: appState, zoomState: crossRunBrowserZoom)
+                .relayTheme(themeStore.theme)
+                .environment(themeStore)
         }
         .modelContainer(modelContainer)
         .windowResizability(CrossRunBrowserExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
@@ -354,7 +367,8 @@ struct TadoApp: App {
             PetsExtension.makeView()
                 .environment(appState)
                 .environment(terminalManager)
-                .preferredColorScheme(.dark)
+                .relayTheme(themeStore.theme)
+                .environment(themeStore)
                 .frame(minWidth: 360, minHeight: 480)
         }
         .modelContainer(modelContainer)
@@ -411,7 +425,9 @@ struct MainWindowRoot: View {
             // ensures every child (including `.sheet()` presentations,
             // which spawn their own windows) reads from the same
             // darker system table.
-            .preferredColorScheme(.dark)
+            // Theme injection (paper/ink) is applied at the WindowGroup
+            // root via `.relayTheme(themeStore.theme)` so it can be
+            // toggled at runtime without a relaunch.
             .frame(minWidth: 280, minHeight: 200)
             // Defer Cmd+/-/0 to the canvas's own keyMonitor while the
             // canvas page is visible so tile-only zoom keeps working
@@ -471,7 +487,9 @@ struct NotificationsWindowRoot: View {
     var body: some View {
         NotificationsExtension.makeView()
             .environment(appState)
-            .preferredColorScheme(.dark)
+            // Theme injection (paper/ink) is applied at the WindowGroup
+            // root via `.relayTheme(themeStore.theme)` so it can be
+            // toggled at runtime without a relaunch.
             .frame(minWidth: 240, minHeight: 180)
             .windowZoom(zoomState)
     }
@@ -484,7 +502,9 @@ struct DomeWindowRoot: View {
     var body: some View {
         DomeExtension.makeView()
             .environment(appState)
-            .preferredColorScheme(.dark)
+            // Theme injection (paper/ink) is applied at the WindowGroup
+            // root via `.relayTheme(themeStore.theme)` so it can be
+            // toggled at runtime without a relaunch.
             .frame(minWidth: 240, minHeight: 180)
             .windowZoom(zoomState)
     }
@@ -497,7 +517,9 @@ struct CrossRunBrowserWindowRoot: View {
     var body: some View {
         CrossRunBrowserExtension.makeView()
             .environment(appState)
-            .preferredColorScheme(.dark)
+            // Theme injection (paper/ink) is applied at the WindowGroup
+            // root via `.relayTheme(themeStore.theme)` so it can be
+            // toggled at runtime without a relaunch.
             .frame(minWidth: 760, minHeight: 480)
             .windowZoom(zoomState)
     }
