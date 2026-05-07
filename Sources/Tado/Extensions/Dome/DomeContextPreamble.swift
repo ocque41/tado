@@ -165,11 +165,28 @@ extension DomeContextPreamble {
     static func composeViaSwift(_ ctx: Context) -> String? {
         var fragments: [String] = []
 
-        if let identity = identityFragment(ctx) { fragments.append(identity) }
-        if let project = projectFragment(ctx) { fragments.append(project) }
-        if let team = teamFragment(ctx) { fragments.append(team) }
-        if let recent = recentProjectNotesFragment(ctx) { fragments.append(recent) }
-        fragments.append(retrievalContractFragment(ctx))
+        // Per-fragment signposts so the trace surfaces which call
+        // dominated when `preamble.fetch` overruns. The Dome-FFI
+        // fragment (`recentNotes`) is the only one that hits
+        // bt-core's per-RPC rusqlite open; the others are cheap
+        // string composition. Confirmed slow path on 2026-05-08
+        // via `sample(<pid>)`: cold-launch spawn was wedged inside
+        // `tado_dome_notes_list_scoped` running schema-init pragmas.
+        if let identity = SpawnSignposts.interval("preamble.identity", { identityFragment(ctx) }) {
+            fragments.append(identity)
+        }
+        if let project = SpawnSignposts.interval("preamble.project", { projectFragment(ctx) }) {
+            fragments.append(project)
+        }
+        if let team = SpawnSignposts.interval("preamble.team", { teamFragment(ctx) }) {
+            fragments.append(team)
+        }
+        if let recent = SpawnSignposts.interval("preamble.recentNotes", { recentProjectNotesFragment(ctx) }) {
+            fragments.append(recent)
+        }
+        fragments.append(SpawnSignposts.interval("preamble.contract") {
+            retrievalContractFragment(ctx)
+        })
 
         guard !fragments.isEmpty else { return nil }
 

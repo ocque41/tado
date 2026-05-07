@@ -313,10 +313,23 @@ struct MetalTerminalTileView: View {
                 // for the FFI/SQLite hit. Returns byte-identical output
                 // to the sync sibling; `spawn_pack_byte_equiv` pins the
                 // contract.
+                //
+                // Soft 2s deadline: the preamble is an *enrichment*
+                // dependency on PTY spawn, not the dispatch chain
+                // itself, so CLAUDE.md rule 1 doesn't apply here.
+                // Pre-fix, an unbounded `await` here meant a cold
+                // bt-core (rusqlite per-FFI connection-open running
+                // schema-init pragmas) wedged spawn forever — caught
+                // live at MetalTerminalTileView.swift:322 via
+                // `sample(<pid>)` on 2026-05-08. On timeout, we fall
+                // through to the raw user prompt so the PTY launches
+                // immediately; subsequent spawns get the full
+                // preamble once bt-core has warmed up.
                 let enrichedPrompt = await SpawnSignposts.intervalAsync("preamble.fetch") {
-                    await DomeContextPreamble.prependedPrompt(
-                        for: preambleCtx,
-                        userPrompt: userPrompt
+                    await preambleWithSoftDeadline(
+                        ctx: preambleCtx,
+                        userPrompt: userPrompt,
+                        seconds: 2
                     )
                 }
                 let modeFlagsClean = ProcessSpawner.sanitizeFlags(modeFlagsRaw, engine: engineSnapshot)
@@ -471,5 +484,58 @@ struct MetalTerminalTileView: View {
 
     private func gridRows(for height: CGFloat) -> UInt16 {
         UInt16(max(4, Int(height / metrics.cellHeight)))
+    }
+
+    // MARK: - Preamble soft deadline
+
+    /// Race the async preamble fetch against a deadline. On
+    /// preamble-wins, returns the enriched prompt (preamble +
+    /// separator + user prompt). On deadline-wins, returns the
+    /// raw user prompt unchanged so the PTY launches immediately.
+    ///
+    /// Why this exists: the preamble fetch reaches into bt-core via
+    /// FFI; bt-core opens a fresh rusqlite connection per call
+    /// (per `tado-core/crates/bt-core/src/service.rs:1115`'s
+    /// "per-RPC short-lived connection pattern"), and on cold launch
+    /// the schema-init PRAGMAs dominate. An unbounded `await` here
+    /// blocked the spawn pipeline indefinitely (caught live on
+    /// 2026-05-08 via `sample(<pid>)` showing the spawn Task wedged
+    /// inside `tado_dome_notes_list_scoped`'s rusqlite stack).
+    ///
+    /// This is NOT a watchdog on the dispatch chain — the preamble
+    /// is enrichment, not the spawn itself. The contract with the
+    /// agent is: preamble is best-effort, never blocking; the
+    /// `spawn_pack_byte_equiv` test still pins the *content*
+    /// equivalence between Swift and Rust composers when the
+    /// preamble does fire.
+    nonisolated private func preambleWithSoftDeadline(
+        ctx: DomeContextPreamble.Context,
+        userPrompt: String,
+        seconds: TimeInterval
+    ) async -> String {
+        let deadlineNanos = UInt64(max(0.1, seconds) * 1_000_000_000)
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask {
+                await DomeContextPreamble.prependedPrompt(
+                    for: ctx,
+                    userPrompt: userPrompt
+                )
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: deadlineNanos)
+                return nil
+            }
+            // First task to finish wins. `nil` from the timeout task
+            // means the preamble didn't beat the deadline; fall
+            // through to the raw user prompt.
+            let winner = await group.next()
+            group.cancelAll()
+            switch winner {
+            case .some(.some(let enriched)):
+                return enriched
+            case .some(.none), .none:
+                return userPrompt
+            }
+        }
     }
 }
