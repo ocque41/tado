@@ -18,12 +18,44 @@ struct RelayKanbanView: View {
     var body: some View {
         if let id = appState.activeProjectID,
            let project = projects.first(where: { $0.id == id }) {
-            // Reuse the existing ProjectKanbanView; it already
-            // matches Tado's existing chrome.
-            ProjectKanbanView(project: project)
+            VStack(spacing: 0) {
+                kanbanHeader(project: project)
+                Rectangle()
+                    .fill(RelayPalette.hair(for: theme))
+                    .frame(height: 1)
+                ProjectKanbanView(project: project)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .background(RelayPalette.background(for: theme))
         } else {
             picker
         }
+    }
+
+    /// Phase fix #3 — Back button + breadcrumb + project name above
+    /// the legacy ProjectKanbanView, so users can leave Kanban mode
+    /// and return to the project picker without going through the
+    /// nav.
+    private func kanbanHeader(project: Project) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            RelayButton(label: "← Back", variant: .ghost) {
+                appState.activeProjectID = nil
+                appState.projectPageMode = .detail
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                RelayKicker(text: "WORK — KANBAN")
+                Text(project.name)
+                    .font(RelayType.h2(size: 26))
+                    .foregroundStyle(RelayPalette.foreground(for: theme))
+            }
+            Spacer()
+            RelayInlineLink(label: "Project detail", arrow: .none) {
+                appState.projectPageMode = .detail
+                appState.currentView = .projects
+            }
+        }
+        .padding(.horizontal, 32)
+        .padding(.vertical, 18)
     }
 
     private var picker: some View {

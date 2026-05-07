@@ -21,114 +21,111 @@ struct NewProjectSheet: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !path.isEmpty
     }
 
+    @Environment(\.relayTheme) private var relayTheme
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Top bar
-            HStack {
-                Button(action: { dismiss() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11))
-                        Text("Cancel")
+        VStack(alignment: .leading, spacing: 0) {
+            // Page-anatomy head: kicker + h1 + lead
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    RelayKicker(text: "PROJECTS — NEW")
+                    Spacer()
+                    Button(action: { dismiss() }) {
+                        Text("✕")
+                            .font(Typography.sans(size: 14, weight: .regular))
+                            .foregroundStyle(RelayPalette.foreground3(for: relayTheme))
                     }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.danger.opacity(0.85))
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Cancel")
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
-
-                Spacer()
-
-                Text("New Project")
-                    .font(Typography.heading)
-                    .foregroundStyle(Palette.textPrimary)
-
-                Spacer()
-
-                Button(action: create) {
-                    HStack(spacing: 4) {
-                        Text("Create")
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11))
-                    }
-                    .font(Typography.label)
-                    .foregroundStyle(canCreate ? Palette.success : Palette.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canCreate)
-                .keyboardShortcut(.defaultAction)
+                Text("Add a project.")
+                    .font(RelayType.h2(size: 32))
+                    .foregroundStyle(RelayPalette.foreground(for: relayTheme))
+                Text("A project links a directory on disk to Tado. Agents are auto-discovered from `.claude/agents/` and `.codex/agents/`.")
+                    .font(Typography.sans(size: 13, weight: .regular))
+                    .foregroundStyle(RelayPalette.foreground2(for: relayTheme))
+                    .frame(maxWidth: 480, alignment: .leading)
+                    .lineSpacing(2)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Palette.surfaceElevated)
+            .padding(.horizontal, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 24)
 
-            Divider()
+            Rectangle()
+                .fill(RelayPalette.hair(for: relayTheme))
+                .frame(height: 1)
 
-            // Body — name + location
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Name")
-                        .font(Typography.label)
-                        .foregroundStyle(Palette.textSecondary)
-                    TextField("", text: $name, prompt: Text("noblestack").foregroundStyle(Palette.textTertiary))
-                        .textFieldStyle(.plain)
-                        .font(Typography.monoBody)
-                        .foregroundStyle(Palette.textPrimary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Palette.surface)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: DK.radius)
-                                .stroke(Palette.divider, lineWidth: 1)
+            // Body — name + location as Relay settings rows
+            VStack(alignment: .leading, spacing: 0) {
+                RelaySettingsRow(
+                    label: "Name",
+                    help: "How this project shows up in the sidebar and across tile metadata.",
+                    control: {
+                        TextField(
+                            "",
+                            text: $name,
+                            prompt: Text("noblestack")
+                                .foregroundStyle(RelayPalette.foreground3(for: relayTheme))
                         )
-                        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+                        .textFieldStyle(.plain)
+                        .font(Typography.sans(size: 13, weight: .regular))
+                        .foregroundStyle(RelayPalette.foreground(for: relayTheme))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .frame(width: 240)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: RelayRadius.standard)
+                                .stroke(RelayPalette.hair(for: relayTheme), lineWidth: 1)
+                        )
                         .focused($nameFocused)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Location")
-                        .font(Typography.label)
-                        .foregroundStyle(Palette.textSecondary)
-                    HStack(spacing: 8) {
-                        Text(path.isEmpty ? "Select a folder…" : path)
-                            .font(Typography.monoCaption)
-                            .foregroundStyle(path.isEmpty ? Palette.textTertiary : Palette.textPrimary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(Palette.surface)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: DK.radius)
-                                    .stroke(Palette.divider, lineWidth: 1)
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
-
-                        Button(action: pickDirectory) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "folder")
-                                    .font(.system(size: 11))
-                                Text("Browse…")
-                            }
-                            .font(Typography.label)
-                            .foregroundStyle(Palette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(Palette.surfaceAccent)
-                            .clipShape(RoundedRectangle(cornerRadius: DK.radius))
-                        }
-                        .buttonStyle(.plain)
                     }
-                }
-
-                Spacer()
+                )
+                RelaySettingsRow(
+                    label: "Location",
+                    help: "Working directory the agents will run in. Click Browse to pick a folder.",
+                    control: {
+                        HStack(spacing: 8) {
+                            Text(path.isEmpty ? "No folder selected" : path)
+                                .font(Typography.sans(size: 11, weight: .regular))
+                                .tracking(RelayTracking.meta(11))
+                                .foregroundStyle(path.isEmpty
+                                    ? RelayPalette.foreground3(for: relayTheme)
+                                    : RelayPalette.foreground(for: relayTheme))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(width: 220, alignment: .leading)
+                            RelayButton(label: "Browse", variant: .standard, action: pickDirectory)
+                        }
+                    }
+                )
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 28)
+
+            Spacer(minLength: 0)
+
+            // Footer actions
+            Rectangle()
+                .fill(RelayPalette.hair(for: relayTheme))
+                .frame(height: 1)
+            HStack {
+                Spacer()
+                RelayButton(label: "Cancel", variant: .ghost) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                RelayButton(label: "Create", variant: .primary) {
+                    create()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canCreate)
+                .opacity(canCreate ? 1 : 0.4)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 18)
         }
-        .frame(minWidth: 480, minHeight: 280)
-        .background(Palette.background)
+        .frame(minWidth: 560, minHeight: 420)
+        .background(RelayPalette.background(for: relayTheme))
         .onAppear { nameFocused = true }
     }
 

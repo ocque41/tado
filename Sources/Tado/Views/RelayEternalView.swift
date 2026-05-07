@@ -8,8 +8,11 @@ import SwiftData
 
 struct RelayEternalView: View {
     @Environment(AppState.self) private var appState
+    @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.relayTheme) private var theme
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \EternalRun.createdAt, order: .reverse) private var runs: [EternalRun]
+    @State private var pendingDelete: EternalRun? = nil
 
     private var running: Int  { runs.filter { $0.state == "running" }.count }
     private var stopped: Int  { runs.filter { $0.state == "stopped" }.count }
@@ -30,6 +33,24 @@ struct RelayEternalView: View {
                 statStrip
                 runsTable
             }
+        }
+        .alert("Delete \(pendingDelete?.label ?? "run")?", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        ), presenting: pendingDelete) { run in
+            Button("Delete", role: .destructive) {
+                EternalService.deleteRun(
+                    run,
+                    modelContext: modelContext,
+                    terminalManager: terminalManager
+                )
+                pendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { run in
+            Text("Removes the run row, its on-disk state under `.tado/eternal/runs/\(run.shortID)/`, and any active flags. This cannot be undone.")
         }
     }
 
@@ -67,6 +88,7 @@ struct RelayEternalView: View {
                         RelayTableColumn("LABEL"),
                         RelayTableColumn("KIND",     alignment: .trailing, width: .fixed(96)),
                         RelayTableColumn("STATE",    alignment: .trailing, width: .fixed(140)),
+                        RelayTableColumn("",         alignment: .trailing, width: .fixed(96)),
                     ])
                     ForEach(runs) { run in
                         runRow(run: run)
@@ -78,20 +100,36 @@ struct RelayEternalView: View {
 
     private func runRow(run: EternalRun) -> some View {
         RelayTableRow(content: {
-            RelayTableCell(text: run.shortID, style: .meta, width: 96)
-            RelayTableCell(text: run.label, style: .body)
-            RelayTableCell(text: run.kind.uppercased(),
-                           style: .meta, alignment: .trailing, width: 96)
+            // Open-modal area covers the first 4 columns; the 5th
+            // is reserved for the explicit delete affordance so a
+            // misclick can't trigger destructive behaviour.
+            Button(action: { appState.eternalModalRunID = run.id }) {
+                HStack(spacing: 0) {
+                    RelayTableCell(text: run.shortID, style: .meta, width: 96)
+                    RelayTableCell(text: run.label, style: .body)
+                    RelayTableCell(text: run.kind.uppercased(),
+                                   style: .meta, alignment: .trailing, width: 96)
+                    HStack {
+                        Spacer()
+                        RelayPill(label: run.state,
+                                  variant: run.state == "failed" ? .strike : .outline,
+                                  statusDot: run.state == "running" ? .running : (run.state == "stopped" ? .idle : nil))
+                    }
+                    .padding(.trailing, 12)
+                    .frame(width: 140)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
             HStack {
                 Spacer()
-                RelayPill(label: run.state,
-                          variant: run.state == "failed" ? .strike : .outline,
-                          statusDot: run.state == "running" ? .running : (run.state == "stopped" ? .idle : nil))
+                RelayButton(label: "Delete", variant: .destructive) {
+                    pendingDelete = run
+                }
             }
             .padding(.trailing, 12)
-            .frame(width: 140)
-        }, onClick: {
-            appState.eternalModalRunID = run.id
+            .frame(width: 96)
         })
     }
 }

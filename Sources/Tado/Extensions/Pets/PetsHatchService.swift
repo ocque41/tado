@@ -184,10 +184,24 @@ public final class PetsHatchService {
             let stateDir = statesDir.appendingPathComponent(state.rawValue, isDirectory: true)
             try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
             for (idx, src) in urls.enumerated() {
+                // NSOpenPanel returns security-scoped URLs even in
+                // non-sandboxed apps; calling start/stop access is a
+                // no-op in that case but is required when sandbox or
+                // hardened-runtime tighten the rules later. Without
+                // this, the copyItem above silently failed for
+                // power-users running Tado in a constrained context.
+                let scoped = src.startAccessingSecurityScopedResource()
+                defer { if scoped { src.stopAccessingSecurityScopedResource() } }
+
                 let ext = src.pathExtension.lowercased()
                 let outExt = ["png", "jpeg", "jpg", "webp", "tiff", "bmp", "heic", "gif", "apng"].contains(ext) ? ext : "png"
                 let frameName = String(format: "frame-%03d.%@", idx + 1, outExt)
-                try FileManager.default.copyItem(at: src, to: stateDir.appendingPathComponent(frameName))
+                let dest = stateDir.appendingPathComponent(frameName)
+                // Read the source data first, then write to dest.
+                // copyItem can fail across volumes or with sandbox
+                // boundary issues; explicit read+write avoids both.
+                let data = try Data(contentsOf: src)
+                try data.write(to: dest, options: [.atomic])
             }
             statesMap[state.rawValue] = "states/\(state.rawValue)/"
         }

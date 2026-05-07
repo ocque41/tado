@@ -22,6 +22,8 @@ struct RelayOnboarding: View {
     @AppStorage("relay.onboarded") private var onboarded: Bool = false
 
     @State private var step: Int = 0
+    @State private var didShowSheet: Bool = false
+    @Query(sort: \Project.createdAt) private var projects: [Project]
 
     var body: some View {
         ZStack {
@@ -29,6 +31,19 @@ struct RelayOnboarding: View {
                 .ignoresSafeArea()
             stepContent
                 .padding(48)
+                .sheet(isPresented: Binding(
+                    get: { appState.showNewProjectSheet },
+                    set: { appState.showNewProjectSheet = $0 }
+                ), onDismiss: {
+                    // If user added a project (or had one already), advance.
+                    // Otherwise stay on step 2 so they can retry or skip.
+                    if step == 2 && didShowSheet && !projects.isEmpty {
+                        advance()
+                    }
+                    didShowSheet = false
+                }) {
+                    NewProjectSheet()
+                }
             VStack {
                 HStack {
                     Spacer()
@@ -143,11 +158,20 @@ struct RelayOnboarding: View {
                 .foregroundStyle(RelayPalette.foreground2(for: theme))
                 .frame(maxWidth: 720, alignment: .leading)
                 .lineSpacing(4)
+            // If a project already exists (e.g. previous run), let
+            // them confirm + move forward; otherwise show the picker.
+            if !projects.isEmpty {
+                Text("Found \(projects.count) project\(projects.count == 1 ? "" : "s") on disk.")
+                    .font(Typography.sans(size: 11, weight: .medium))
+                    .tracking(RelayTracking.caps(11))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
+            }
             HStack {
-                RelayButton(label: "Add a project", variant: .primary) {
+                RelayButton(label: projects.isEmpty ? "Add a project" : "Add another", variant: .primary) {
+                    didShowSheet = true
                     appState.showNewProjectSheet = true
                 }
-                RelayButton(label: "Skip for now", variant: .ghost) {
+                RelayButton(label: projects.isEmpty ? "Skip for now" : "Continue →", variant: .ghost) {
                     advance()
                 }
                 Spacer()

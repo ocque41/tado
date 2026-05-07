@@ -442,8 +442,14 @@ struct PetsWindowRoot: View {
             perStateName = ""
             refreshCustomList()
         } catch {
-            lastPerStateError = "Save failed: \(error.localizedDescription)"
+            // Surface the actual NSError code + path so a "save
+            // failed" message in production is debuggable from the
+            // window itself, not just os_log.
+            let ns = error as NSError
+            let detail = "(\(ns.domain) #\(ns.code))"
+            lastPerStateError = "Save failed: \(error.localizedDescription) \(detail)"
             lastPerStateMessage = nil
+            NSLog("[PetsWindowRoot] saveStagedPerStatePet failed: \(error)")
         }
     }
 

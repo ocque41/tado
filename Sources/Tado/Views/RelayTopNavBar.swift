@@ -69,8 +69,11 @@ struct RelayTopNavBar: View {
             navStrip
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            notificationsBell
+                .padding(.leading, 8)
+
             jumpButton
-                .padding(.leading, 12)
+                .padding(.leading, 8)
                 .padding(.trailing, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,6 +83,29 @@ struct RelayTopNavBar: View {
                 .fill(RelayPalette.hair(for: theme))
                 .frame(height: 1)
         }
+    }
+
+    // MARK: - Notifications bell
+
+    /// Topbar bell — opens the Notifications extension window.
+    /// Replaces the old SidebarView bell which is no longer the
+    /// default route in. Always visible (no width-collapse) because
+    /// it's the only persistent path to the event ledger.
+    private var notificationsBell: some View {
+        Button(action: {
+            openWindow(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id))
+        }) {
+            Text("◉")
+                .font(Typography.sans(size: 14, weight: .regular))
+                .foregroundStyle(RelayPalette.foreground2(for: theme))
+                .frame(width: 28, height: 28)
+                .overlay(
+                    RoundedRectangle(cornerRadius: RelayRadius.standard)
+                        .stroke(RelayPalette.hair(for: theme), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Notifications · event log")
     }
 
     // MARK: - Brand mark

@@ -282,34 +282,32 @@ struct DomeRootView: View {
         .background(Palette.bgElev)
     }
 
-    /// Sidebar header — wordmark "Dome" + amber accent square +
-    /// mono "second brain" caption. Mirrors the topbar's brand cell
-    /// from `TopNavBar` so the two chromes read as siblings.
+    /// Sidebar header — Relay brand mark + "DOME" + caption.
+    /// Mirrors the topbar's RelayTopNavBar.brandCell so the two
+    /// chromes read as siblings across windows.
     private func header(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(compact ? "D" : "Dome")
-                    .font(Font.system(size: compact ? 18 : 20, weight: .semibold, design: .monospaced))
-                    .tracking(-0.2)
-                    .foregroundStyle(Palette.ink)
-                    .help("Dome — second brain")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                RelayBrandDot(size: 6)
                 if !compact {
-                    Rectangle()
-                        .fill(Palette.accent)
-                        .frame(width: 6, height: 6)
+                    Text("DOME")
+                        .font(Typography.sans(size: 11, weight: .semibold))
+                        .tracking(RelayTracking.brand(11))
+                        .foregroundStyle(Palette.ink)
                 }
             }
             if !compact {
-                Text("second brain")
-                    .font(Font.system(size: 10, weight: .regular, design: .monospaced))
-                    .tracking(0.6)
-                    .foregroundStyle(Palette.ink4)
+                Text("SECOND BRAIN")
+                    .font(Typography.sans(size: 9, weight: .regular))
+                    .tracking(RelayTracking.caps(9))
+                    .foregroundStyle(Palette.ink3)
             }
         }
         .padding(.horizontal, compact ? 8 : 14)
         .padding(.top, 22)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
+        .help("Dome — second brain")
     }
 
     private func tabButton(_ tab: DomeSurfaceTab, compact: Bool) -> some View {
@@ -333,7 +331,7 @@ struct DomeRootView: View {
                 .frame(width: 16)
             if !compact {
                 Text(tab.label)
-                    .font(Font.system(size: 12, weight: .medium))
+                    .font(Typography.sans(size: 12, weight: .medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }

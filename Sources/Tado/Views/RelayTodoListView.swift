@@ -107,6 +107,9 @@ struct RelayTodoListView: View {
     private var composeCard: some View {
         RelayCard {
             VStack(alignment: .leading, spacing: 16) {
+                // SwiftUI TextEditor inherits ~5pt internal leading
+                // padding from NSTextView; line-up the placeholder to
+                // the same baseline by matching offsets exactly.
                 ZStack(alignment: .topLeading) {
                     if inputText.isEmpty {
                         Text(isForwarding
@@ -114,8 +117,8 @@ struct RelayTodoListView: View {
                             : "implement OAuth callback and write a test for it…")
                             .font(Typography.sans(size: 18, weight: .light))
                             .foregroundStyle(RelayPalette.foreground3(for: theme))
-                            .padding(.leading, 4)
-                            .padding(.top, 4)
+                            .padding(.leading, 5)
+                            .padding(.top, 8)
                             .allowsHitTesting(false)
                     }
                     TextEditor(text: $inputText)
@@ -124,8 +127,6 @@ struct RelayTodoListView: View {
                         .scrollContentBackground(.hidden)
                         .focused($isInputFocused)
                         .frame(minHeight: 60, maxHeight: 180)
-                        .padding(.leading, -4)
-                        .padding(.top, -8)
                         .onKeyPress(phases: .down) { keyPress in
                             if keyPress.key == .return && keyPress.modifiers.contains(.command) {
                                 handleSubmit()

@@ -296,8 +296,9 @@ struct RelayExplorePanel: View {
                     }
                     softDivider
                 }
-                groupHeader(label: "JUMP TO", count: 4)
+                groupHeader(label: "JUMP TO", count: 5)
                 tadoUseRow
+                notificationsRow
                 jumpRow(label: "Todos",     mode: .todos)
                 jumpRow(label: "Knowledge", mode: .knowledge)
                 jumpRow(label: "Eternal",   mode: .eternal)
@@ -449,6 +450,39 @@ struct RelayExplorePanel: View {
                 Text("⌘⇧U")
                     .font(Typography.sans(size: 9, weight: .medium))
                     .tracking(RelayTracking.kbd(9))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Notifications jump-row — opens the dedicated event-ledger
+    /// window (the only window-routed surface that didn't have a
+    /// nav cell in the post-redesign topbar).
+    private var notificationsRow: some View {
+        Button(action: {
+            openWindow(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id))
+            dismiss()
+        }) {
+            HStack(spacing: 10) {
+                Text("◉")
+                    .font(Typography.sans(size: 11, weight: .regular))
+                    .foregroundStyle(RelayPalette.foreground2(for: theme))
+                    .frame(width: 36, alignment: .leading)
+                Text("Notifications")
+                    .font(Typography.sans(size: 13, weight: .regular))
+                    .foregroundStyle(RelayPalette.foreground(for: theme))
+                Text("· event log")
+                    .font(Typography.sans(size: 11, weight: .regular))
+                    .tracking(RelayTracking.meta(11))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
+                Spacer()
+                Text("OPEN")
+                    .font(Typography.sans(size: 9, weight: .medium))
+                    .tracking(RelayTracking.caps(9))
                     .foregroundStyle(RelayPalette.foreground3(for: theme))
             }
             .padding(.horizontal, 18)

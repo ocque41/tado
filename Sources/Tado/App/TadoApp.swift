@@ -388,19 +388,18 @@ struct TadoApp: App {
         .windowResizability(CrossRunBrowserExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
         WindowGroup(id: ExtensionWindowID.string(for: PetsExtension.manifest.id)) {
+            // Pets keeps only the Relay titlebar accessory — its
+            // window body is already a structured editor with its
+            // own header + sections. Wrapping it in
+            // RelayWindowFrame consumed enough vertical space that
+            // the per-state-pet Save button slid below the fold on
+            // the default 460×640 window.
             VStack(spacing: 0) {
                 RelayTitlebarAccessory(surfaceName: "Pets")
-                RelayWindowFrame(
-                    kicker: "SYSTEM — PETS",
-                    title: "Hatch a canvas companion.",
-                    lead: "A small live-agent panel that follows you across surfaces. Ask it for status, broadcast to teams, or queue a follow-up — without leaving the page you're on.",
-                    h1Size: 36
-                ) {
-                    PetsExtension.makeView()
-                        .environment(appState)
-                        .environment(terminalManager)
-                        .frame(minWidth: 360, minHeight: 480)
-                }
+                PetsExtension.makeView()
+                    .environment(appState)
+                    .environment(terminalManager)
+                    .frame(minWidth: 360, minHeight: 480)
             }
             .relayTheme(themeStore.theme)
             .environment(themeStore)
@@ -521,15 +520,12 @@ struct NotificationsWindowRoot: View {
     var body: some View {
         VStack(spacing: 0) {
             RelayTitlebarAccessory(surfaceName: "Notifications")
-            RelayWindowFrame(
-                kicker: "SYSTEM — NOTIFICATIONS",
-                title: "Every event the bus has emitted.",
-                lead: "Append-only NDJSON log under <storage-root>/events/. Every meaningful state transition publishes here — terminal status flips, eternal phase boundaries, IPC messages, daemon lifecycle. Filter by kind to scope down."
-            ) {
-                NotificationsExtension.makeView()
-                    .environment(appState)
-                    .frame(minWidth: 240, minHeight: 180)
-            }
+            // No RelayWindowFrame here — the NotificationsWindowView
+            // already carries its own header + filter chrome. The
+            // titlebar accessory is the only Relay wrap needed.
+            NotificationsExtension.makeView()
+                .environment(appState)
+                .frame(minWidth: 240, minHeight: 180)
         }
         .windowZoom(zoomState)
     }
@@ -588,16 +584,12 @@ struct CrossRunBrowserWindowRoot: View {
     var body: some View {
         VStack(spacing: 0) {
             RelayTitlebarAccessory(surfaceName: "Cross-Run Browser")
-            RelayWindowFrame(
-                kicker: "AGENTS — CROSS-RUN BROWSER",
-                title: "Every Eternal and Dispatch run, across every project.",
-                lead: "Global timeline of runs. Click a row to see its crafted plan, retros, and per-phase state. Live runs animate; failed runs strike through.",
-                h1Size: 36
-            ) {
-                CrossRunBrowserExtension.makeView()
-                    .environment(appState)
-                    .frame(minWidth: 760, minHeight: 480)
-            }
+            // No RelayWindowFrame here — CrossRunBrowserView already
+            // owns its own sidebar + detail layout. The titlebar
+            // accessory carries the window-level identity.
+            CrossRunBrowserExtension.makeView()
+                .environment(appState)
+                .frame(minWidth: 760, minHeight: 480)
         }
         .windowZoom(zoomState)
     }
