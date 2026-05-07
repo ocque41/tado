@@ -53,6 +53,7 @@ enum TadoUseBridgeHandlers {
                 requestID: requestID,
                 payload: payload,
                 terminalManager: terminalManager,
+                modelContext: modelContext,
                 appState: appState
             )
         case "tado_use.open_modal":
@@ -126,6 +127,7 @@ enum TadoUseBridgeHandlers {
         requestID: String,
         payload: ControlPayload,
         terminalManager: TerminalManager,
+        modelContext: ModelContext,
         appState: AppState
     ) -> ControlResponseEnvelope {
         // Two ways to identify the tile: by todo UUID (canonical) or
@@ -136,7 +138,8 @@ enum TadoUseBridgeHandlers {
             if let raw = payload.string("todo_id"), let uuid = UUID(uuidString: raw) {
                 return uuid
             }
-            if let grid = payload.string("grid"), let idx = parseGrid(grid) {
+            if let grid = payload.string("grid"),
+               let idx = parseGrid(grid, gridColumns: gridColumns(modelContext: modelContext)) {
                 return terminalManager.sessions.first { $0.gridIndex == idx }?.todoID
             }
             return nil
@@ -295,8 +298,7 @@ enum TadoUseBridgeHandlers {
     /// `"col, row"` (CanvasLayout's gridLabel is `[col, row]`,
     /// 1-indexed). Returns the 0-indexed `gridIndex` used by
     /// `CanvasLayout.position(forIndex:)`.
-    private static func parseGrid(_ raw: String) -> Int? {
-        let gridColumns = 3
+    private static func parseGrid(_ raw: String, gridColumns: Int) -> Int? {
         let cleaned = raw.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
         let parts = cleaned
             .split(whereSeparator: { $0 == "," || $0 == ":" })
@@ -306,6 +308,15 @@ enum TadoUseBridgeHandlers {
               row >= 1, col >= 1
         else { return nil }
         return (row - 1) * gridColumns + (col - 1)
+    }
+
+    /// Read the user's `AppSettings.gridColumns` (default 3 when the
+    /// row is missing). The user can change this via Settings or via
+    /// `tado_use_settings_set { key: "canvas.gridColumns" }`, so any
+    /// grid-coord parser that hardcoded 3 silently picked the wrong
+    /// tile after a column change.
+    private static func gridColumns(modelContext: ModelContext) -> Int {
+        (try? modelContext.fetch(FetchDescriptor<AppSettings>()).first?.gridColumns) ?? 3
     }
 
     private static func resolveProjectID(name: String?, modelContext: ModelContext) -> UUID? {

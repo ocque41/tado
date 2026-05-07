@@ -4,9 +4,9 @@ import SwiftData
 /// The Tado Use drawer. Slides in from the left edge of the main
 /// window when `appState.showTadoUse` is true (toggled by
 /// Cmd+Shift+U or the close button in this header). Hosts a chat
-/// surface where a headless `claude -p` agent calls the 30 existing
-/// MCP tools (tado-mcp + dome-mcp) plus 35+ in-process bridge tools
-/// to drive Tado's SwiftUI surface.
+/// surface where a headless `claude -p` agent calls the existing
+/// tado-mcp + dome-mcp servers (12 + 18 tools) plus 43 in-process
+/// `tado_use_*` bridge tools to drive Tado's SwiftUI surface.
 ///
 /// ## Settings parity
 ///
@@ -289,12 +289,15 @@ struct TadoUsePanel: View {
             // ~6 Hz; the .onChange watchers feed an "anchor target"
             // that the timer applies. This caps the scroll-pump
             // rate during streaming (would otherwise fire ~50 Hz on
-            // text-delta) without losing responsiveness.
+            // text-delta) without losing responsiveness. Gated on
+            // `isStreaming` so an idle drawer doesn't burn CPU on a
+            // periodic clock the canvas behind it has to share.
             .modifier(ThrottledScrollPump(
                 proxy: proxy,
                 anchor: .bottom,
                 target: scrollAnchor,
-                paused: autoScrollPaused
+                paused: autoScrollPaused,
+                active: useState.isStreaming
             ))
             // Bring scroll back online when a new finalized turn
             // lands or the user clears.
@@ -329,7 +332,7 @@ struct TadoUsePanel: View {
             Text("Drive Tado from here")
                 .font(Typography.titleSm)
                 .foregroundStyle(Palette.ink)
-            Text("Ask the agent to navigate the app, search Dome, or kick off an Eternal/Dispatch run. The agent has 41 tools that drive Tado directly plus the 30 existing tado-mcp + dome-mcp tools.")
+            Text("Ask the agent to navigate the app, search Dome, or kick off an Eternal/Dispatch run. The agent has 43 in-process bridge tools plus the existing tado-mcp + dome-mcp servers.")
                 .font(Typography.bodySm)
                 .foregroundStyle(Palette.ink2)
                 .lineLimit(nil)
@@ -577,6 +580,10 @@ fileprivate struct ThrottledScrollPump: ViewModifier {
     let anchor: UnitPoint
     let target: AnyHashable?
     let paused: Bool
+    /// Gate the periodic TimelineView. When false (no active
+    /// stream), the modifier emits a no-op overlay so the runloop
+    /// isn't billed at 6 Hz to do nothing.
+    let active: Bool
 
     /// Cap at 6 Hz. Lower → choppier auto-follow. Higher → eats
     /// more main-thread time per second of streaming. 6 Hz is
@@ -587,10 +594,19 @@ fileprivate struct ThrottledScrollPump: ViewModifier {
 
     func body(content: Content) -> some View {
         content.background(
-            TimelineView(.periodic(from: .now, by: 1.0 / Self.pumpHz)) { _ in
-                Color.clear
-                    .onAppear { pump() }
-                    .task { pump() }
+            Group {
+                if active {
+                    TimelineView(.periodic(from: .now, by: 1.0 / Self.pumpHz)) { _ in
+                        Color.clear
+                            .onAppear { pump() }
+                            .task { pump() }
+                    }
+                } else {
+                    // Idle: ensure the last anchor is honored once
+                    // (so a finalized turn still scrolls into view
+                    // when streaming flips to false), then go silent.
+                    Color.clear.onAppear { pump() }
+                }
             }
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)

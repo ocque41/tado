@@ -632,7 +632,7 @@ let toolList: [[String: Any]] = [
     ],
     [
         "name": "tado_use_dome_note_create",
-        "description": "Write a knowledge note into Dome's vault. Defaults to global scope, user.md side, knowledge kind. Returns the new note id.",
+        "description": "Write a knowledge note into Dome's vault. Always lands in global scope on the user.md side; the response surfaces a note when a non-global scope was requested. Defaults to knowledge kind. Returns the new note id.",
         "inputSchema": [
             "type": "object",
             "properties": [
@@ -640,7 +640,7 @@ let toolList: [[String: Any]] = [
                 "body": ["type": "string"],
                 "topic": ["type": "string", "description": "Default 'tado-use'."],
                 "kind": ["type": "string", "description": "knowledge | decision | intent | outcome | retro. Default 'knowledge'."],
-                "scope": ["type": "string", "enum": ["global", "project"], "description": "Default global."],
+                "scope": ["type": "string", "description": "Currently hardwired to 'global' in this bridge version; pass a value other than 'global' to receive a 'requested_scope' acknowledgement in the response."],
             ],
             "required": ["body"],
         ],
@@ -677,31 +677,6 @@ let toolList: [[String: Any]] = [
             "properties": [
                 "limit": ["type": "string"],
             ],
-        ],
-    ],
-
-    // ─── Kanban ──────────────────────────────────────────────────
-    [
-        "name": "tado_use_kanban_columns",
-        "description": "List Kanban columns for a project (column_key, title, order_index).",
-        "inputSchema": [
-            "type": "object",
-            "properties": [
-                "project": ["type": "string"],
-                "project_id": ["type": "string"],
-            ],
-        ],
-    ],
-    [
-        "name": "tado_use_kanban_move_card",
-        "description": "Move a todo to a Kanban column (or remove it from the board by passing empty column_key).",
-        "inputSchema": [
-            "type": "object",
-            "properties": [
-                "todo_id": ["type": "string"],
-                "column_key": ["type": "string", "description": "Target column's key. Empty/omitted to remove from the board."],
-            ],
-            "required": ["todo_id"],
         ],
     ],
 
@@ -830,9 +805,6 @@ let toolKindMap: [String: String] = [
     "tado_use_dome_note_search": "tado_use.dome_note_search",
     "tado_use_dome_recipe_apply": "tado_use.dome_recipe_apply",
     "tado_use_dome_agent_status": "tado_use.dome_agent_status",
-
-    "tado_use_kanban_columns": "tado_use.kanban_columns",
-    "tado_use_kanban_move_card": "tado_use.kanban_move_card",
 
     "tado_use_extension_list": "tado_use.extension_list",
     "tado_use_extension_open": "tado_use.extension_open",

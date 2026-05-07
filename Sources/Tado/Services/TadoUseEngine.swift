@@ -338,7 +338,7 @@ final class TadoUseEngine {
         Hybrid search, write notes, query the graph, run retrieval recipes,
         watch sessions, scheduling.
 
-        ### tado_use_* (~36) — Drive Tado itself
+        ### tado_use_* (43) — Drive Tado itself
         SwiftUI navigation:
           - tado_use_navigate / focus_tile / open_modal / close_modal /
             list_tiles / app_state
@@ -384,9 +384,6 @@ final class TadoUseEngine {
             code (tree-sitter, Qwen3 embeddings)
           - tado_use_dome_code_status / code_search
           - tado_use_dome_note_create / note_search / recipe_apply / agent_status
-
-        Kanban:
-          - tado_use_kanban_columns / move_card
 
         Extensions:
           - tado_use_extension_list / open
@@ -455,6 +452,28 @@ final class TadoUseEngine {
         useState?.lastError = msg
     }
 
+    /// Apply a captured snapshot from the StreamProcessor inline
+    /// on @MainActor. Used by `handleTermination` so the final
+    /// flush lands BEFORE `finalizeStreamingTurn()` zeroes the
+    /// scratchpad (F-008).
+    fileprivate func applyPendingBatch(_ batch: StreamProcessor.PendingBatch) {
+        if !batch.text.isEmpty {
+            applyTextBatch(batch.text)
+        }
+        for s in batch.toolStarts {
+            upsertToolCall(id: s.id, name: s.name, input: s.input)
+        }
+        for r in batch.toolResults {
+            markToolCall(id: r.id, output: r.body, status: r.status)
+        }
+        if batch.tokens.inputTokens != 0 || batch.tokens.outputTokens != 0 {
+            recordUsage(input: batch.tokens.inputTokens, output: batch.tokens.outputTokens)
+        }
+        if let err = batch.error {
+            recordError(err)
+        }
+    }
+
     // MARK: - Termination + cleanup
 
     private func handleTermination(status: Int32) {
@@ -464,9 +483,16 @@ final class TadoUseEngine {
         stderrSource?.cancel(); stderrSource = nil
 
         // Force a final flush of any pending coalesced text +
-        // collect the stderr tail for error reporting.
+        // collect the stderr tail for error reporting. We're on
+        // @MainActor here, so we apply the captured snapshot
+        // inline instead of bouncing through DispatchQueue.main.async
+        // (which wouldn't run until handleTermination returns —
+        // F-008: trailing tokens were dropping into a scratchpad
+        // that finalizeStreamingTurn had already cleared).
         if let processor = streamProcessor {
-            processor.flushNow()
+            if let pending = processor.drainPending() {
+                applyPendingBatch(pending)
+            }
             if status != 0 {
                 let trailing = processor.stderrTail()
                 let summary = trailing
@@ -482,15 +508,10 @@ final class TadoUseEngine {
         useState?.isStreaming = false
         process = nil
 
-        // Per-turn MCP config cleanup. The on-app-quit cleanup
-        // (`teardown` → `cleanupGeneratedMcpConfigs`) was the only
-        // gate before — that left a per-session disk leak. Unlink
-        // here so each finished turn's config goes away
-        // immediately.
-        if let last = generatedMcpConfigPaths.last {
-            try? FileManager.default.removeItem(at: last)
-            generatedMcpConfigPaths.removeLast()
-        }
+        // The MCP config file is engine-keyed and reused on every turn
+        // (see `cachedMcpConfigPath` / `writeMcpConfig`). One file per
+        // engine for the lifetime of the process; `teardown` →
+        // `cleanupGeneratedMcpConfigs` removes them on app quit.
     }
 
     // MARK: - MCP config generation
@@ -605,6 +626,18 @@ final class TadoUseEngine {
 /// reads from MainActor go through `stderrTail()` which copies a
 /// snapshot.
 fileprivate final class StreamProcessor {
+    /// Snapshot of pending state. Returned by `drainPending` so the
+    /// caller (already on @MainActor at termination time) can apply
+    /// it inline — without the previous `DispatchQueue.main.async`
+    /// hop that wouldn't run until handleTermination returned.
+    struct PendingBatch {
+        let text: String
+        let toolStarts: [(id: String, name: String, input: String)]
+        let toolResults: [(id: String, body: String, status: TadoUseState.Turn.ToolCall.Status)]
+        let tokens: (inputTokens: Int, outputTokens: Int)
+        let error: String?
+    }
+
     private weak var engine: TadoUseEngine?
     private let queue = DispatchQueue(label: "tado.use.stream-processor", qos: .userInitiated)
     private var stdoutBuffer = Data()
@@ -655,13 +688,38 @@ fileprivate final class StreamProcessor {
         }
     }
 
-    /// Synchronous final flush. Called from `handleTermination` on
-    /// MainActor — we hop to the queue and back to drain anything
-    /// the timer hadn't picked up yet.
-    func flushNow() {
+    /// Synchronously snapshot + clear all pending state under the
+    /// queue's serial confinement. Called from `handleTermination`
+    /// on @MainActor; the caller applies the batch inline (we
+    /// can't enqueue a `DispatchQueue.main.async` from a
+    /// MainActor-bound caller and expect it to run before that
+    /// caller returns). Returns nil when nothing's pending.
+    func drainPending() -> PendingBatch? {
+        var batch: PendingBatch? = nil
         queue.sync { [weak self] in
-            self?.flushToMainActor()
+            guard let self else { return }
+            if self.pendingText.isEmpty &&
+                self.pendingToolStarts.isEmpty &&
+                self.pendingToolResults.isEmpty &&
+                self.pendingTokens.inputTokens == 0 &&
+                self.pendingTokens.outputTokens == 0 &&
+                self.pendingError == nil {
+                return
+            }
+            batch = PendingBatch(
+                text: self.pendingText,
+                toolStarts: self.pendingToolStarts,
+                toolResults: self.pendingToolResults,
+                tokens: self.pendingTokens,
+                error: self.pendingError
+            )
+            self.pendingText = ""
+            self.pendingToolStarts.removeAll()
+            self.pendingToolResults.removeAll()
+            self.pendingTokens = (0, 0)
+            self.pendingError = nil
         }
+        return batch
     }
 
     /// Snapshot of the stderr buffer for error reporting. Cheap

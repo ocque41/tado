@@ -73,9 +73,6 @@ enum TadoUseAutonomousHandlers {
         "tado_use.dome_note_search",
         "tado_use.dome_recipe_apply",
         "tado_use.dome_agent_status",
-        // Kanban
-        "tado_use.kanban_columns",
-        "tado_use.kanban_move_card",
         // Extensions
         "tado_use.extension_open",
         "tado_use.extension_list",
@@ -170,12 +167,6 @@ enum TadoUseAutonomousHandlers {
         case "tado_use.dome_agent_status":
             return domeAgentStatus(requestID: requestID, payload: payload)
 
-        // Kanban
-        case "tado_use.kanban_columns":
-            return kanbanColumns(requestID: requestID, payload: payload, modelContext: modelContext)
-        case "tado_use.kanban_move_card":
-            return kanbanMoveCard(requestID: requestID, payload: payload, modelContext: modelContext)
-
         // Extensions
         case "tado_use.extension_open":
             return extensionOpen(requestID: requestID, payload: payload, appState: appState)
@@ -186,11 +177,11 @@ enum TadoUseAutonomousHandlers {
         case "tado_use.notify":
             return notify(requestID: requestID, payload: payload)
         case "tado_use.tile_send":
-            return tileSend(requestID: requestID, payload: payload, terminalManager: terminalManager)
+            return tileSend(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext)
         case "tado_use.tile_read":
-            return tileRead(requestID: requestID, payload: payload, terminalManager: terminalManager)
+            return tileRead(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext)
         case "tado_use.tile_terminate":
-            return tileTerminate(requestID: requestID, payload: payload, terminalManager: terminalManager)
+            return tileTerminate(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext)
         case "tado_use.events_query":
             return eventsQuery(requestID: requestID, payload: payload)
 
@@ -1106,9 +1097,13 @@ enum TadoUseAutonomousHandlers {
         }
         let title = payload.string("title") ?? "Tado Use note"
         let topic = payload.string("topic") ?? "tado-use"
-        let kind = payload.string("kind") ?? "user_note"
+        let kind = payload.string("kind") ?? "knowledge"
         let scopeRaw = payload.string("scope") ?? "global"
-        let domeScope: DomeScopeSelection = .global  // bridge writes always land in global scope for v1; project-scoped notes need project root + name + id together which is more than the bridge has
+        // Project-scoped writes need project root + name + id
+        // together; the bridge only carries `project_id`, so we
+        // hardwire to global for now. Surface this in the response
+        // instead of silently echoing the request — F-004.
+        let domeScope: DomeScopeSelection = .global
         guard let id = DomeRpcClient.writeNote(
             scope: .user,
             topic: topic,
@@ -1119,11 +1114,17 @@ enum TadoUseAutonomousHandlers {
         ) else {
             return ControlRequestRouter.error(requestID, code: "write_failed", message: "Dome rejected the write")
         }
-        return ControlRequestRouter.ok(requestID, data: AnyCodable([
+        var data: [String: AnyCodable] = [
             "note_id": AnyCodable(id),
             "topic": AnyCodable(topic),
-            "scope": AnyCodable(scopeRaw),
-        ]))
+            "scope": AnyCodable("global"),
+            "kind": AnyCodable(kind),
+        ]
+        if scopeRaw != "global" {
+            data["requested_scope"] = AnyCodable(scopeRaw)
+            data["note"] = AnyCodable("scope is hardwired to 'global' in this bridge version; project-scoped writes ship in a follow-up")
+        }
+        return ControlRequestRouter.ok(requestID, data: AnyCodable(data))
     }
 
     private static func domeNoteSearch(
@@ -1184,30 +1185,6 @@ enum TadoUseAutonomousHandlers {
             "context_pack_count": AnyCodable(envelope.contextPacks.count),
             "status_source": AnyCodable(envelope.statusSource ?? ""),
         ]))
-    }
-
-    // MARK: - Kanban
-    //
-    // The Kanban model + per-todo column membership land in a future
-    // commit (see Tado's WIP branch — `KanbanColumn` SwiftData entity
-    // and `TodoItem.kanbanColumnKey`). Until those land in HEAD,
-    // these handlers return a clean "not yet available" response so
-    // the bridge stays stable.
-
-    private static func kanbanColumns(
-        requestID: String,
-        payload: ControlPayload,
-        modelContext: ModelContext
-    ) -> ControlResponseEnvelope {
-        return ControlRequestRouter.error(requestID, code: "not_implemented", message: "Kanban support requires the KanbanColumn model + TodoItem.kanbanColumnKey field, which haven't landed in HEAD yet. Use tado_use_todo_list with state filters as a substitute.")
-    }
-
-    private static func kanbanMoveCard(
-        requestID: String,
-        payload: ControlPayload,
-        modelContext: ModelContext
-    ) -> ControlResponseEnvelope {
-        return ControlRequestRouter.error(requestID, code: "not_implemented", message: "Kanban support requires the KanbanColumn model + TodoItem.kanbanColumnKey field, which haven't landed in HEAD yet.")
     }
 
     // MARK: - Extensions
@@ -1297,7 +1274,8 @@ enum TadoUseAutonomousHandlers {
     private static func tileSend(
         requestID: String,
         payload: ControlPayload,
-        terminalManager: TerminalManager
+        terminalManager: TerminalManager,
+        modelContext: ModelContext
     ) -> ControlResponseEnvelope {
         guard let target = payload.string("target") else {
             return ControlRequestRouter.error(requestID, code: "missing_param", message: "target required (todo_id, session_id, grid coords, or name substring)")
@@ -1305,7 +1283,7 @@ enum TadoUseAutonomousHandlers {
         guard let message = payload.string("message"), !message.isEmpty else {
             return ControlRequestRouter.error(requestID, code: "missing_param", message: "message required")
         }
-        guard let session = resolveSession(target: target, terminalManager: terminalManager) else {
+        guard let session = resolveSession(target: target, terminalManager: terminalManager, modelContext: modelContext) else {
             return ControlRequestRouter.error(requestID, code: "not_found", message: "no live session matched '\(target)'")
         }
         // enqueueOrSend lives on TerminalSession itself.
@@ -1320,13 +1298,14 @@ enum TadoUseAutonomousHandlers {
     private static func tileRead(
         requestID: String,
         payload: ControlPayload,
-        terminalManager: TerminalManager
+        terminalManager: TerminalManager,
+        modelContext: ModelContext
     ) -> ControlResponseEnvelope {
         guard let target = payload.string("target") else {
             return ControlRequestRouter.error(requestID, code: "missing_param", message: "target required")
         }
         let tail = Int(payload.string("tail") ?? "") ?? 100
-        guard let session = resolveSession(target: target, terminalManager: terminalManager) else {
+        guard let session = resolveSession(target: target, terminalManager: terminalManager, modelContext: modelContext) else {
             return ControlRequestRouter.error(requestID, code: "not_found", message: "no live session matched '\(target)'")
         }
         let log = session.logBuffer
@@ -1343,12 +1322,13 @@ enum TadoUseAutonomousHandlers {
     private static func tileTerminate(
         requestID: String,
         payload: ControlPayload,
-        terminalManager: TerminalManager
+        terminalManager: TerminalManager,
+        modelContext: ModelContext
     ) -> ControlResponseEnvelope {
         guard let target = payload.string("target") else {
             return ControlRequestRouter.error(requestID, code: "missing_param", message: "target required")
         }
-        guard let session = resolveSession(target: target, terminalManager: terminalManager) else {
+        guard let session = resolveSession(target: target, terminalManager: terminalManager, modelContext: modelContext) else {
             return ControlRequestRouter.error(requestID, code: "not_found", message: "no live session matched")
         }
         terminalManager.terminateSession(session.id)
@@ -1442,7 +1422,8 @@ enum TadoUseAutonomousHandlers {
 
     private static func resolveSession(
         target: String,
-        terminalManager: TerminalManager
+        terminalManager: TerminalManager,
+        modelContext: ModelContext
     ) -> TerminalSession? {
         // 1. UUID match (todo or session)
         if let uuid = UUID(uuidString: target) {
@@ -1450,14 +1431,19 @@ enum TadoUseAutonomousHandlers {
                 return s
             }
         }
-        // 2. Grid coords (col,row 1-indexed)
+        // 2. Grid coords (col,row 1-indexed). Read gridColumns from
+        // the user's AppSettings — it's user-configurable via
+        // Settings + via tado_use_settings_set { canvas.gridColumns },
+        // so a hardcoded 3 here silently picked the wrong tile after
+        // a column change.
+        let columns = (try? modelContext.fetch(FetchDescriptor<AppSettings>()).first?.gridColumns) ?? 3
         let cleaned = target.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
         let parts = cleaned.split(whereSeparator: { $0 == "," || $0 == ":" })
             .map { $0.trimmingCharacters(in: .whitespaces) }
         if parts.count == 2,
            let col = Int(parts[0]), let row = Int(parts[1]),
            col >= 1, row >= 1 {
-            let idx = (row - 1) * 3 + (col - 1)
+            let idx = (row - 1) * columns + (col - 1)
             if let s = terminalManager.sessions.first(where: { $0.gridIndex == idx }) {
                 return s
             }
