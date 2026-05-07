@@ -4,10 +4,10 @@
 # Launching the app this way boots Tado AND (via DomeExtension.onAppLaunch)
 # the in-process Dome second-brain daemon in a single process.
 dev: sync-header
-	swift run -c release
+	swift run -c release Tado
 
 debug: sync-header
-	swift run -c debug
+	swift run -c debug Tado
 
 release: build
 

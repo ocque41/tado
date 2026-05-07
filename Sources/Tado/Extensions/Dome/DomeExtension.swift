@@ -71,6 +71,23 @@ enum DomeExtension: AppExtension {
             if let raw = tado_dome_recipe_seed_defaults() {
                 tado_string_free(raw)
             }
+            // Pre-warm the spawn-pack engine so the FIRST tile spawn
+            // doesn't pay the SQLite-open + cache-miss latency on the
+            // main actor. Fire-and-forget at .utility priority — failure
+            // is intentional no-op (rule 1: no watchdogs, no retries).
+            // Falls under Rung 6 of the universal IMPROVE ladder
+            // (IO/syscall reduction via amortization).
+            // See `.claude/skills/tado-canvas-spawn-smooth/SKILL.md`.
+            Task.detached(priority: .utility) {
+                _ = DomeContextPreamble.build(for: DomeContextPreamble.Context(
+                    agentName: nil,
+                    projectName: nil,
+                    projectID: nil,
+                    projectRoot: nil,
+                    teamName: nil,
+                    teammates: []
+                ))
+            }
             let mcpPath = resolveMcpBinaryPath()
             let statusLinePath = installStatusLineScript(vaultPath: vaultURL.path)
             await MainActor.run {

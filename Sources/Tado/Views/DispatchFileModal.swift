@@ -12,6 +12,14 @@ struct DispatchFileModal: View {
 
     @State private var draft: String = ""
     @State private var showReplanAlert: Bool = false
+    /// Layout mode applied to this dispatch run on Accept. `grid` is the
+    /// historical default — every tile flows into the canvas grid via
+    /// `CanvasLayout.position(forIndex:)`. `kanban` parks the architect
+    /// in column 0 and snaps phase tiles into named columns based on
+    /// the architect's `PhaseJSON.order` field. Read into the run by
+    /// `commitAndSpawnArchitect` so re-opening the modal preserves
+    /// whichever mode the user picked last.
+    @State private var dispatchMode: String = "grid"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,6 +91,36 @@ struct DispatchFileModal: View {
 
             Divider()
 
+            // Layout mode picker. Kanban-mode runs lay out the
+            // architect + phase tiles as named columns on the canvas;
+            // Grid (the default) keeps the historical flat-grid
+            // placement. Uses the design-system `ModeTab` primitive
+            // shared with the project page's Detail|Kanban toggle so
+            // every "view mode" segmented control reads the same.
+            HStack(spacing: 12) {
+                ModeTab(
+                    eyebrow: "LAYOUT",
+                    options: [
+                        .init(id: "grid", label: "Grid", icon: "square.grid.3x3"),
+                        .init(id: "kanban", label: "Kanban", icon: "rectangle.split.3x1"),
+                    ],
+                    selection: $dispatchMode
+                )
+                Spacer()
+                Text(dispatchMode == "kanban"
+                    ? "Phases become named columns on the canvas."
+                    : "Tiles flow into the canvas grid.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Palette.background)
+
+            Divider()
+
             // Footer hint
             HStack {
                 Text(run.state == "drafted"
@@ -103,6 +141,7 @@ struct DispatchFileModal: View {
         .background(Palette.background)
         .onAppear {
             draft = run.brief
+            dispatchMode = run.dispatchMode
         }
         .alert("Delete existing plan and re-plan?", isPresented: $showReplanAlert) {
             Button("Delete & Re-plan", role: .destructive) {
@@ -127,6 +166,12 @@ struct DispatchFileModal: View {
 
     private func commitAndSpawnArchitect() {
         run.brief = draft
+        // Kanban-mode runs need their `dispatchMode` set BEFORE
+        // spawnArchitect so the spawn helper can choose
+        // `kanbanPosition(...)` over `position(forIndex:)`. After this
+        // assignment the architect tile lands in column 0 and phase
+        // tiles snap into columns 1..N as they're dispatched.
+        run.dispatchMode = dispatchMode
         try? modelContext.save()
 
         DispatchPlanService.spawnArchitect(

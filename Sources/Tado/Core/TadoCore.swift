@@ -36,7 +36,17 @@ enum TadoCore {
         return String(cString: cstr)
     }
 
-    final class Session {
+    /// `Sendable` is asserted manually (`@unchecked`) because the
+    /// Rust side wraps every mutating operation behind a
+    /// `parking_lot::Mutex`, the PTY reader runs on a Rust-owned OS
+    /// thread, and the only Swift-side stored property
+    /// (`fileprivate let handle: OpaquePointer`) is immutable after
+    /// init. This lets `MetalTerminalTileView.spawnIfNeeded` build
+    /// a `Session` inside `Task.detached` and hand the value back
+    /// across the actor hop without pinning the main thread on the
+    /// fork+exec path. Swift can't see the Rust-side guarantees,
+    /// hence `@unchecked`.
+    final class Session: @unchecked Sendable {
         fileprivate let handle: OpaquePointer
 
         init?(

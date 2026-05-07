@@ -150,6 +150,34 @@ extension TadoEvent {
         )
     }
 
+    /// Emitted when the engine-aware sanitizer (`ProcessSpawner.sanitizeFlags`)
+    /// drops a flag because `CLICapabilities` discovered the value is
+    /// not in the installed CLI's documented enum. Surfaces in the
+    /// notifications history so the user sees what was filtered.
+    static func spawnFlagDropped(sessionID: UUID?, title: String, flag: String, value: String, engine: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "spawn.flagDropped",
+            severity: .warning,
+            source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
+            title: "Dropped \(flag) \(value)",
+            body: "\(engine) does not accept \(value); flag was filtered before spawn (\(title))."
+        )
+    }
+
+    /// Emitted when the per-tile fallback ladder respawns a session
+    /// after a CLI-rejection-style termination. `from`/`to` describe
+    /// the human-readable ladder rung (e.g. "auto effort → no effort"
+    /// or "opus47_1M model → opus47 model").
+    static func spawnFallbackApplied(sessionID: UUID, title: String, from: String, to: String, reason: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "spawn.fallbackApplied",
+            severity: .warning,
+            source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
+            title: "Fallback: \(from) → \(to)",
+            body: "Reason: \(reason). Re-spawning \(title) with the fallback configuration."
+        )
+    }
+
     static func terminalBell(sessionID: UUID, title: String, projectName: String?) -> TadoEvent {
         TadoEvent(
             type: "terminal.bell",

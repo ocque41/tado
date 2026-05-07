@@ -92,7 +92,7 @@ happening again.
 
 ```bash
 swift build                                  # Build the Swift app
-swift run                                    # Build and run
+swift run Tado                               # Build and run the macOS app (the package now also has a tado-use-bridge product, so the explicit name is required)
 make dev                                     # Build Rust core (release) + sync header + run Swift app
 make mcp                                     # Build dome-mcp + tado-mcp stdio bridges (Rust [[bin]]s)
 make perf-suite                              # Build perf-suite binary (Eternal Performance step)
@@ -1101,7 +1101,7 @@ place to look up "how do I check that this PR is good".
 | Step | Command | When to run |
 |---|---|---|
 | Swift compile | `cd /Users/miguel/Documents/tado && swift build` | Every Swift edit |
-| Swift run | `swift run` | Quick sanity check (sub-2s relink) |
+| Swift run | `swift run Tado` | Quick sanity check (sub-2s relink) |
 | Rust core (debug) | `cd tado-core && cargo build -p tado-core` | Every Rust edit on the FFI side |
 | Rust core (release) | `cd tado-core && cargo build --release -p bt-core -p tado-core` | Before linking the Swift app, before any release tag |
 | MCP bridges | `make mcp` (= `cargo build --release -p dome-mcp -p tado-mcp`) | When agent-facing MCP shape changes |

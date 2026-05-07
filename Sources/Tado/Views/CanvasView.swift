@@ -7,6 +7,14 @@ struct CanvasView: View {
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Project.createdAt) private var allProjects: [Project]
+    /// Active dispatch runs — used by the kanban-mode overlay to look
+    /// up `dispatchMode` for sessions linked via `dispatchRunID`. Cheap
+    /// because the row count is bounded by the runs the user has ever
+    /// created, and the @Query subscribes to ModelContext.didSave so
+    /// flipping a run from `grid` to `kanban` mid-session re-renders
+    /// the overlay automatically.
+    @Query private var allDispatchRuns: [DispatchRun]
+    @Query private var allKanbanColumns: [KanbanColumn]
 
     @State private var scale: CGFloat = 0.75
     @State private var offset: CGSize = .zero
@@ -75,6 +83,38 @@ struct CanvasView: View {
     /// width). Headers, separators, and the tile lane all align to this.
     private func zoneWidth(gridColumns: Int) -> CGFloat {
         max(1, CGFloat(gridColumns)) * CanvasLayout.tileWidth
+    }
+
+    /// Dispatch runs in `kanban` mode that have at least one tile in
+    /// the given zone. The overlay only renders column headers for
+    /// these runs; grid-mode runs render no kanban chrome at all.
+    private func kanbanRunsInZone(_ zone: (name: String, sessions: [TerminalSession])) -> [DispatchRun] {
+        let runIDs = Set(zone.sessions.compactMap(\.dispatchRunID))
+        guard !runIDs.isEmpty else { return [] }
+        return allDispatchRuns
+            .filter { runIDs.contains($0.id) && $0.dispatchMode == "kanban" }
+    }
+
+    /// Materialized `KanbanColumn` rows for a kanban-mode dispatch run,
+    /// sorted ascending by `orderIndex` so column 0 (Architect) sits
+    /// leftmost. The architect's column row is created up-front by
+    /// `materializeKanbanColumns` even before plan.json lands.
+    private func kanbanColumns(for run: DispatchRun) -> [KanbanColumn] {
+        allKanbanColumns
+            .filter { $0.kind == "dispatch-phase" && $0.dispatchRunID == run.id }
+            .sorted { $0.orderIndex < $1.orderIndex }
+    }
+
+    /// How many sessions belong to the given run AND have their
+    /// persisted `canvasX` aligned with the column's `orderIndex`.
+    /// Tiles snap into a column at spawn time, so the X comparison
+    /// reads the persisted truth without re-deriving phase order.
+    private func kanbanTileCount(run: DispatchRun, column: KanbanColumn) -> Int {
+        let columnX = CanvasLayout.kanbanColumnCenterX(columnIndex: column.orderIndex)
+        let tolerance: CGFloat = 0.5
+        return terminalManager.sessions.filter { s in
+            s.dispatchRunID == run.id && abs(s.canvasPosition.x - columnX) < tolerance
+        }.count
     }
 
     /// Number of tile rows a zone needs to fit its sessions. Always ≥1
@@ -146,6 +186,35 @@ struct CanvasView: View {
                         x: bandWidth / 2,
                         y: yOff + zoneHeaderHeight / 2
                     )
+
+                    // Kanban column headers — drawn once per
+                    // kanban-mode dispatch run that has tiles in this
+                    // zone. The columns sit inside the zone's tile lane
+                    // (so the regular zone header still describes the
+                    // project). Draws every column the architect
+                    // materialized + an "Architect" header at column 0
+                    // even before phase columns exist.
+                    let laneTopY = yOff + zoneHeaderHeight + zoneHeaderToTilesGap
+                    ForEach(kanbanRunsInZone(zone), id: \.id) { run in
+                        let columns = kanbanColumns(for: run)
+                        ForEach(Array(columns.enumerated()), id: \.element.id) { _, col in
+                            KanbanColumnHeader(
+                                title: col.title,
+                                phaseLabel: col.orderIndex == 0
+                                    ? "ARCHITECT"
+                                    : "PHASE \(col.orderIndex)",
+                                tileCount: kanbanTileCount(run: run, column: col)
+                            )
+                            .frame(
+                                width: CanvasLayout.tileWidth,
+                                height: CanvasLayout.kanbanColumnHeaderHeight
+                            )
+                            .position(
+                                x: CanvasLayout.kanbanColumnCenterX(columnIndex: col.orderIndex),
+                                y: laneTopY + CanvasLayout.kanbanColumnHeaderHeight / 2
+                            )
+                        }
+                    }
                 }
 
                 // Session tiles with zone Y offsets.
@@ -922,6 +991,55 @@ private struct ProjectZoneHeader: View {
         .overlay(
             RoundedRectangle(cornerRadius: DK.radius)
                 .stroke(Palette.divider, lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Kanban column header
+//
+// Drawn above each tile lane of a kanban-mode dispatch run. The phase
+// label ("ARCHITECT" / "PHASE 1" / …) reads as a small all-caps
+// monospace tag so it doesn't compete with the column title for the
+// eye. Tile count appears as a chip on the right when at least one
+// tile is anchored to the column.
+private struct KanbanColumnHeader: View {
+    let title: String
+    let phaseLabel: String
+    let tileCount: Int
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(phaseLabel)
+                    .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.ink3)
+                Text(title)
+                    .font(Typography.heading)
+                    .foregroundStyle(Palette.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 8)
+            if tileCount > 0 {
+                Text("\(tileCount)")
+                    .font(Typography.monoCaption)
+                    .foregroundStyle(Palette.ink2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Palette.bgRowHi)
+                    .clipShape(Capsule())
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .fill(Palette.bgElev)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DK.radius)
+                .stroke(Palette.accentSoft, lineWidth: DK.ruleW)
         )
     }
 }

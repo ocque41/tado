@@ -102,6 +102,14 @@ final class RunEventWatcher {
             if announcedReviews.contains(key) { continue }
             if DispatchPlanService.craftedExistsOnDisk(run) {
                 publishAwaitingReview(kind: .dispatch, run: run)
+                // Kanban materialization on relaunch: if the architect
+                // finished writing the plan while Tado was quit, replay
+                // the column reconciliation here so the canvas has the
+                // right lanes when the user opens it. No-op for grid mode.
+                DispatchPlanService.materializeKanbanColumns(
+                    run: run,
+                    modelContext: context
+                )
                 announcedReviews.insert(key)
                 continue
             }
@@ -138,6 +146,16 @@ final class RunEventWatcher {
         guard !announcedReviews.contains(key) else { return }
         announcedReviews.insert(key)
         publishAwaitingReview(kind: .dispatch, run: run)
+        // Kanban mode — materialize one KanbanColumn per phase the
+        // architect just wrote. Idempotent on the helper's side, so
+        // re-plans (which fire this same callback after the modal's
+        // re-plan path) reconcile cleanly. Grid-mode runs short-circuit
+        // inside the helper; calling unconditionally avoids splitting
+        // the watcher's logic.
+        DispatchPlanService.materializeKanbanColumns(
+            run: run,
+            modelContext: context
+        )
         craftedWatchers[key]?.cancel()
         craftedWatchers.removeValue(forKey: key)
     }

@@ -301,4 +301,21 @@ extension DomeContextPreamble {
         guard let preamble = build(for: ctx) else { return userPrompt }
         return preamble + "\n\n---\n\n" + userPrompt
     }
+
+    /// Async sibling of `prependedPrompt(for:userPrompt:)`. Hops the
+    /// blocking `build(...)` work — including any FFI/SQLite calls
+    /// inside `composeViaRust` and `recentProjectNotesFragment` — onto
+    /// a `.userInitiated` background queue. Returns byte-identical
+    /// output to the sync sibling for the same input; the
+    /// `spawn_pack_byte_equiv` integration test pins that contract.
+    /// See `.claude/skills/tado-canvas-spawn-smooth/SKILL.md` for why.
+    static func prependedPrompt(for ctx: Context, userPrompt: String) async -> String {
+        let preamble = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: build(for: ctx))
+            }
+        }
+        guard let preamble else { return userPrompt }
+        return preamble + "\n\n---\n\n" + userPrompt
+    }
 }

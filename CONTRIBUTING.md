@@ -12,7 +12,7 @@ This project follows the [Contributor Covenant v2.1](https://www.contributor-cov
 git clone https://github.com/ocque41/tado.git
 cd tado
 swift build
-swift run
+swift run Tado
 ```
 
 **Requirements**: macOS 14+, Swift 5.10+ / Xcode 15.3+

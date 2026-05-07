@@ -22,12 +22,29 @@ import Foundation
 enum TodoCommand: Equatable {
     case standardPrompt(String)
     case coordinator(brief: String)
+    /// `/pet` — toggle the floating Tado Pets companion. No payload.
+    case togglePet
+    /// `/hatch <prompt>` — open the Pets hatch sheet with the
+    /// prompt prefilled. Bare `/hatch` opens the sheet with an
+    /// empty prompt.
+    case hatchPet(prompt: String)
 
     static func detect(_ input: String) -> TodoCommand {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .standardPrompt(trimmed) }
 
         let lower = trimmed.lowercased()
+
+        // `/pet` — case-insensitive exact match.
+        if lower == "/pet" { return .togglePet }
+        // `/hatch ...` (or bare `/hatch`).
+        if lower == "/hatch" { return .hatchPet(prompt: "") }
+        if lower.hasPrefix("/hatch ") {
+            let prompt = String(trimmed.dropFirst("/hatch ".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .hatchPet(prompt: prompt)
+        }
+
         // Bare `tado` with no brief — fall through to standard.
         // The user might just be typing the word and pause; we
         // shouldn't kidnap their input.

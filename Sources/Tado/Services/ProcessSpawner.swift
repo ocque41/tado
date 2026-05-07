@@ -8,6 +8,7 @@ enum ProcessSpawner {
         if let agentName, engine == .claude {
             flags.insert(contentsOf: ["--agent", agentName], at: 0)
         }
+        flags = sanitizeFlags(flags)
         // Every flag token is shell-escaped so zsh doesn't mis-interpret
         // glob metacharacters. Load-bearing for `--model opus[1m]` (the
         // 1M-context Opus variant) — unquoted `opus[1m]` would trigger
@@ -36,6 +37,93 @@ enum ProcessSpawner {
     static func shellEscape(_ text: String) -> String {
         let escaped = text.replacingOccurrences(of: "'", with: "'\\''")
         return "'\(escaped)'"
+    }
+
+    /// Drop any `(flag, value)` pair whose value is the literal sentinel
+    /// `"auto"` (and the engine-specific Codex variants like
+    /// `model_reasoning_effort="auto"` baked into a `-c` payload).
+    ///
+    /// `"auto"` is Tado's UI sentinel meaning "do not send this flag — let
+    /// the CLI pick its own default." `ClaudeEffort.cliFlags` and
+    /// `CodexEffort.cliFlags` already honor this by returning `[]`, but
+    /// any composed flag list that flows through generic call sites
+    /// (Eternal worker assembly, tado-deploy, retry/fallback respawns)
+    /// can re-introduce the literal. This helper guarantees that whatever
+    /// the upstream picker emitted, the actual CLI invocation never sees
+    /// `--effort auto` / `--model auto` / `-c key="auto"` (any of which
+    /// the CLI rejects with "must be one of: low, medium, high, xhigh, max"
+    /// or similar shape).
+    ///
+    /// Safe to call on any `[String]` flag list. Pure / order-preserving.
+    static func sanitizeFlags(_ flags: [String]) -> [String] {
+        var out: [String] = []
+        var i = 0
+        while i < flags.count {
+            let token = flags[i]
+            if token.hasPrefix("--"), i + 1 < flags.count, flags[i + 1] == "auto" {
+                // Two-token flag with literal "auto" value — drop both.
+                i += 2
+                continue
+            }
+            if token == "-c", i + 1 < flags.count {
+                let payload = flags[i + 1]
+                // Codex `-c key="auto"` and `-c key=auto` both should be
+                // dropped. Match either quoting style.
+                if payload.hasSuffix("=\"auto\"") || payload.hasSuffix("=auto") {
+                    i += 2
+                    continue
+                }
+            }
+            out.append(token)
+            i += 1
+        }
+        return out
+    }
+
+    /// Engine-aware sanitizer. Runs the universal `"auto"` filter, then
+    /// consults `CLICapabilities` to drop any `(--flag, value)` pair
+    /// whose value is documented to be invalid by the installed CLI's
+    /// own `--help` text.
+    ///
+    /// Why a second arity instead of a single helper: the engine-
+    /// agnostic call sites (e.g. `codexExecCommand` after the embed
+    /// shim is composed, mixed-engine tests) are content with the
+    /// universal filter. The engine-aware call sites (every spawn that
+    /// has already chosen a CLI) get the additional safety net.
+    /// `CLICapabilities.shouldRejectValue` returns `false` whenever the
+    /// cache hasn't probed yet — this method NEVER drops a flag because
+    /// the cache is empty, only when the CLI explicitly told us the
+    /// value would be rejected.
+    @MainActor
+    static func sanitizeFlags(_ flags: [String], engine: TerminalEngine) -> [String] {
+        let universal = sanitizeFlags(flags)
+        let caps = CLICapabilities.shared
+        caps.probe(engine)
+        var out: [String] = []
+        var i = 0
+        while i < universal.count {
+            let token = universal[i]
+            if token.hasPrefix("--"), i + 1 < universal.count {
+                let value = universal[i + 1]
+                if caps.shouldRejectValue(engine: engine, flag: token, value: value) {
+                    EventBus.shared.publish(
+                        .spawnFlagDropped(
+                            sessionID: nil,
+                            title: "pre-spawn sanitize",
+                            flag: token,
+                            value: value,
+                            engine: engine.rawValue,
+                            projectName: nil
+                        )
+                    )
+                    i += 2
+                    continue
+                }
+            }
+            out.append(token)
+            i += 1
+        }
+        return out
     }
 
     /// Display-mode env knobs forwarded to the Claude Code CLI. Mirrors AppSettings so
@@ -410,6 +498,8 @@ enum ProcessSpawner {
           tado-memory {read,note,search,path} [scope]
           tado-dome {register,query,read,code-search,...} [--toon]
                                                     \u{2014} scoped Dome knowledge from canvas agents
+          tado-kanban {list, move <todo-id> <column-key>, add-column --title <text>}
+                                                    \u{2014} per-project Kanban board (cards + columns)
 
         **Target resolution** (priority order, same for `tado-read` and `tado-send`):
           1. Exact UUID
@@ -1672,7 +1762,11 @@ enum ProcessSpawner {
             parts.append("--model")
             parts.append(shellEscape(modelID))
         }
-        if let effortLevel, !effortLevel.isEmpty {
+        // `"auto"` is the same skip-the-flag sentinel honored by
+        // `ClaudeEffort.cliFlags` and `eternalWorkerEnv` (see :1769). The
+        // CLI rejects `--effort auto` with "must be one of: low, medium,
+        // high, xhigh, max" — this guard is the missing twin of that one.
+        if let effortLevel, !effortLevel.isEmpty, effortLevel != "auto" {
             parts.append("--effort")
             parts.append(shellEscape(effortLevel))
         }
@@ -1701,8 +1795,12 @@ enum ProcessSpawner {
     ) -> (executable: String, args: [String]) {
         _ = projectRoot
         var parts: [String] = ["codex"]
-        parts.append(contentsOf: codexPreFlags.map(shellEscape))
-        parts.append(contentsOf: codexPostFlags.map(shellEscape))
+        // Sanitize each phase independently so a `-c key="auto"` payload
+        // (or any future literal-"auto" foot-gun) is dropped before the
+        // codex invocation is composed. Mirrors the safety net in
+        // `command(for:engine:...)` for one-shot tile spawns.
+        parts.append(contentsOf: sanitizeFlags(codexPreFlags).map(shellEscape))
+        parts.append(contentsOf: sanitizeFlags(codexPostFlags).map(shellEscape))
         let inner = parts.joined(separator: " ")
         return ("/bin/zsh", ["-l", "-c", inner])
     }
@@ -1821,7 +1919,7 @@ enum ProcessSpawner {
         flags: [String]
     ) -> (executable: String, args: [String]) {
         let escaped = shellEscape(prompt)
-        let allFlags = flags.map(shellEscape).joined(separator: " ")
+        let allFlags = sanitizeFlags(flags).map(shellEscape).joined(separator: " ")
         let cmd = allFlags.isEmpty
             ? "codex exec \(escaped)"
             : "codex exec \(allFlags) \(escaped)"

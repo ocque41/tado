@@ -402,6 +402,12 @@ struct TodoListView: View {
         switch TodoCommand.detect(text) {
         case .coordinator(let brief):
             submitCoordinatorTodo(originalText: text, brief: brief)
+        case .togglePet:
+            PetsCoordinator.shared.toggleVisible()
+            inputText = ""
+        case .hatchPet(let prompt):
+            PetsCoordinator.shared.openHatchSheet(prefilled: prompt)
+            inputText = ""
         case .standardPrompt:
             submitNewTodo(text)
         }

@@ -228,6 +228,14 @@ final class TerminalSession: Identifiable {
     var onCwdChange: ((String) -> Void)?
     var onLogFlush: ((String) -> Void)?
 
+    /// Fires from `markTerminated` when grid-grep finds a CLI-rejection
+    /// signature on a non-Eternal-worker session. The handler — set by
+    /// `TerminalManager.spawnAndWire` — drives the fallback ladder.
+    /// Closure shape matches the rest of the side-channel callbacks
+    /// above; `weak`-captured by the manager so a late-fire after the
+    /// session is discarded is a no-op.
+    var onSpawnRejected: ((TerminalSession) -> Void)?
+
     func appendLog(_ text: String) {
         logBuffer.append(text)
         if logBuffer.utf8.count > Self.logBufferByteCap {
@@ -528,6 +536,107 @@ final class TerminalSession: Identifiable {
         "approve this"
     ]
 
+    /// A best-effort classification of a non-zero PTY exit, used by
+    /// `TerminalManager.applySpawnFallback` to decide whether the
+    /// fallback ladder should engage.
+    ///
+    /// We populate this *only* when the bottom of the grid contains an
+    /// `error: option ...`-shaped string from the CLI itself (never from
+    /// the agent). The categories below are coarse on purpose — the
+    /// driver doesn't need to know the exact rejected token, only which
+    /// rung of the ladder to try next.
+    enum SpawnRejectionKind: Equatable {
+        /// `claude: error: option ...` / `error: invalid value 'auto' for ...`
+        /// — value didn't match the flag's enum.
+        case invalidEnumValue(flag: String?, value: String?)
+        /// `error: unknown option`-shape — the flag itself doesn't exist.
+        case unknownFlag(flag: String?)
+        /// `error: model not found` / similar — the `--model <id>` slug
+        /// is unknown to the CLI / server.
+        case modelNotFound(model: String?)
+    }
+
+    /// Set on the session at termination time when grid-grep finds a
+    /// CLI-rejection signature. Drives `TerminalManager.applySpawnFallback`.
+    /// `nil` means either the exit was successful or the failure
+    /// originated inside the agent (which the ladder MUST NOT touch).
+    @ObservationIgnored var spawnRejection: SpawnRejectionKind?
+
+    /// Set to `true` exactly once when `applySpawnFallback` re-spawns.
+    /// Prevents the ladder from looping if the fallback config also dies
+    /// the same way (the user gets a final `terminalFailed` event then).
+    @ObservationIgnored var fallbackAttempted: Bool = false
+
+    /// Read by `TerminalManager.applySpawnFallback` to decide whether
+    /// the ladder should engage at all. Eternal worker tiles route
+    /// failures through `EternalService.handleWorkerCompleted`, which
+    /// owns the loop's continuation policy — stepping in front of it
+    /// would violate the "no watchdogs / auto-retry on dispatch chain"
+    /// project rule (CLAUDE.md rule 1).
+    @MainActor
+    var isEligibleForSpawnFallback: Bool {
+        return !isEternalWorker && !fallbackAttempted && spawnRejection != nil
+    }
+
+    /// Scan the bottom ~24 rows of the live grid for CLI-rejection
+    /// patterns. Returns nil if nothing matches; otherwise classifies
+    /// the rejection so the fallback driver can pick the right ladder
+    /// rung. Uses the same `core.snapshotFull()` path as
+    /// `isScreenAwaitingResponse()` — bounded work, no allocations
+    /// past the cells-to-text pass.
+    @MainActor
+    func detectSpawnRejection() -> SpawnRejectionKind? {
+        guard let core = coreSession,
+              let snap = core.snapshotFull() else { return nil }
+        let cols = Int(snap.cols)
+        let rows = Int(snap.rows)
+        guard cols > 0, rows > 0,
+              snap.cells.count >= cols * rows else { return nil }
+        let scanRows = min(rows, 24)
+        let startRow = rows - scanRows
+        var text = String()
+        text.reserveCapacity(scanRows * cols + scanRows)
+        for r in startRow..<rows {
+            for c in 0..<cols {
+                let cell = snap.cells[r * cols + c]
+                if cell.ch == 0 {
+                    text.append(" ")
+                } else if let scalar = Unicode.Scalar(cell.ch) {
+                    text.unicodeScalars.append(scalar)
+                }
+            }
+            text.append("\n")
+        }
+        let lower = text.lowercased()
+        // "model not found" wins over the generic enum-value rejection
+        // because it dictates a different ladder rung (model-step, not
+        // limit-step).
+        if lower.contains("model not found")
+            || lower.contains("unknown model")
+            || lower.contains("invalid model") {
+            return .modelNotFound(model: nil)
+        }
+        // "unknown option" / "unrecognized option" — the flag itself
+        // doesn't exist on this CLI version.
+        if lower.contains("unknown option")
+            || lower.contains("unrecognized option")
+            || lower.contains("unknown argument") {
+            return .unknownFlag(flag: nil)
+        }
+        // Generic "error: option ..." / "error: invalid value ..." /
+        // "must be one of" — the flag exists but the value didn't match
+        // its enum. Most common shape in practice; covers `--effort auto`,
+        // `--permission-mode <stale>`, `-c model_reasoning_effort=<bad>`.
+        if lower.contains("error: option")
+            || lower.contains("invalid value")
+            || lower.contains("must be one of")
+            || lower.contains("error: argument")
+            || lower.contains("error: invalid value") {
+            return .invalidEnumValue(flag: nil, value: nil)
+        }
+        return nil
+    }
+
     func markTerminated(exitCode: Int32?) {
         self.isRunning = false
         self.exitCode = exitCode
@@ -537,10 +646,23 @@ final class TerminalSession: Identifiable {
                 .terminalCompleted(sessionID: id, title: title, projectName: projectName)
             )
         } else {
+            // Grid-grep BEFORE the failure event is published so the
+            // fallback driver sees a fully-populated `spawnRejection`
+            // when it decides whether to engage. Skipped for Eternal
+            // workers — they own their own loop policy.
+            if !isEternalWorker {
+                spawnRejection = detectSpawnRejection()
+            }
             status = .failed
             EventBus.shared.publish(
                 .terminalFailed(sessionID: id, title: title, exitCode: exitCode, projectName: projectName)
             )
+            // Drive the fallback ladder AFTER the failed event so the
+            // user always sees the failure telemetry first; the
+            // ladder then publishes its own `spawnFallbackApplied`
+            // event in addition. The closure is a no-op if the manager
+            // decided this session is ineligible.
+            onSpawnRejected?(self)
         }
         onStatusChange?(status)
     }

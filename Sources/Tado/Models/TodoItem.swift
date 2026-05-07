@@ -43,6 +43,21 @@ final class TodoItem {
     /// behalf, and exits. Default false; lightweight SwiftData
     /// migration auto-fills false on existing rows.
     var isCoordinator: Bool = false
+    /// Soft pointer to a `KanbanColumn.columnKey` when this todo is
+    /// rendered as a card on the project's general Kanban board.
+    /// `nil` means "not on the board" — equivalent to a virtual
+    /// "Backlog" lane the UI synthesizes for unassigned cards. Cards
+    /// on a kanban-mode dispatch run's canvas are positioned by the
+    /// session's `dispatchRunID` + `runRole` instead, NOT by this
+    /// field; this field is exclusively for the project page's
+    /// Detail|Kanban toggle. Lightweight SwiftData migration leaves
+    /// this nil on every pre-existing row.
+    var kanbanColumnKey: String?
+    /// Sort order within a Kanban column. Lower first. Used by the
+    /// per-project board's lane rendering and updated by drag-and-drop
+    /// reorders. Lightweight SwiftData migration defaults to 0 on
+    /// pre-existing rows; the board view rebuilds densities lazily.
+    var kanbanOrderIndex: Int = 0
     static let maxLogSize = 256 * 1024
 
     init(text: String, gridIndex: Int, canvasPosition: CGPoint) {

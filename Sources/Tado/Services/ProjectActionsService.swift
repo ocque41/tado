@@ -205,6 +205,46 @@ enum ProjectActionsService {
         }
     }
 
+    // MARK: - Kanban
+
+    /// Seed the default `Backlog / Doing / Done` columns for one
+    /// project's general Kanban board if it has none yet. Called from
+    /// `ProjectKanbanView.onAppear` so the user lands on a populated
+    /// board the first time they switch the page mode. Safe to call
+    /// every onAppear — the early-exit short-circuits when columns
+    /// already exist. Only seeds `kind == "project"` rows;
+    /// dispatch-phase columns are owned by `materializeKanbanColumns`.
+    @discardableResult
+    static func seedKanbanColumns(
+        project: Project,
+        modelContext: ModelContext
+    ) -> [KanbanColumn] {
+        let projectID = project.id
+        let descriptor = FetchDescriptor<KanbanColumn>(
+            predicate: #Predicate<KanbanColumn> { col in
+                col.kind == "project" && col.project?.id == projectID
+            }
+        )
+        let existing = (try? modelContext.fetch(descriptor)) ?? []
+        if !existing.isEmpty {
+            return existing.sorted { $0.orderIndex < $1.orderIndex }
+        }
+        var seeded: [KanbanColumn] = []
+        for (index, defaults) in KanbanColumn.defaultProjectColumns.enumerated() {
+            let col = KanbanColumn(
+                project: project,
+                kind: "project",
+                columnKey: defaults.key,
+                title: defaults.title,
+                orderIndex: index
+            )
+            modelContext.insert(col)
+            seeded.append(col)
+        }
+        try? modelContext.save()
+        return seeded
+    }
+
     // MARK: - Internal helpers
 
     private static func nextAvailableGridIndex(modelContext: ModelContext) -> Int {

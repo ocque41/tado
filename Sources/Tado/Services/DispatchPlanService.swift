@@ -253,7 +253,15 @@ enum DispatchPlanService {
             runID: run.id
         )
         let index = nextAvailableGridIndex(modelContext: modelContext)
-        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+        // Kanban-mode runs park the architect in column 0 of the run's
+        // lane. Grid-mode falls back to the historical behavior — flat
+        // grid via `position(forIndex:)`. Persisting the kanban
+        // coordinates onto the TodoItem means the canvas renderer (which
+        // reads `session.canvasPosition`) snaps the tile into place
+        // automatically; no per-frame mode branch needed.
+        let position = (run.dispatchMode == "kanban")
+            ? CanvasLayout.kanbanPosition(columnIndex: 0, rowInColumn: 0)
+            : CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
         let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
         todo.projectID = project.id
@@ -309,7 +317,12 @@ enum DispatchPlanService {
         }
 
         let index = nextAvailableGridIndex(modelContext: modelContext)
-        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+        // Kanban-mode: phase 1 lives in column 1 (column 0 is the
+        // architect). Grid-mode falls back to the flat-grid placement
+        // that's been the dispatch default since v0.6.
+        let position = (run.dispatchMode == "kanban")
+            ? CanvasLayout.kanbanPosition(columnIndex: phase.order, rowInColumn: 0)
+            : CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
         let todo = TodoItem(text: phase.prompt, gridIndex: index, canvasPosition: position)
         todo.projectID = project.id
@@ -366,5 +379,114 @@ enum DispatchPlanService {
             terminalManager: terminalManager,
             appState: appState
         )
+    }
+
+    // MARK: - Kanban materialization
+
+    /// Decode every `phases/*.json` for one run and return the parsed
+    /// list, sorted ascending by `order`. Used by the kanban
+    /// materializer (and the test harness) to turn the on-disk plan
+    /// into something we can iterate without the SwiftUI runtime in
+    /// the loop.
+    static func allPhases(_ run: DispatchRun) -> [PhaseJSON] {
+        let fm = FileManager.default
+        let phasesDir = phasesDirURL(run)
+        guard let files = try? fm.contentsOfDirectory(at: phasesDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        let decoder = JSONDecoder()
+        let phases: [PhaseJSON] = files
+            .filter { $0.pathExtension == "json" }
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return try? decoder.decode(PhaseJSON.self, from: data)
+            }
+        return phases.sorted { $0.order < $1.order }
+    }
+
+    /// Reconcile `KanbanColumn` rows for a kanban-mode dispatch run with
+    /// the architect's plan on disk. Idempotent — safe to call on every
+    /// `plan.json` write event. Always seeds an "Architect" column at
+    /// orderIndex 0 so the architect tile has a labeled lane even before
+    /// the architect finishes planning. For each phase: upsert by
+    /// `columnKey = "<run.shortID>-<order>"` so re-plans that keep the
+    /// same phase order can update the title without churning the row.
+    /// Phases removed by a re-plan get their KanbanColumn rows deleted
+    /// so the canvas doesn't show empty zombie lanes; tile data on those
+    /// rows is unaffected (tiles are owned by TodoItem / TerminalSession,
+    /// not by KanbanColumn).
+    @MainActor
+    static func materializeKanbanColumns(run: DispatchRun, modelContext: ModelContext) {
+        guard run.dispatchMode == "kanban" else { return }
+        guard let project = run.project else { return }
+
+        let runID = run.id
+        let descriptor = FetchDescriptor<KanbanColumn>(
+            predicate: #Predicate<KanbanColumn> { col in
+                col.kind == "dispatch-phase" && col.dispatchRunID == runID
+            }
+        )
+        var existing: [String: KanbanColumn] = [:]
+        for col in (try? modelContext.fetch(descriptor)) ?? [] {
+            existing[col.columnKey] = col
+        }
+
+        // Architect lane lives at orderIndex 0. Always present, even
+        // when planning hasn't started.
+        let architectKey = KanbanColumn.dispatchPhaseColumnKey(
+            runShortID: run.shortID,
+            order: 0
+        )
+        if let arch = existing.removeValue(forKey: architectKey) {
+            arch.title = "Architect"
+            arch.orderIndex = 0
+            arch.project = project
+        } else {
+            let arch = KanbanColumn(
+                project: project,
+                kind: "dispatch-phase",
+                columnKey: architectKey,
+                title: "Architect",
+                orderIndex: 0,
+                dispatchRunID: run.id
+            )
+            modelContext.insert(arch)
+        }
+
+        // One column per phase. PhaseJSON.order is 1-based per the
+        // architect prompt contract; we use it directly as orderIndex
+        // so the architect's lane (0) and phase lanes (1..N) sort
+        // correctly.
+        for phase in allPhases(run) {
+            let key = KanbanColumn.dispatchPhaseColumnKey(
+                runShortID: run.shortID,
+                order: phase.order
+            )
+            if let col = existing.removeValue(forKey: key) {
+                col.title = phase.title
+                col.orderIndex = phase.order
+                col.project = project
+            } else {
+                let col = KanbanColumn(
+                    project: project,
+                    kind: "dispatch-phase",
+                    columnKey: key,
+                    title: phase.title,
+                    orderIndex: phase.order,
+                    dispatchRunID: run.id
+                )
+                modelContext.insert(col)
+            }
+        }
+
+        // Anything left in `existing` is a column whose phase the
+        // re-plan removed. Drop it so the canvas doesn't show stale
+        // lanes. Tile data is owned by TodoItem / TerminalSession;
+        // deleting the column doesn't affect any spawned tile.
+        for orphan in existing.values {
+            modelContext.delete(orphan)
+        }
+
+        try? modelContext.save()
     }
 }

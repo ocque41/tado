@@ -153,220 +153,254 @@ struct MetalTerminalTileView: View {
     private func spawnIfNeeded() {
         guard session.coreSession == nil else { return }
 
-        // Eternal workers spawn one of two ways depending on
-        // `session.eternalLoopKind`:
-        //   - "external" (default): eternal-loop.sh wrapper respawns
-        //     `claude -p` each turn; Stop-hook recursion counter resets
-        //     every cycle.
-        //   - "internal": `claude --permission-mode auto` interactive,
-        //     no wrapper. One session for the whole run. Context grows
-        //     and auto-compacts. Continuation driven by Tado's idle-
-        //     injection (below) + a `/loop` command typed after the
-        //     first turn.
-        let executable: String
-        let args: [String]
-        if session.isEternalWorker, let projectRoot = session.projectRoot {
-            let kind = session.eternalLoopKind ?? "external"
-            let cmd: (executable: String, args: [String])
-            if kind == "internal" {
-                // session.eternalModelID / .eternalEffortLevel are stamped
-                // from AppSettings at spawn time in EternalService.spawnWorker.
-                // Without threading them here the TUI would read the user's
-                // global ~/.claude/settings.json defaults and silently ignore
-                // Tado's picker.
-                //
-                // Codex internal-mode workers route through a different
-                // command builder: codex doesn't take `--model` /
-                // `--effort` in the same shape as claude, so the spawn
-                // path pre-bundles those into eternalCodexPostFlags and
-                // we hand them through here directly. The resulting
-                // session is interactive (no `-p`); Tado's idle-injection
-                // re-runs the continue prompt on every `.needsInput`.
-                if engine == .codex {
-                    cmd = ProcessSpawner.internalCodexEternalCommand(
-                        projectRoot: projectRoot,
-                        codexPreFlags: session.eternalCodexPreFlags ?? [],
-                        codexPostFlags: session.eternalCodexPostFlags ?? []
-                    )
-                } else {
-                    cmd = ProcessSpawner.internalEternalCommand(
-                        projectRoot: projectRoot,
-                        modelID: session.eternalModelID,
-                        effortLevel: session.eternalEffortLevel
-                    )
-                }
-            } else {
-                cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
-            }
-            executable = cmd.executable
-            args = cmd.args
-        } else {
-            // C4: prepend a Dome-backed context preamble to every
-            // non-Eternal agent spawn. The preamble carries identity,
-            // project, team, and recent project notes so the agent
-            // wakes with the facts it would otherwise have to derive
-            // from env vars + tool calls. Silently passes through
-            // unchanged if Dome is offline or the context is empty
-            // (raw terminal with no project).
-            // TerminalSession carries the project id from the TodoItem,
-            // so Dome can inject recent project notes and a retrieval
-            // contract before the agent sees the user's prompt.
-            let preambleCtx = DomeContextPreamble.Context(
-                agentName: agentName,
-                projectName: session.projectName,
-                projectID: session.projectID,
-                projectRoot: session.projectRoot,
-                teamName: session.teamName,
-                teammates: session.teamAgents ?? []
-            )
-            let enrichedPrompt = DomeContextPreamble.prependedPrompt(
-                for: preambleCtx,
-                userPrompt: session.todoText
-            )
-            let cmd: (executable: String, args: [String])
-            if engine == .codex && session.eternalUseCodexExec {
-                // One-shot Codex Eternal roles (architect, interventor)
-                // route through `codex exec` instead of interactive
-                // `codex`: cleaner non-TUI output and sidesteps a Codex
-                // 0.125.0 interactive bug where gpt-5.5 returns "newer
-                // Codex required" despite the model being available.
-                let flags = modeFlags + effortFlags + modelFlags
-                cmd = ProcessSpawner.codexExecCommand(
-                    for: enrichedPrompt,
-                    flags: flags
-                )
-            } else {
-                cmd = ProcessSpawner.command(
-                    for: enrichedPrompt,
-                    engine: engine,
-                    modeFlags: modeFlags,
-                    effortFlags: effortFlags,
-                    modelFlags: modelFlags,
-                    agentName: agentName
-                )
-            }
-            executable = cmd.executable
-            args = cmd.args
-        }
-
-        let envArray: [String]
-        if let ipcRoot = ipcRoot {
-            envArray = ProcessSpawner.environment(
-                sessionID: session.id,
-                sessionName: session.todoText,
-                engine: engine,
-                ipcRoot: ipcRoot,
-                projectName: session.projectName,
-                projectID: session.projectID,
-                projectRoot: session.projectRoot,
-                teamName: session.teamName,
-                teamID: session.teamID,
-                agentName: session.agentName,
-                teamAgents: session.teamAgents,
-                claudeDisplay: claudeDisplay
-            )
-        } else {
-            envArray = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
-        }
-
-        // ProcessSpawner.environment returns ["KEY=VALUE", …]. TadoCore takes
-        // a dictionary; split on the first '=' (values may legitimately
-        // contain '=' signs, e.g. PATH tokens with query strings).
-        var envDict: [String: String] = [:]
-        envDict.reserveCapacity(envArray.count)
-        for entry in envArray {
-            if let eq = entry.firstIndex(of: "=") {
-                let key = String(entry[entry.startIndex..<eq])
-                let value = String(entry[entry.index(after: eq)...])
-                envDict[key] = value
-            }
-        }
-
-        // Merge eternal-worker env knobs (TADO_ETERNAL_MODE, TADO_MODEL,
-        // TADO_ETERNAL_RUN_ID, etc.) after the base env so the wrapper
-        // and any project hooks see them. External mode's eternal-loop.sh
-        // reads these to build each `claude -p` invocation; internal
-        // mode doesn't use a wrapper, but the run-id env var still makes
-        // it through to any `.claude/` hooks the user has installed,
-        // keeping them run-scoped in the same way.
-        if session.isEternalWorker {
-            // eternalRunID must be set for any isEternalWorker session — the
-            // spawn-path in EternalService.spawnWorker stamps it before
-            // spawnAndWire returns. A nil here means the spawn path forgot
-            // to pass runID; hard-crash beats silently falling back to the
-            // legacy per-project path (which no longer exists post-migration).
-            guard let runID = session.eternalRunID else {
-                fatalError(
-                    "TerminalSession \(session.id) has isEternalWorker=true but eternalRunID=nil — spawn path bug"
-                )
-            }
-            let eternalEnv = ProcessSpawner.eternalWorkerEnv(
-                runID: runID,
-                mode: session.eternalMode ?? "mega",
-                doneMarker: session.eternalDoneMarker ?? "ETERNAL-DONE",
-                modelID: session.eternalModelID,
-                effortLevel: session.eternalEffortLevel,
-                skipPermissions: session.eternalSkipPermissionsFlag,
-                codexPreFlags: session.eternalCodexPreFlags,
-                codexPostFlags: session.eternalCodexPostFlags,
-                perfMode: (session.eternalKind == "perf"),
-                sprintMode: (session.eternalKind == "sprint")
-            )
-            for (k, v) in eternalEnv { envDict[k] = v }
-        }
-
+        // === @MainActor capture-snapshot ============================
+        //
+        // Phase 1: capture every input the Task closure will need into
+        // Sendable locals BEFORE we hop off-main. This is the entire
+        // surface of state the spawn path touches; nothing below this
+        // line should reach back into `self`, `session`, or any
+        // SwiftUI binding.
+        //
+        // Pre-fix: the Dome context preamble (`prependedPrompt`) was
+        // computed synchronously here on the main actor. When two or
+        // more tiles `.onAppear`'d simultaneously (Eternal architect +
+        // worker, panning to reveal a tile cluster), the FFI →
+        // bt-core → SQLite scan serialised on the UI thread and the
+        // canvas froze with "tado-core spawn pending…" stuck under a
+        // loading wheel. The fix is to move ALL command/env building
+        // off-main; the only @MainActor work that survives is the
+        // tiny snapshot you see here and the post-spawn hop.
+        // See `.claude/skills/tado-canvas-spawn-smooth/SKILL.md`.
+        let isEternalWorker = session.isEternalWorker
+        let projectRoot = session.projectRoot
+        let eternalLoopKind = session.eternalLoopKind ?? "external"
+        let eternalCodexPreFlags = session.eternalCodexPreFlags ?? []
+        let eternalCodexPostFlags = session.eternalCodexPostFlags ?? []
+        let eternalModelID = session.eternalModelID
+        let eternalEffortLevel = session.eternalEffortLevel
+        let eternalUseCodexExec = session.eternalUseCodexExec
+        let eternalRunIDOpt = session.eternalRunID
+        let eternalMode = session.eternalMode ?? "mega"
+        let eternalDoneMarker = session.eternalDoneMarker ?? "ETERNAL-DONE"
+        let eternalSkipPermissionsFlag = session.eternalSkipPermissionsFlag
+        let eternalCodexPreFlagsForEnv = session.eternalCodexPreFlags
+        let eternalCodexPostFlagsForEnv = session.eternalCodexPostFlags
+        let eternalKind = session.eternalKind
+        let preambleCtx = DomeContextPreamble.Context(
+            agentName: agentName,
+            projectName: session.projectName,
+            projectID: session.projectID,
+            projectRoot: session.projectRoot,
+            teamName: session.teamName,
+            teammates: session.teamAgents ?? []
+        )
+        let userPrompt = session.todoText
+        let modeFlagsRaw = modeFlags
+        let effortFlagsRaw = effortFlags
+        let modelFlagsRaw = modelFlags
+        let engineSnapshot = engine
+        let agentNameSnapshot = agentName
+        let ipcRootSnapshot = ipcRoot
+        let claudeDisplaySnapshot = claudeDisplay
+        let envProjectName = session.projectName
+        let envProjectID = session.projectID
+        let envProjectRoot = session.projectRoot
+        let envTeamName = session.teamName
+        let envTeamID = session.teamID
+        let envAgentName = session.agentName
+        let envTeamAgents = session.teamAgents
         let cols = gridCols(for: width)
         let rows = gridRows(for: height)
+        let spawnedCwd = session.lastKnownCwd
+        let theme = session.theme
+        let sessionID = session.id
+        let sessionTitle = session.title
+        let sessionTodoText = session.todoText
+        let projectName = session.projectName
+        let palette = theme.ansiPalette
+        let foregroundRGBA = theme.foregroundRGBA
+        let backgroundRGBA = theme.backgroundRGBA
 
-        guard let spawned = TadoCore.Session(
-            command: executable,
-            args: args,
-            cwd: session.lastKnownCwd,
-            environment: envDict,
-            cols: cols,
-            rows: rows
-        ) else {
-            // TadoCore.Session.init? already logged + stashed the error.
-            // Mirror it into @State so this tile's placeholder shows the
-            // real cause instead of the generic pending text.
-            let reason = TadoCore.lastSpawnError
-                ?? "tado_session_spawn returned null with no error detail"
-            spawnError = reason
-            NSLog("tado: TadoCore.Session spawn failed for \(session.todoText)")
+        // Pre-validate the eternal-worker invariant on the main actor:
+        // a fatalError inside the detached Task surfaces in Console.app
+        // but is much harder to debug than a synchronous crash here.
+        if isEternalWorker, eternalRunIDOpt == nil {
+            fatalError(
+                "TerminalSession \(sessionID) has isEternalWorker=true but eternalRunID=nil — spawn path bug"
+            )
+        }
+
+        Task {
+            // === Off-main command + env build =======================
+            //
+            // From here on we run on a Task inheriting @MainActor only
+            // for state writes; the heavy work (preamble fetch,
+            // sanitizeFlags, command build, environment build) hops
+            // through `Task.detached`/`await` boundaries so the UI
+            // thread stays free. ProcessSpawner's `command`,
+            // `environment`, `sanitizeFlags`, and `eternalWorkerEnv`
+            // are pure functions — safe to call from any actor.
+
+            // Resolve executable + args. Eternal workers don't get a
+            // Dome preamble; only the agent branch does.
+            let executable: String
+            let args: [String]
+            if isEternalWorker, let projectRoot {
+                let cmd: (executable: String, args: [String])
+                if eternalLoopKind == "internal" {
+                    if engineSnapshot == .codex {
+                        cmd = ProcessSpawner.internalCodexEternalCommand(
+                            projectRoot: projectRoot,
+                            codexPreFlags: eternalCodexPreFlags,
+                            codexPostFlags: eternalCodexPostFlags
+                        )
+                    } else {
+                        cmd = ProcessSpawner.internalEternalCommand(
+                            projectRoot: projectRoot,
+                            modelID: eternalModelID,
+                            effortLevel: eternalEffortLevel
+                        )
+                    }
+                } else {
+                    cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
+                }
+                executable = cmd.executable
+                args = cmd.args
+            } else {
+                // The async preamble fetch hops onto a background queue
+                // for the FFI/SQLite hit. Returns byte-identical output
+                // to the sync sibling; `spawn_pack_byte_equiv` pins the
+                // contract.
+                let enrichedPrompt = await DomeContextPreamble.prependedPrompt(
+                    for: preambleCtx,
+                    userPrompt: userPrompt
+                )
+                let modeFlagsClean = ProcessSpawner.sanitizeFlags(modeFlagsRaw, engine: engineSnapshot)
+                let effortFlagsClean = ProcessSpawner.sanitizeFlags(effortFlagsRaw, engine: engineSnapshot)
+                let modelFlagsClean = ProcessSpawner.sanitizeFlags(modelFlagsRaw, engine: engineSnapshot)
+                let cmd: (executable: String, args: [String])
+                if engineSnapshot == .codex && eternalUseCodexExec {
+                    let flags = modeFlagsClean + effortFlagsClean + modelFlagsClean
+                    cmd = ProcessSpawner.codexExecCommand(for: enrichedPrompt, flags: flags)
+                } else {
+                    cmd = ProcessSpawner.command(
+                        for: enrichedPrompt,
+                        engine: engineSnapshot,
+                        modeFlags: modeFlagsClean,
+                        effortFlags: effortFlagsClean,
+                        modelFlags: modelFlagsClean,
+                        agentName: agentNameSnapshot
+                    )
+                }
+                executable = cmd.executable
+                args = cmd.args
+            }
+
+            // Resolve env. ProcessSpawner.environment is pure; the
+            // ipc-root branch is identical to the pre-fix code, just
+            // off-main now.
+            let envArray: [String]
+            if let ipcRoot = ipcRootSnapshot {
+                envArray = ProcessSpawner.environment(
+                    sessionID: sessionID,
+                    sessionName: sessionTodoText,
+                    engine: engineSnapshot,
+                    ipcRoot: ipcRoot,
+                    projectName: envProjectName,
+                    projectID: envProjectID,
+                    projectRoot: envProjectRoot,
+                    teamName: envTeamName,
+                    teamID: envTeamID,
+                    agentName: envAgentName,
+                    teamAgents: envTeamAgents,
+                    claudeDisplay: claudeDisplaySnapshot
+                )
+            } else {
+                envArray = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
+            }
+            var envDict: [String: String] = [:]
+            envDict.reserveCapacity(envArray.count)
+            for entry in envArray {
+                if let eq = entry.firstIndex(of: "=") {
+                    let key = String(entry[entry.startIndex..<eq])
+                    let value = String(entry[entry.index(after: eq)...])
+                    envDict[key] = value
+                }
+            }
+            // Eternal-worker env merge — `eternalRunIDOpt` is guaranteed
+            // non-nil by the @MainActor pre-check above.
+            if isEternalWorker, let runID = eternalRunIDOpt {
+                let eternalEnv = ProcessSpawner.eternalWorkerEnv(
+                    runID: runID,
+                    mode: eternalMode,
+                    doneMarker: eternalDoneMarker,
+                    modelID: eternalModelID,
+                    effortLevel: eternalEffortLevel,
+                    skipPermissions: eternalSkipPermissionsFlag,
+                    codexPreFlags: eternalCodexPreFlagsForEnv,
+                    codexPostFlags: eternalCodexPostFlagsForEnv,
+                    perfMode: (eternalKind == "perf"),
+                    sprintMode: (eternalKind == "sprint")
+                )
+                for (k, v) in eternalEnv { envDict[k] = v }
+            }
+
+            let spawnedCommand = executable
+            let spawnedArgs = args
+            let spawnedEnv = envDict
+
+            // === Off-main Rust spawn ================================
+            //
+            // tado_last_spawn_error() reads a thread_local, so the
+            // failure-reason capture MUST stay on the spawn thread —
+            // hence the tuple return.
+            let outcome: (TadoCore.Session?, String?) = await Task.detached(priority: .userInitiated) {
+                let s = TadoCore.Session(
+                    command: spawnedCommand,
+                    args: spawnedArgs,
+                    cwd: spawnedCwd,
+                    environment: spawnedEnv,
+                    cols: cols,
+                    rows: rows
+                )
+                let reason = (s == nil)
+                    ? (TadoCore.lastSpawnErrorFromCore()
+                        ?? "tado_session_spawn returned null with no error detail")
+                    : nil
+                return (s, reason)
+            }.value
+
+            // Back on the main actor — `Task` from a SwiftUI view body
+            // inherits the @MainActor isolation of the surrounding view.
+            guard let spawned = outcome.0 else {
+                let reason = outcome.1
+                    ?? "tado_session_spawn returned null with no error detail"
+                spawnError = reason
+                NSLog("tado: TadoCore.Session spawn failed for \(sessionTodoText)")
+                EventBus.shared.publish(
+                    .terminalSpawnFailed(
+                        sessionID: sessionID,
+                        title: sessionTitle,
+                        reason: reason,
+                        projectName: projectName
+                    )
+                )
+                return
+            }
+            spawned.setDefaultColors(fg: foregroundRGBA, bg: backgroundRGBA)
+            if let palette {
+                spawned.setAnsiPalette(palette)
+            }
+            session.coreSession = spawned
+            session.processID = spawned.processID
             EventBus.shared.publish(
-                .terminalSpawnFailed(
-                    sessionID: session.id,
-                    title: session.title,
-                    reason: reason,
-                    projectName: session.projectName
+                .terminalSpawned(
+                    sessionID: sessionID,
+                    title: sessionTitle,
+                    projectName: projectName
                 )
             )
-            return
         }
-        // Apply the tile's theme so blank / erased regions use the tile
-        // background and SGR reset picks up the tile foreground. Must
-        // happen before the first frame — `MetalTerminalView` reads
-        // `session.theme` on its own to set the MTKView clear color.
-        let theme = session.theme
-        spawned.setDefaultColors(fg: theme.foregroundRGBA, bg: theme.backgroundRGBA)
-        // Opt-in ANSI palette: themes that carry one (Solarized, Dracula,
-        // Monokai, Nord, Tokyo Night) push their own 16 colors so the
-        // agent's SGR reds/greens match the theme. Themes without a
-        // palette keep the gruvbox-flavored default baked into tado-core.
-        if let palette = theme.ansiPalette {
-            spawned.setAnsiPalette(palette)
-        }
-        session.coreSession = spawned
-        // PID is stable for the life of the session — capture once
-        // here so the Details page can show it without re-querying.
-        session.processID = spawned.processID
-        EventBus.shared.publish(
-            .terminalSpawned(
-                sessionID: session.id,
-                title: session.title,
-                projectName: session.projectName
-            )
-        )
     }
 
     // MARK: - Cell-size math

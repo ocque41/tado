@@ -138,7 +138,7 @@ Rule of thumb: if an agent asks you for something, deliver it back to them throu
 
 ```bash
 swift build          # Build the project
-swift run            # Build and run the app
+swift run Tado       # Build and run the app
 ```
 
 The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+). Focused Swift tests live under `Tests/TadoCoreTests`.

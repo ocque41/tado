@@ -377,6 +377,23 @@ enum DomeRpcClient {
         return decoded["id"] as? String == id
     }
 
+    /// Async sibling of `listNotes(...)`. Identical semantics; hops the
+    /// blocking FFI/SQLite work onto a `.userInitiated` background queue
+    /// so callers on the main actor (e.g. `MetalTerminalTileView`'s
+    /// spawn path) don't pin the UI thread on the SQLite scan.
+    /// See `.claude/skills/tado-canvas-spawn-smooth/SKILL.md` for why.
+    static func listNotes(
+        topic: String? = nil,
+        limit: Int = 200,
+        domeScope: DomeScopeSelection? = nil
+    ) async -> [NoteSummary]? {
+        await withCheckedContinuation { (cont: CheckedContinuation<[NoteSummary]?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: listNotes(topic: topic, limit: limit, domeScope: domeScope))
+            }
+        }
+    }
+
     /// Wraps `tado_dome_notes_list`. Returns the decoded list on
     /// success, nil on any failure (including daemon-not-started).
     static func listNotes(topic: String? = nil, limit: Int = 200, domeScope: DomeScopeSelection? = nil) -> [NoteSummary]? {

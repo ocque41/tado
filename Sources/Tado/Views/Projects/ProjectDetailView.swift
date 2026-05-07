@@ -56,6 +56,25 @@ struct ProjectDetailView: View {
                 metaStrip(projectTodos: projectTodos, agents: agents)
             }
 
+            // Page-mode toggle (Detail | Kanban). Sits below the
+            // header so the user can flip to the per-project Kanban
+            // board without leaving the project context. The same
+            // picker lives at the top of `ProjectKanbanView` for the
+            // return trip. Uses the design-system `ModeTab` primitive
+            // so every "view mode" toggle in the app reads the same.
+            HStack(spacing: 10) {
+                ModeTab(
+                    eyebrow: "VIEW",
+                    options: [
+                        .init(id: ProjectPageMode.detail, label: "Detail", icon: "list.bullet.rectangle"),
+                        .init(id: ProjectPageMode.kanban, label: "Kanban", icon: "rectangle.split.3x1"),
+                    ],
+                    selection: $appStateBindable.projectPageMode
+                )
+                Spacer()
+            }
+            .padding(.bottom, 12)
+
             // Dispatch
             SectionRail(
                 label: "Dispatch",

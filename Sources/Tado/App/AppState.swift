@@ -78,6 +78,21 @@ enum ClaudeMode: String, Codable, CaseIterable {
         case .bypassPermissions: return ["--permission-mode", "bypassPermissions"]
         }
     }
+
+    /// Per-mode fallback chain consulted by the spawn-fallback ladder
+    /// (`TerminalManager.applySpawnFallback`). Ordered from "user's
+    /// original choice" toward the most permissive still-functional
+    /// alternative. The ladder steps through these on demonstrable
+    /// CLI-rejection events; nil means "no further fallback —
+    /// surface the failure to the user."
+    func nextFallback() -> ClaudeMode? {
+        switch self {
+        case .autoMode:          return .bypassPermissions
+        case .bypassPermissions: return .askPermissions
+        case .planMode:          return .askPermissions
+        case .askPermissions:    return nil
+        }
+    }
 }
 
 enum CodexMode: String, Codable, CaseIterable {
@@ -102,6 +117,19 @@ enum CodexMode: String, Codable, CaseIterable {
         case .defaultPermissions: return []
         case .fullAccess:         return ["--ask-for-approval", "never", "--sandbox", "danger-full-access"]
         case .custom:             return []
+        }
+    }
+
+    /// Codex's analog of `ClaudeMode.nextFallback`. The picker has only
+    /// three options, so the fallback chain is a single hop from
+    /// `fullAccess` to the safer `defaultPermissions`. `custom` already
+    /// emits no flags so it never triggers the ladder; `defaultPermissions`
+    /// has nowhere safer to fall back to.
+    func nextFallback() -> CodexMode? {
+        switch self {
+        case .fullAccess:         return .defaultPermissions
+        case .defaultPermissions: return nil
+        case .custom:             return nil
         }
     }
 }
@@ -226,6 +254,21 @@ enum ClaudeModel: String, Codable, CaseIterable {
             return ClaudeModel(rawValue: raw)?.rawValue ?? ClaudeModel.opus47.rawValue
         }
     }
+
+    /// Curated per-tile fallback chain when a model id is rejected by
+    /// the live CLI (e.g. server pulled support for an old slug). Steps
+    /// from largest/freshest toward smaller/older Claude variants the
+    /// user's account is overwhelmingly likely to retain access to.
+    /// Used by `TerminalManager.applySpawnFallback`.
+    func nextFallback() -> ClaudeModel? {
+        switch self {
+        case .opus47_1M:   return .opus47
+        case .opus47:      return .sonnet46_1M
+        case .sonnet46_1M: return .sonnet46
+        case .sonnet46:    return .haiku45
+        case .haiku45:     return nil
+        }
+    }
 }
 
 enum CodexModel: String, Codable, CaseIterable {
@@ -266,6 +309,22 @@ enum CodexModel: String, Codable, CaseIterable {
             return CodexModel.gpt55.rawValue
         default:
             return CodexModel(rawValue: raw)?.rawValue ?? CodexModel.gpt55.rawValue
+        }
+    }
+
+    /// Curated per-tile fallback chain when Codex rejects a model id.
+    /// Mirrors `ClaudeModel.nextFallback` shape. Stops at `gpt54Mini`
+    /// (the smallest model the picker exposes); deeper fallback would
+    /// either hop to Codex's pre-5 series or jump to Claude, both of
+    /// which the ladder driver decides about separately at the
+    /// engine-step rung.
+    func nextFallback() -> CodexModel? {
+        switch self {
+        case .gpt55:       return .gpt54
+        case .gpt54:       return .gpt54Mini
+        case .gpt54Mini:   return nil
+        case .gpt53Codex:  return .gpt54Mini
+        case .gpt52:       return nil
         }
     }
 }
@@ -345,6 +404,22 @@ final class AppState {
     /// which service to load.
     var craftedReviewRunID: UUID? = nil
     var craftedReviewKind: CraftedReviewKind? = nil
+
+    /// Which body the Projects detail page renders for the active
+    /// project. `detail` is today's behavior; `kanban` swaps the body
+    /// for `ProjectKanbanView`. Stored on AppState so the toggle
+    /// applies globally — switching projects keeps the user on whichever
+    /// view they last picked, which matches how every other view-mode
+    /// flag in this struct works (no per-project memory).
+    var projectPageMode: ProjectPageMode = .detail
+
+    /// Which grouping axis the per-project Kanban view uses to split
+    /// cards into lanes. `.column` is today's user-managed columns;
+    /// the others slice the same card set dynamically by the named
+    /// dimension. Stored on AppState so the tab persists across
+    /// project switches but is recomputed each launch — purely a UI
+    /// affordance, no on-disk state.
+    var kanbanGrouping: KanbanGroupingMode = .column
 }
 
 /// Discriminator for the shared `crafted.md` review modal. Keeps the
@@ -354,4 +429,66 @@ final class AppState {
 enum CraftedReviewKind: String, Codable {
     case dispatch
     case eternal
+}
+
+/// Per-project page-mode toggle on the Projects page. `detail` (default)
+/// renders the existing `ProjectDetailView` with its Dispatch / Eternal
+/// / Add Todo / Todos / Agents zones. `kanban` swaps the body for
+/// `ProjectKanbanView` — a per-project board of user-managed columns
+/// with todos as cards. The toggle lives on `AppState` (not on
+/// `Project`) so it doesn't get persisted to disk; it's a UI affordance,
+/// not durable state. Matches how `ViewMode` is structured.
+enum ProjectPageMode: String, CaseIterable, Equatable {
+    case detail
+    case kanban
+
+    var label: String {
+        switch self {
+        case .detail: "Detail"
+        case .kanban: "Kanban"
+        }
+    }
+}
+
+/// Tabs at the top of the per-project Kanban board. Each axis renders
+/// the same card set (todos + dispatch runs + eternal runs scoped to
+/// the active project) into a different set of lanes:
+///
+/// - `.column` — user-managed `KanbanColumn` rows (`kind == "project"`).
+///   The historical default; cards live in lanes the user named
+///   (Backlog / Doing / Done by default, plus anything they added).
+/// - `.status` — lanes by FSM state: Pending / Running / Awaiting /
+///   Completed / Failed. Read-only grouping (you can't drag a card
+///   from Pending to Running — the agent's actual state drives the
+///   bucket).
+/// - `.agent` — one lane per `agentName`, plus an "Unassigned" lane.
+/// - `.team` — one lane per team in the project, plus "No team".
+/// - `.kind` — Todo / Dispatch / Eternal — useful for spotting
+///   long-running infrastructure runs alongside one-off todos.
+enum KanbanGroupingMode: String, CaseIterable, Equatable {
+    case column
+    case status
+    case agent
+    case team
+    case kind
+
+    var label: String {
+        switch self {
+        case .column: "Columns"
+        case .status: "Status"
+        case .agent:  "Agents"
+        case .team:   "Teams"
+        case .kind:   "Kinds"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .column: "rectangle.split.3x1"
+        case .status: "circle.dotted.and.circle"
+        case .agent:  "person.crop.rectangle"
+        case .team:   "person.3"
+        case .kind:   "square.stack.3d.up"
+        }
+    }
 }

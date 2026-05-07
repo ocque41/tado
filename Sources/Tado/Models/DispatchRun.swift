@@ -37,6 +37,16 @@ final class DispatchRun {
     /// tracking every hop).
     var currentPhaseTodoID: UUID?
 
+    /// `grid` (default — today's behavior, all tiles flow into the canvas
+    /// grid via `CanvasLayout.position(forIndex:)`) or `kanban` (the run's
+    /// architect tile + every phase tile snap into named columns drawn on
+    /// the canvas, one column per phase, with the architect parked in
+    /// column 0). Defaults to `grid` so every existing `DispatchRun`
+    /// decodes unchanged after schema bump (additive migration). Picked
+    /// in `DispatchFileModal` and consumed by `DispatchPlanService.spawn*`
+    /// + `CanvasView`'s per-zone layout.
+    var dispatchMode: String = "grid"
+
     /// TodoID of the coordinator tile that proposed this run via the
     /// natural-language `tado <brief>` path. Nil for runs created via
     /// the project UI's "New Dispatch" button. Mirrors the audit field
@@ -51,7 +61,8 @@ final class DispatchRun {
         state: String = "drafted",
         brief: String = "",
         architectTodoID: UUID? = nil,
-        currentPhaseTodoID: UUID? = nil
+        currentPhaseTodoID: UUID? = nil,
+        dispatchMode: String = "grid"
     ) {
         self.id = id
         self.project = project
@@ -61,6 +72,7 @@ final class DispatchRun {
         self.brief = brief
         self.architectTodoID = architectTodoID
         self.currentPhaseTodoID = currentPhaseTodoID
+        self.dispatchMode = dispatchMode
     }
 }
 

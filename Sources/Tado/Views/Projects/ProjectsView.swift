@@ -21,7 +21,16 @@ struct ProjectsView: View {
     var body: some View {
         Group {
             if let project = selectedProject {
-                ProjectDetailView(project: project)
+                // Page-mode toggle drives whether the detail view's
+                // structural zones render or the new Kanban board does.
+                // The toggle lives on AppState so it survives project
+                // switches; users who prefer the board don't have to
+                // re-pick it every time they navigate.
+                if appState.projectPageMode == .kanban {
+                    ProjectKanbanView(project: project)
+                } else {
+                    ProjectDetailView(project: project)
+                }
             } else {
                 ProjectListView(
                     onSelect: { project in

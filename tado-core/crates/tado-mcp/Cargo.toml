@@ -42,3 +42,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-
 uuid = { version = "1", features = ["serde", "v4"] }
 tado-ipc = { path = "../tado-ipc" }
 tado-settings = { path = "../tado-settings" }
+# `image` powers `tado_pets_import_slice`. Default features off; we
+# only need PNG/JPEG/GIF/WebP decode + PNG encode for slicing
+# sprite sheets into per-state cells. Keeps the bundled binary
+# under +400 KB vs. the default-features build.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

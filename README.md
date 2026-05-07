@@ -51,7 +51,7 @@ Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https
 git clone https://github.com/ocque41/tado.git
 cd tado
 swift build
-swift run
+swift run Tado
 ```
 
 No Xcode project is included. The project uses Swift Package Manager as its build system. You can also open `Package.swift` directly in Xcode.

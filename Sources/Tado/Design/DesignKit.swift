@@ -799,6 +799,131 @@ struct TabsStrip<Item: Hashable>: View {
     }
 }
 
+// MARK: - ModeTab (v1.1)
+
+/// Compact pill-style segmented control for "view mode" toggles —
+/// `Detail | Kanban` on the project page, `Grid | Kanban` in the
+/// Dispatch modal, etc. Replaces the native `.pickerStyle(.segmented)`
+/// which (a) ignores the rest of the design system's chrome, (b) has
+/// no room for icons, and (c) reads as a generic system control on a
+/// page full of bespoke ones.
+///
+/// Visual contract:
+/// - Inactive segment: `Palette.bgElev` ground, `Palette.ink2` text,
+///   no border (the outer pill provides the boundary).
+/// - Active segment: `Palette.accent` ground, `Color.white` text,
+///   subtle drop shadow so the active chip lifts off the rail.
+/// - Outer pill: `Palette.bgPage` ground with a hairline `Palette.rule`
+///   stroke. Same 5.5 px corner radius as every other primitive
+///   (`DK.radius`).
+/// - Optional eyebrow label rendered to the left in the small all-caps
+///   monospace style used by `KanbanColumnHeader` etc.
+///
+/// Generic on a `Hashable` selection type so it works with any enum
+/// (`ProjectPageMode`, the dispatch-mode `String`, future modes).
+struct ModeTab<Item: Hashable>: View {
+    struct Option: Identifiable {
+        let id: Item
+        let label: String
+        let icon: String?
+        init(id: Item, label: String, icon: String? = nil) {
+            self.id = id
+            self.label = label
+            self.icon = icon
+        }
+    }
+
+    /// Optional eyebrow label rendered to the left of the pill (e.g.
+    /// `"VIEW"`, `"LAYOUT"`). Pass `nil` to render the bare pill.
+    let eyebrow: String?
+    let options: [Option]
+    @Binding var selection: Item
+
+    init(
+        eyebrow: String? = nil,
+        options: [Option],
+        selection: Binding<Item>
+    ) {
+        self.eyebrow = eyebrow
+        self.options = options
+        self._selection = selection
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let eyebrow {
+                Text(eyebrow)
+                    .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.ink3)
+            }
+            pill
+        }
+    }
+
+    private var pill: some View {
+        HStack(spacing: 0) {
+            ForEach(options) { option in
+                segment(option)
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: DK.radius + 1, style: .continuous)
+                .fill(Palette.bgPage)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DK.radius + 1, style: .continuous)
+                .stroke(Palette.rule, lineWidth: DK.ruleW)
+        )
+    }
+
+    private func segment(_ option: Option) -> some View {
+        let active = selection == option.id
+        return Button {
+            if !active {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    selection = option.id
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if let icon = option.icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 10.5, weight: active ? .semibold : .medium))
+                }
+                Text(option.label)
+                    .font(Font.system(
+                        size: 11.5,
+                        weight: active ? .semibold : .medium,
+                        design: .default
+                    ))
+            }
+            .foregroundStyle(active ? Color.white : Palette.ink2)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .frame(minWidth: 64)
+            .background(
+                RoundedRectangle(cornerRadius: DK.radius - 1, style: .continuous)
+                    .fill(active ? Palette.accent : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DK.radius - 1, style: .continuous)
+                    .stroke(active ? Palette.accent.opacity(0.35) : Color.clear, lineWidth: 1)
+            )
+            .shadow(
+                color: active ? Color.black.opacity(0.18) : Color.clear,
+                radius: active ? 3 : 0,
+                x: 0,
+                y: active ? 1 : 0
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(option.label)
+    }
+}
+
 // MARK: - SectionHeader (v0.20)
 
 /// Eyebrow + title + optional count + optional sub line + optional
