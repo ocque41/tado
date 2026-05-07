@@ -462,47 +462,31 @@ private struct StableTerminalContent: View {
     let height: CGFloat
 
     var body: some View {
-        if isVisible {
-            MetalTerminalTileView(
-                session: session,
-                engine: engine,
-                ipcRoot: ipcRoot,
-                modeFlags: modeFlags,
-                effortFlags: effortFlags,
-                modelFlags: modelFlags,
-                agentName: session.agentName,
-                claudeDisplay: claudeDisplay,
-                fontSize: fontSize,
-                fontFamily: fontFamily,
-                cursorBlink: cursorBlink,
-                bellMode: bellMode,
-                isFocused: isFocused,
-                width: width,
-                height: height
-            )
-        } else {
-            OffscreenTilePlaceholder(session: session, width: width, height: height)
-        }
-    }
-}
-
-/// Cheap placeholder shown for Metal-rendered tiles that are currently
-/// off-screen. Preserves the tile shape so pan/zoom visuals don't jitter
-/// when a tile crosses the visibility threshold. The session's PTY keeps
-/// running in Rust; only the GPU resources are released.
-private struct OffscreenTilePlaceholder: View {
-    let session: TerminalSession
-    let width: CGFloat
-    let height: CGFloat
-
-    var body: some View {
-        Rectangle()
-            .fill(Palette.canvas)
-            .frame(width: width, height: height)
-            .overlay(
-                Image(systemName: "pause.circle")
-                    .font(.system(size: 18))
-                    .foregroundStyle(Palette.foreground.opacity(0.15))
-            )
+        // Always mount `MetalTerminalTileView` — its `.onAppear`
+        // triggers `spawnIfNeeded`, which must fire even when the
+        // tile lands outside the canvas viewport at first render.
+        // Pre-fix, virtualization branched here on `isVisible` and
+        // unmounted the spawning view entirely, so a freshly-spawned
+        // session whose tile happened to land off-screen never ran
+        // its PTY. The tile renders its own offscreen placeholder
+        // internally based on the `isVisible` prop.
+        MetalTerminalTileView(
+            session: session,
+            engine: engine,
+            ipcRoot: ipcRoot,
+            modeFlags: modeFlags,
+            effortFlags: effortFlags,
+            modelFlags: modelFlags,
+            agentName: session.agentName,
+            claudeDisplay: claudeDisplay,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            cursorBlink: cursorBlink,
+            bellMode: bellMode,
+            isFocused: isFocused,
+            isVisible: isVisible,
+            width: width,
+            height: height
+        )
     }
 }

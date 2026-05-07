@@ -23,6 +23,17 @@ struct MetalTerminalTileView: View {
     /// sync with the accent ring — see the false→true transition in its
     /// `updateNSView`.
     let isFocused: Bool
+    /// Tile-virtualization signal from the canvas. When false, the
+    /// heavy Metal renderer branch is replaced with a lightweight
+    /// placeholder so off-screen tiles don't pull GPU resources.
+    /// Crucially, `spawnIfNeeded` still fires on `.onAppear` whether
+    /// or not the tile is visible — decoupling the PTY lifecycle from
+    /// view virtualization. Pre-fix, virtualization gated the entire
+    /// `MetalTerminalTileView` mount in `StableTerminalContent`, so a
+    /// freshly-spawned session whose tile happened to land outside
+    /// the user's current viewport never ran `spawnIfNeeded`, the
+    /// PTY never started, and the canvas showed an inert ghost.
+    var isVisible: Bool = true
     let width: CGFloat
     let height: CGFloat
 
@@ -43,7 +54,7 @@ struct MetalTerminalTileView: View {
 
     var body: some View {
         Group {
-            if let core = session.coreSession {
+            if let core = session.coreSession, isVisible {
                 ZStack {
                     MetalTerminalView(
                         session: core,
@@ -113,12 +124,20 @@ struct MetalTerminalTileView: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.15), value: flashActive)
+            } else if session.coreSession != nil {
+                // PTY is running but the tile is currently outside the
+                // visible canvas viewport (virtualization). Render a
+                // cheap placeholder rect so we don't pull GPU resources
+                // for an off-screen MTKView. The session keeps running
+                // in Rust; only the GPU mount is paused.
+                offscreenPlaceholder
             } else {
-                // Spawn is synchronous but can fail. Show pending until
-                // .onAppear runs, then swap in the captured error so the
-                // user can see the real cause (missing binary, bad cwd,
-                // env-related posix_spawn failure, etc.) without having
-                // to run from a terminal.
+                // No coreSession yet. Spawn is synchronous but can
+                // fail; show pending until `.onAppear` runs, then swap
+                // in the captured error so the user can see the real
+                // cause (missing binary, bad cwd, env-related
+                // posix_spawn failure, etc.) without having to run
+                // from a terminal.
                 Palette.canvas.overlay(
                     VStack(alignment: .leading, spacing: 4) {
                         if let err = spawnError {
@@ -146,6 +165,22 @@ struct MetalTerminalTileView: View {
             }
         }
         .frame(width: width, height: height)
+    }
+
+    /// Cheap rect shown for tiles that are currently outside the
+    /// visible canvas viewport. Mirrors the look of the
+    /// `OffscreenTilePlaceholder` from `TerminalTileView`. Inlined
+    /// here so the PTY-bearing `MetalTerminalTileView` mount survives
+    /// virtualization — `spawnIfNeeded` fires on the no-coreSession
+    /// branch's `.onAppear` regardless of `isVisible`.
+    private var offscreenPlaceholder: some View {
+        Rectangle()
+            .fill(Palette.canvas)
+            .overlay(
+                Image(systemName: "pause.circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Palette.foreground.opacity(0.15))
+            )
     }
 
     // MARK: - Spawn wiring
