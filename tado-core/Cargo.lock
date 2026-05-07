@@ -3350,6 +3350,7 @@ dependencies = [
  "parking_lot",
  "portable-pty",
  "serde_json",
+ "tado-eternal-state",
  "tado-ipc",
  "tado-settings",
  "tokio",
@@ -3368,6 +3369,15 @@ dependencies = [
  "serde_json",
  "tado-settings",
  "tokio",
+]
+
+[[package]]
+name = "tado-eternal-state"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

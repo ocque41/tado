@@ -53,6 +53,14 @@ bt-core = { path = "../bt-core" }
 # the Knowledge → System surface can render P@5 / R@10 / nDCG / mean
 # latency without shelling out to the CLI binary.
 dome-eval = { path = "../dome-eval" }
+# tado-eternal-state ships the off-main run-state reader the Swift
+# `EternalRunStateCache` calls per `ingest`. Linking through this
+# crate's libtado_core.a means the FFI symbols
+# (`tado_eternal_state_snapshot` + `_string_free`) ship in the
+# unified static archive Package.swift already links — no second
+# .a file in the build graph. Per CLAUDE.md rule 9 (Rust-first for
+# new non-UI logic) and rule 4 (FFI ↔ UI parity in the same release).
+tado-eternal-state = { path = "../tado-eternal-state" }
 # Multi-threaded Tokio runtime needed by the Dome FFI entry; its
 # Unix-socket listener + scheduler task run inside a dedicated runtime
 # owned by the app process.

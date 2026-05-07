@@ -1255,4 +1255,33 @@ char *tado_dome_code_index_status(const char *project_id_cstr);
  */
 char *tado_zombie_sweep(const char *options_json_cstr);
 
+/**
+ * Read one Eternal run dir's on-disk state snapshot.
+ *
+ * `run_dir_cstr` is the absolute path to a single run's directory
+ * (`<project>/.tado/eternal/runs/<uuid>/`). Returns a heap-allocated
+ * JSON string mirroring `tado_eternal_state::EternalRunStateSnapshot`:
+ *
+ * ```json
+ * {
+ *   "state": { ... } | null,
+ *   "crafted_exists": bool,
+ *   "stop_flag_exists": bool,
+ *   "metrics_count": u64,
+ *   "last_metric_value": <Value> | null,
+ *   "max_metric_sprint": i64
+ * }
+ * ```
+ *
+ * Backs the Swift `EternalRunStateCache.readSnapshot` ingest. Reads
+ * `state.json`, `crafted.md`, `stop-flag`, and `metrics.jsonl` in
+ * one off-main pass so SwiftUI views never block @MainActor.
+ * Tolerant: missing files / malformed JSON degrade to default
+ * fields; the caller never sees an error.
+ *
+ * Returns null on invalid pointer / non-UTF-8 path / JSON encode
+ * failure. Caller frees with `tado_string_free`.
+ */
+char *tado_eternal_state_snapshot(const char *run_dir_cstr);
+
 #endif  /* TADO_CORE_H */

@@ -167,7 +167,10 @@ struct ProjectDispatchSection: View {
 
     @ViewBuilder
     private func runRow(run: DispatchRun) -> some View {
-        let displayState = effectiveState(for: run)
+        // ALL on-disk truth comes from `DispatchRunStateCache` —
+        // see `ProjectEternalSection.runRow` for the full rationale.
+        let snapshot = DispatchRunStateCache.shared.snapshot(for: run.id)
+        let displayState = effectiveState(for: run, snapshot: snapshot)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 StatusPill.runState(displayState)
@@ -175,7 +178,7 @@ struct ProjectDispatchSection: View {
                     .font(Font.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Palette.ink)
                     .lineLimit(1)
-                let phaseCount = DispatchPlanService.phaseFileCount(run)
+                let phaseCount = snapshot.phaseFileCount
                 if phaseCount > 0 {
                     Text("·  \(phaseCount) phase\(phaseCount == 1 ? "" : "s")")
                         .font(Font.system(size: 11, weight: .regular, design: .monospaced))
@@ -369,10 +372,13 @@ struct ProjectDispatchSection: View {
     /// This is display-only: `run.state` stays at "planning" until the
     /// user accepts. That means restarting Tado on an unaccepted plan
     /// re-shows the Review button, which is exactly what we want.
-    private func effectiveState(for run: DispatchRun) -> String {
+    private func effectiveState(
+        for run: DispatchRun,
+        snapshot: DispatchRunStateCache.Snapshot
+    ) -> String {
         if run.state == "planning"
-            && DispatchPlanService.planExistsOnDisk(run)
-            && DispatchPlanService.craftedExistsOnDisk(run) {
+            && snapshot.planExists
+            && snapshot.craftedExists {
             return "awaitingReview"
         }
         return run.state

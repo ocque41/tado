@@ -202,11 +202,28 @@ final class RunEventWatcher {
         let liveIDs = Set(runs.map(\.id))
 
         for run in runs where !isTerminal(eternalState: run.state) {
+            // Always seed the cache, even if a FileWatcher already
+            // exists for this run — `attachEternal` is called on every
+            // ModelContext.didSave, so a brand-new run inserted via
+            // `proposeViaCoordinator` lands here on its first save and
+            // needs a primed snapshot before the section's first
+            // re-render.
+            let dirPath = EternalService.eternalRoot(run).path
+            EternalRunStateCache.shared.attach(runID: run.id, dirPath: dirPath)
+
             if eternalWatchers[run.id] != nil { continue }
             let url = EternalService.stateFileURL(run)
             let initial = EternalService.readState(run) ?? EternalState()
+            let runID = run.id
             let watcher = FileWatcher(url: url) { [weak self] in
-                Task { @MainActor in self?.handleEternalFire(runID: run.id) }
+                Task { @MainActor in
+                    self?.handleEternalFire(runID: runID)
+                    // Cache ingest mirrors the watcher's debounced
+                    // cadence so the SwiftUI section re-renders on
+                    // every real state.json write — no per-tick
+                    // polled reads needed.
+                    EternalRunStateCache.shared.ingest(runID: runID, dirPath: dirPath)
+                }
             }
             eternalWatchers[run.id] = (watcher, initial)
         }
@@ -222,6 +239,7 @@ final class RunEventWatcher {
             if shouldDetach {
                 eternalWatchers[id]?.0.cancel()
                 eternalWatchers.removeValue(forKey: id)
+                EternalRunStateCache.shared.detach(runID: id)
             }
         }
     }
@@ -232,12 +250,19 @@ final class RunEventWatcher {
         let liveIDs = Set(runs.map(\.id))
 
         for run in runs where !isTerminal(dispatchState: run.state) {
+            let dirPath = DispatchPlanService.dispatchRoot(run).path
+            DispatchRunStateCache.shared.attach(runID: run.id, dirPath: dirPath)
+
             if dispatchWatchers[run.id] != nil { continue }
             let dir = DispatchPlanService.phasesDirURL(run)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let initial = readPhaseStatuses(in: dir)
+            let runID = run.id
             let watcher = FileWatcher(url: dir) { [weak self] in
-                Task { @MainActor in self?.handleDispatchFire(runID: run.id) }
+                Task { @MainActor in
+                    self?.handleDispatchFire(runID: runID)
+                    DispatchRunStateCache.shared.ingest(runID: runID, dirPath: dirPath)
+                }
             }
             dispatchWatchers[run.id] = (watcher, initial)
         }
@@ -249,6 +274,7 @@ final class RunEventWatcher {
             if shouldDetach {
                 dispatchWatchers[id]?.0.cancel()
                 dispatchWatchers.removeValue(forKey: id)
+                DispatchRunStateCache.shared.detach(runID: id)
             }
         }
     }

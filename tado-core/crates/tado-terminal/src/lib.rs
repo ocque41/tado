@@ -28,4 +28,10 @@ pub mod sibling_ffi;
 // time Swift's `DomeExtension.onAppLaunch()` fires.
 pub mod dome_ffi;
 
+// Off-main reader for one Eternal run's on-disk state. Backs the
+// Swift `EternalRunStateCache` so SwiftUI views never block
+// @MainActor on `Data(contentsOf:)` + `JSONDecoder.decode` inside a
+// `TimelineView` tick (debug plan rev 4 / smooth-software pass 4).
+pub mod eternal_state_ffi;
+
 pub use session::Session;

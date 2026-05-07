@@ -70,7 +70,13 @@ struct ProjectEternalSection: View {
             if activeRuns.isEmpty && archivedRuns.isEmpty {
                 emptyCard
             } else {
-                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                // The 1s tick is for the runtime label only ("5s → 6s
+                // → 7s"). It MUST NOT do any FS / FFI / SwiftData work
+                // — those run paths are paid by `EternalRunStateCache`
+                // off-main, and views simply read from `cache.snapshot
+                // (for: run.id)`. See SKILL.md → D2 → "per-tick polled
+                // IO" for why this discipline is non-negotiable.
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
                     VStack(spacing: 8) {
                         ForEach(activeRuns, id: \.id) { run in
                             runRow(run: run)
@@ -190,7 +196,13 @@ struct ProjectEternalSection: View {
 
     @ViewBuilder
     private func runRow(run: EternalRun) -> some View {
-        let displayState = effectiveState(for: run)
+        // ALL on-disk truth comes from the cache snapshot; no
+        // synchronous FS work in this body. The 1-second TimelineView
+        // wrapper drives the runtime label, while @Observable cache
+        // mutations drive everything else (state pill, meta row,
+        // failed-error row).
+        let snapshot = EternalRunStateCache.shared.snapshot(for: run.id)
+        let displayState = effectiveState(for: run, snapshot: snapshot)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 StatusPill.runState(displayState)
@@ -207,10 +219,10 @@ struct ProjectEternalSection: View {
                 Spacer()
                 actionButtons(run: run, state: displayState)
             }
-            if displayState == "running", let state = EternalService.readState(run) {
-                runningMetaRow(run: run, state: state)
+            if displayState == "running", let state = snapshot.state {
+                runningMetaRow(run: run, state: state, snapshot: snapshot)
             } else if displayState == "failed",
-                      let lastError = EternalService.readState(run)?.lastError,
+                      let lastError = snapshot.state?.lastError,
                       !lastError.isEmpty {
                 Text(lastError)
                     .font(Typography.monoCaption)
@@ -402,17 +414,23 @@ struct ProjectEternalSection: View {
     }
 
     @ViewBuilder
-    private func runningMetaRow(run: EternalRun, state: EternalState) -> some View {
+    private func runningMetaRow(
+        run: EternalRun,
+        state: EternalState,
+        snapshot: EternalRunStateCache.Snapshot
+    ) -> some View {
         let runtime = runtimeString(startedAt: state.startedAt)
-        let metrics = EternalService.readMetrics(run)
-        let effectiveSprint = effectiveSprintCount(state: state, metrics: metrics)
+        // Sprint count + last-metric label come from the cache, not
+        // from a fresh `readMetrics` call. The cache parses
+        // metrics.jsonl off-main exactly once per FileWatcher firing.
+        let effectiveSprint = max(state.sprints, snapshot.maxMetricSprint)
         HStack(spacing: 12) {
             metaPair(label: "RUNTIME", value: runtime)
             metaPair(label: "ITER", value: "\(state.iterations)")
             if run.mode == "sprint" {
                 metaPair(label: "SPRINT", value: "\(effectiveSprint)")
-                if let last = metrics.last?.metric {
-                    metaPair(label: "METRIC", value: last.display)
+                if let last = snapshot.lastMetricDisplay {
+                    metaPair(label: "METRIC", value: last)
                 }
             }
             // Perf step counters — only shown for kind=perf runs so
@@ -460,11 +478,6 @@ struct ProjectEternalSection: View {
         return "\(s)s"
     }
 
-    private func effectiveSprintCount(state: EternalState, metrics: [EternalMetricSample]) -> Int {
-        let maxMetricSprint = metrics.map(\.sprint).max() ?? 0
-        return max(state.sprints, maxMetricSprint)
-    }
-
     // MARK: - State reconciliation
 
     /// Prefer on-disk ground truth (state.json + crafted.md + active flag)
@@ -481,8 +494,18 @@ struct ProjectEternalSection: View {
     ///
     /// Each branch self-heals `run.state` on a background task so the
     /// project-list card and other observers converge on the same value.
-    private func effectiveState(for run: EternalRun) -> String {
-        if EternalService.isHookFresh(run) {
+    ///
+    /// **Source of truth:** the `snapshot` argument is the
+    /// pre-populated `EternalRunStateCache.Snapshot`. No
+    /// synchronous FS calls fire here. The cache rebuilds the
+    /// snapshot off-main on every FileWatcher firing AND on a 10s
+    /// background poll fallback, so SwiftUI's invalidation walks
+    /// already saw the latest by the time `body` runs.
+    private func effectiveState(
+        for run: EternalRun,
+        snapshot: EternalRunStateCache.Snapshot
+    ) -> String {
+        if snapshot.isHookFresh {
             healIfNeeded(run: run, target: "running")
             return "running"
         }
@@ -491,18 +514,18 @@ struct ProjectEternalSection: View {
         // The user must Accept in the review modal — the run does NOT
         // auto-flip to ready/running.
         if (run.state == "planning" || run.state == "awaitingReview")
-            && EternalService.craftedExistsOnDisk(run) {
+            && snapshot.craftedExists {
             healIfNeeded(run: run, target: "awaitingReview")
             return "awaitingReview"
         }
 
         // Worker exited cleanly: state.json carries the terminal phase.
-        if run.state == "running", let snapshot = EternalService.readState(run) {
-            if snapshot.phase == "completed" {
+        if run.state == "running", let stateJson = snapshot.state {
+            if stateJson.phase == "completed" {
                 healIfNeeded(run: run, target: "completed")
                 return "completed"
             }
-            if snapshot.phase == "stopped" {
+            if stateJson.phase == "stopped" {
                 healIfNeeded(run: run, target: "stopped")
                 return "stopped"
             }
@@ -510,7 +533,7 @@ struct ProjectEternalSection: View {
             // CLI invocations that exited non-zero with no output) — heal
             // the cached SwiftData state so the dashboard pill switches
             // off "running" instead of staying stuck while nothing runs.
-            if snapshot.phase == "failed" {
+            if stateJson.phase == "failed" {
                 healIfNeeded(run: run, target: "failed")
                 return "failed"
             }

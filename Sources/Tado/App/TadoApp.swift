@@ -150,6 +150,16 @@ struct TadoApp: App {
             pSync.start()
             rew.start()
             kanban.start()
+            // Live run-state caches. They feed `ProjectEternalSection`
+            // and `ProjectDispatchSection` so view bodies never call
+            // `EternalService.readState` / `DispatchPlanService.
+            // planExistsOnDisk` synchronously on @MainActor inside a
+            // 2s `TimelineView` tick (the freeze-mode the prior four
+            // smooth-software passes missed). The 10s `.utility`
+            // background poll catches FSEvent misses without ever
+            // hitting the UI thread.
+            EternalRunStateCache.shared.start()
+            DispatchRunStateCache.shared.start()
             // ProjectIndexService instantiates and starts observing
             // in its initializer; nothing to do here beyond holding
             // the reference so the observer survives.

@@ -30,6 +30,7 @@ members = [
     "crates/tado-shared",
     "crates/tado-ipc",
     "crates/tado-settings",
+    "crates/tado-eternal-state",
     "crates/bt-core",
     "crates/dome-mcp",
     "crates/tado-mcp",

@@ -1,0 +1,40 @@
+#
+# tado-eternal-state — Rust-side reader for one Eternal run's on-disk
+# state. Replaces the synchronous `Data(contentsOf:)` + JSONDecoder
+# chain that lived inside `EternalService.readState` /
+# `readMetrics` / `craftedExistsOnDisk` and was being called from
+# the @MainActor `ProjectEternalSection` 2-second TimelineView
+# tick — the bug that froze the canvas on panel-driven Eternal
+# starts (debug plan rev 4).
+#
+# CLAUDE.md rule 9 ("Rust-first for new non-UI logic") + rule 4
+# ("FFI ↔ UI parity") are the load-bearing reasons this lives in
+# Rust. The Swift `EternalRunStateCache` calls one FFI shim per
+# ingest; bytes are decoded once on a `.utility` queue and
+# published back on @MainActor.
+#
+# No tokio, no async — this is a pure file-reader. The crate
+# depends only on `serde` + `serde_json` so it compiles cold in
+# under a second and pulls no transitive baggage.
+#
+
+[package]
+name = "tado-eternal-state"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Off-main reader for one Eternal run's state.json + metrics.jsonl + flag files. Linked through tado-terminal's static lib."
+
+[lib]
+name = "tado_eternal_state"
+# Re-exported through tado-terminal's libtado_core.a, so this
+# crate is rlib-only. No staticlib output — the unified static
+# archive that Package.swift links continues to be `libtado_core.a`.
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -115,11 +115,16 @@ cargo test -p tado-ipc -p tado-settings      # Targeted: IPC + settings crates o
 ```
 
 The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+)
-plus a Cargo workspace under `tado-core/` with **twelve crates**:
+plus a Cargo workspace under `tado-core/` with **thirteen crates**:
 `tado-terminal` (PTY + grid + VT parser + cbindgen FFI),
 `tado-shared` (cross-crate primitives),
 `tado-ipc` (IPC contract types + registry serialization),
 `tado-settings` (atomic JSON IO + 5-scope enum + path helpers),
+`tado-eternal-state` (off-main reader for one Eternal run's
+`state.json` + `metrics.jsonl` + flag files; backs the Swift
+`EternalRunStateCache` so SwiftUI's `ProjectEternalSection`
+TimelineView ticks never block @MainActor on disk IO — the rev-4
+freeze fix per CLAUDE.md rule 9),
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
