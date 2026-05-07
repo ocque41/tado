@@ -107,6 +107,8 @@ enum DispatchPlanService {
 
     /// Clear plan.json and all phases/*.json for one run, then write the run's
     /// brief to dispatch.md. Creates the run directory tree if missing.
+    /// Synchronous form — kept for non-spawn callers (tests, migrations,
+    /// deletion paths) where blocking is fine.
     static func resetPlan(_ run: DispatchRun) {
         let fm = FileManager.default
         let root = dispatchRoot(run)
@@ -123,6 +125,43 @@ enum DispatchPlanService {
 
         let dispatchURL = dispatchFileURL(run)
         try? run.brief.write(to: dispatchURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Off-main reset+brief-write for the architect spawn path. Mirrors
+    /// `EternalService.resetAndWriteBriefOffMain`. Snapshots all paths +
+    /// the brief on @MainActor, runs the FS work in a detached task at
+    /// `.userInitiated`. The architect process reads `dispatch.md`
+    /// after boot — a tens-of-ms late arrival is fine.
+    static func resetPlanOffMain(
+        rootPath: String,
+        planPath: String,
+        phasesDirPath: String,
+        dispatchPath: String,
+        brief: String
+    ) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fm = FileManager.default
+                try? fm.createDirectory(
+                    atPath: rootPath,
+                    withIntermediateDirectories: true
+                )
+                try? fm.removeItem(atPath: planPath)
+                if fm.fileExists(atPath: phasesDirPath) {
+                    try? fm.removeItem(atPath: phasesDirPath)
+                }
+                try? fm.createDirectory(
+                    atPath: phasesDirPath,
+                    withIntermediateDirectories: true
+                )
+                try? brief.write(
+                    toFile: dispatchPath,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                cont.resume()
+            }
+        }
     }
 
     /// Parse every .json in phases/ and return the one with order == 1, or nil.
@@ -240,7 +279,24 @@ enum DispatchPlanService {
     ) {
         guard let project = run.project else { return }
 
-        resetPlan(run)
+        // Off-main reset: snapshot every path + the brief on @MainActor,
+        // run the FS work (3 removeItem syscalls + 2 createDirectory +
+        // a `dispatch.md` write) in a detached task. Mirrors the
+        // architect/worker fix in EternalService.
+        let dispatchRootPath = dispatchRoot(run).path
+        let planPath = planFileURL(run).path
+        let phasesDirPath = phasesDirURL(run).path
+        let dispatchPath = dispatchFileURL(run).path
+        let dispatchBrief = run.brief
+        Task.detached(priority: .userInitiated) {
+            await DispatchPlanService.resetPlanOffMain(
+                rootPath: dispatchRootPath,
+                planPath: planPath,
+                phasesDirPath: phasesDirPath,
+                dispatchPath: dispatchPath,
+                brief: dispatchBrief
+            )
+        }
 
         let settings = fetchOrCreateSettings(modelContext: modelContext)
         // The architect receives the project name PLUS the run's short-id

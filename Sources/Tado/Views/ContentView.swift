@@ -383,7 +383,13 @@ struct ContentView: View {
     /// path prompts on `.claude/` writes. The merge is idempotent and runs
     /// every launch cheaply.
     private func runEternalStartupMigrations() {
-        EternalService.writeUserScopeSettings()
+        // `writeUserScopeSettings` is JSON read/parse/merge/write against
+        // `~/.claude/settings.json` — small, but synchronous file IO.
+        // Hop it to a background queue at `.utility` so it never adds
+        // a frame of jank to app launch on a cold disk.
+        Task.detached(priority: .utility) {
+            EternalService.writeUserScopeSettings()
+        }
         EternalService.migrateEternalDefaults(modelContext: modelContext)
         // One-shot: lift legacy per-project eternal/dispatch state into
         // EternalRun / DispatchRun rows, with files moved under
@@ -397,7 +403,9 @@ struct ContentView: View {
         // in-binary templates. An already-running worker keeps its in-
         // memory copy, but the next Stop + Start picks up the fresh file
         // immediately — users don't have to wait for the "next spawn after
-        // upgrading" cycle to see wrapper improvements.
+        // upgrading" cycle to see wrapper improvements. The function
+        // snapshots project paths on @MainActor and hops the file writes
+        // off-main internally.
         EternalService.refreshAllHookScripts(modelContext: modelContext)
         EternalService.reconcileActiveFlagsOnLaunch(
             modelContext: modelContext,

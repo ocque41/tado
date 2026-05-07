@@ -17,15 +17,6 @@ let package = Package(
             name: "Tado",
             dependencies: ["CTadoCore"],
             path: "Sources/Tado",
-            // Quarantine path for in-flight WIP files — author renames
-            // a partial-extension file to `.swift.wip` to keep it on
-            // disk without dragging the whole package out of compile.
-            // Once the WIP merges or gets dropped, the rename comes off
-            // and SwiftPM picks it up again.
-            exclude: [
-                "Extensions/Pets/PetsCoordinator+Companion.swift.wip",
-                "Extensions/Pets/PetsCoordinator+Settings.swift.wip"
-            ],
             resources: [
                 // SwiftPM compiles .metal into a .metallib inside the
                 // Tado_Tado.bundle. Loaded at runtime via Bundle.module.

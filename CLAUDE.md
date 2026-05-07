@@ -1494,8 +1494,7 @@ confirmation prompts — this is a documented release procedure.
 3. **Verify the build**: `swift build` (Swift app) and
    `make mcp` (`cargo build --release -p dome-mcp -p tado-mcp` — both
    stdio bridges, both Rust). Do not release if either fails —
-   fix first. (The Node `tado-mcp/` tree is kept as reference but
-   unused; the bundled `.app` ships only the Rust binaries.)
+   fix first.
 4. **Keep runtime artifacts out** — make sure `.tado/eternal/`,
    `.tado/dispatch/`, and `.tado/memory/notes/` are gitignored. Any
    new per-run runtime directory should be added to `.gitignore`

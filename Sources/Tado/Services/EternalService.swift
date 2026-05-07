@@ -312,8 +312,166 @@ enum EternalService {
     /// with `skipDangerousModePermissionPrompt: true` so the one-time
     /// "are you sure?" dialog never appears for this project.
     static func installHooks(_ project: Project) throws {
+        try installHooksByPath(rootPath: project.rootPath)
+    }
+
+    // MARK: - Off-main spawn prep
+
+    /// Snapshot of the run-scoped paths a spawn needs to write to disk,
+    /// captured on @MainActor so the actual file IO can run off the main
+    /// thread. `userBrief` is the run's brief text at snapshot time —
+    /// passing it here means the worker doesn't need to call back into a
+    /// SwiftData @Model from the background queue.
+    struct SpawnPrepPaths: Sendable {
+        let runRoot: String
+        let userBriefPath: String
+        let craftedPath: String
+        let progressPath: String
+        let metricsPath: String
+        let statePath: String
+        let activeFlagPath: String
+        let stopFlagPath: String
+    }
+
+    /// Build a `SpawnPrepPaths` snapshot from a live `EternalRun`. Must
+    /// be called on @MainActor (touches the SwiftData `@Model`); the
+    /// returned struct is Sendable and safe to pass into a detached task.
+    @MainActor
+    static func spawnPrepPaths(for run: EternalRun) -> SpawnPrepPaths {
+        SpawnPrepPaths(
+            runRoot: eternalRoot(run).path,
+            userBriefPath: userBriefFileURL(run).path,
+            craftedPath: craftedFileURL(run).path,
+            progressPath: progressFileURL(run).path,
+            metricsPath: metricsFileURL(run).path,
+            statePath: stateFileURL(run).path,
+            activeFlagPath: activeFlagURL(run).path,
+            stopFlagPath: stopFlagURL(run).path
+        )
+    }
+
+    /// Off-main reset+brief-write for the architect spawn path. Mirrors
+    /// the pre-fix sequence in `spawnArchitect`: ensure run dir exists,
+    /// remove stale architect/worker artifacts, write the user brief.
+    /// The architect process reads `user-brief.md` after boot — so a
+    /// late-arriving write is fine; the wrappers in spawnArchitect were
+    /// already designed for that timing.
+    static func resetAndWriteBriefOffMain(
+        paths: SpawnPrepPaths,
+        userBrief: String
+    ) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fm = FileManager.default
+                try? fm.createDirectory(
+                    atPath: paths.runRoot,
+                    withIntermediateDirectories: true
+                )
+                for path in [
+                    paths.craftedPath,
+                    paths.progressPath,
+                    paths.metricsPath,
+                    paths.statePath,
+                    paths.activeFlagPath,
+                    paths.stopFlagPath,
+                ] {
+                    try? fm.removeItem(atPath: path)
+                }
+                let trimmed = userBrief
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                try? trimmed.write(
+                    toFile: paths.userBriefPath,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                cont.resume()
+            }
+        }
+    }
+
+    /// Off-main `active` marker write. Mirrors `markActive(_:)` but
+    /// takes a path so it can run from a detached task without crossing
+    /// SwiftData's actor boundary.
+    static func markActiveOffMain(paths: SpawnPrepPaths) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fm = FileManager.default
+                try? fm.createDirectory(
+                    atPath: paths.runRoot,
+                    withIntermediateDirectories: true
+                )
+                try? Data().write(to: URL(fileURLWithPath: paths.activeFlagPath))
+                cont.resume()
+            }
+        }
+    }
+
+    /// Off-main pre-spawn for the worker: ensure run dir exists, seed
+    /// `progress.md`, lay down the empty `metrics.jsonl` sentinel for
+    /// sprint mode, and write the initial `state.json`. The worker's
+    /// first iteration reads these files; like the architect path, a
+    /// late-arriving write is harmless because the worker boots in
+    /// hundreds of ms while the writes complete in tens of ms.
+    static func writeWorkerSeedOffMain(
+        paths: SpawnPrepPaths,
+        mode: String,
+        completionMarker: String
+    ) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fm = FileManager.default
+                try? fm.createDirectory(
+                    atPath: paths.runRoot,
+                    withIntermediateDirectories: true
+                )
+                let now = ISO8601DateFormatter().string(from: Date())
+                let seed = "\(now): Eternal worker started — mode=\(mode)\n"
+                try? seed.write(
+                    toFile: paths.progressPath,
+                    atomically: true,
+                    encoding: .utf8
+                )
+                if mode == "sprint" {
+                    try? Data().write(to: URL(fileURLWithPath: paths.metricsPath))
+                }
+                let started = Date().timeIntervalSince1970
+                let initial = EternalState(
+                    mode: mode,
+                    startedAt: started,
+                    lastActivityAt: started,
+                    iterations: 0,
+                    sprints: 0,
+                    compactions: 0,
+                    phase: "working",
+                    lastProgressNote: nil,
+                    lastMetric: nil,
+                    completionMarker: completionMarker,
+                    sprintMarker: "[SPRINT-DONE]"
+                )
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                if let data = try? encoder.encode(initial) {
+                    try? data.write(
+                        to: URL(fileURLWithPath: paths.statePath),
+                        options: .atomic
+                    )
+                }
+                cont.resume()
+            }
+        }
+    }
+
+    /// Path-based core of `installHooks`. Operates on a plain `String` root
+    /// path so it can be called from a detached background task without
+    /// crossing the SwiftData @Model actor boundary. The original
+    /// `installHooks(_:)` is a thin shim that forwards here.
+    static func installHooksByPath(rootPath: String) throws {
         let fm = FileManager.default
-        let hooks = hooksDirURL(project)
+        let projectRoot = URL(fileURLWithPath: rootPath)
+        let hooks = projectRoot
+            .appendingPathComponent(".tado")
+            .appendingPathComponent("eternal")
+            .appendingPathComponent("hooks")
         try fm.createDirectory(at: hooks, withIntermediateDirectories: true)
 
         for (name, body) in hookScripts {
@@ -329,7 +487,6 @@ enum EternalService {
         // rule exempts these four, so writes under them don't prompt —
         // BUT creating the parent `.claude/` itself does. Creating
         // everything up-front here means the agent never needs to.
-        let projectRoot = URL(fileURLWithPath: project.rootPath)
         for subdir in ["agents", "commands", "skills", "worktrees"] {
             let url = projectRoot
                 .appendingPathComponent(".claude")
@@ -337,8 +494,22 @@ enum EternalService {
             try? fm.createDirectory(at: url, withIntermediateDirectories: true)
         }
 
-        try mergeClaudeSettings(project)
-        writeProjectLocalSettings(project)
+        try mergeClaudeSettingsByPath(rootPath: rootPath)
+        writeProjectLocalSettingsByPath(rootPath: rootPath)
+    }
+
+    /// Async wrapper around `installHooksByPath` that hops to a
+    /// `.userInitiated` background queue. Mirrors the off-main pattern in
+    /// `DomeContextPreamble.prependedPrompt` and `DomeRpcClient.listNotes`
+    /// so spawn paths never block @MainActor on file IO. See
+    /// `~/.claude/skills/tado-canvas-spawn-smooth/SKILL.md`.
+    static func installHooksOffMain(rootPath: String) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                try? installHooksByPath(rootPath: rootPath)
+                cont.resume()
+            }
+        }
     }
 
     /// The four hook scripts as file-name → body pairs. Stored inline so the
@@ -1460,8 +1631,14 @@ enum EternalService {
     ]
 
     private static func mergeClaudeSettings(_ project: Project) throws {
+        try mergeClaudeSettingsByPath(rootPath: project.rootPath)
+    }
+
+    private static func mergeClaudeSettingsByPath(rootPath: String) throws {
         let fm = FileManager.default
-        let settingsURL = claudeSettingsURL(project)
+        let settingsURL = URL(fileURLWithPath: rootPath)
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("settings.json")
         try fm.createDirectory(
             at: settingsURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -1625,8 +1802,14 @@ enum EternalService {
     /// `writeUserScopeSettings`: even if the user blows away their user
     /// settings, each project Tado touches retains local coverage.
     static func writeProjectLocalSettings(_ project: Project) {
+        writeProjectLocalSettingsByPath(rootPath: project.rootPath)
+    }
+
+    static func writeProjectLocalSettingsByPath(rootPath: String) {
         let fm = FileManager.default
-        let url = claudeLocalSettingsURL(project)
+        let url = URL(fileURLWithPath: rootPath)
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("settings.local.json")
         try? fm.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -1733,23 +1916,25 @@ enum EternalService {
     ) {
         guard let project = run.project else { return }
 
-        resetEternal(run)
-
-        // Write the raw user brief to user-brief.md so the architect has
-        // something concrete to read. If the brief is empty we still write
-        // an empty file — the architect prompt handles missing content.
-        try? FileManager.default.createDirectory(
-            at: eternalRoot(run),
-            withIntermediateDirectories: true
-        )
-        let rawBrief = run.userBrief.trimmingCharacters(in: .whitespacesAndNewlines)
-        try? rawBrief.write(to: userBriefFileURL(run), atomically: true, encoding: .utf8)
-
-        // Install hooks + allowlist now so the architect's own sessions don't
-        // get prompted to death. Architect sessions don't set
-        // TADO_ETERNAL_RUN_ID so their hook invocations short-circuit; the
-        // allowlist is the thing that actually matters for architect tool use.
-        try? installHooks(project)
+        // Snapshot every primitive the spawn-prep needs while we're on
+        // @MainActor (run paths come from the SwiftData @Model). The
+        // detached task below operates only on these Sendable copies —
+        // it never reaches back into `run` or any actor-bound state.
+        //
+        // Pre-fix: `resetEternal` (6 removeItem syscalls) plus a brief
+        // write + the hook install all ran synchronously on @MainActor
+        // inside the panel's `eternal_start` flow, freezing the canvas.
+        // Now every FS step happens in one detached task at .userInitiated.
+        let architectHookRoot = project.rootPath
+        let architectPaths = spawnPrepPaths(for: run)
+        let architectBrief = run.userBrief
+        Task.detached(priority: .userInitiated) {
+            await EternalService.resetAndWriteBriefOffMain(
+                paths: architectPaths,
+                userBrief: architectBrief
+            )
+            await EternalService.installHooksOffMain(rootPath: architectHookRoot)
+        }
 
         // Build the architect prompt. Mode carries through so the architect
         // knows whether to emit Sprint or Mega crafted.md. The prompt uses
@@ -1871,22 +2056,26 @@ enum EternalService {
     ) {
         guard let project = run.project else { return }
 
-        // Make sure the inbox directory exists before the interventor
-        // spawns — saves one round trip of "the file doesn't exist" and
-        // avoids any chance of a permission prompt on protected paths.
-        try? FileManager.default.createDirectory(
-            at: inboxDirURL(run),
-            withIntermediateDirectories: true
-        )
-        try? FileManager.default.createDirectory(
-            at: inboxProcessedDirURL(run),
-            withIntermediateDirectories: true
-        )
-
-        // installHooks is idempotent and cheap; re-running it makes sure
-        // settings + permission allowlist are fresh for the interventor's
-        // session. Worker's `active` marker stays intact.
-        try? installHooks(project)
+        // Off-main: ensure the inbox + inbox-processed dirs exist and
+        // refresh hooks while the interventor process boots. The
+        // interventor reads from the inbox after the user types a
+        // directive — well after the directory creates land. Same
+        // rationale as `spawnArchitect`.
+        let interventorHookRoot = project.rootPath
+        let inboxPath = inboxDirURL(run).path
+        let inboxProcessedPath = inboxProcessedDirURL(run).path
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            try? fm.createDirectory(
+                atPath: inboxPath,
+                withIntermediateDirectories: true
+            )
+            try? fm.createDirectory(
+                atPath: inboxProcessedPath,
+                withIntermediateDirectories: true
+            )
+            await EternalService.installHooksOffMain(rootPath: interventorHookRoot)
+        }
 
         // Pass the run UUID through the prompt so the interventor writes to
         // the correct run's inbox. The interventor is a Haiku tile that
@@ -1987,41 +2176,27 @@ enum EternalService {
     ) {
         guard let project = run.project else { return }
 
-        // Seed the progress log with a starting line so the compaction hook
-        // has something to re-inject even on a very short first iteration.
-        let now = ISO8601DateFormatter().string(from: Date())
-        let seed = "\(now): Eternal worker started — mode=\(run.mode)\n"
-        try? FileManager.default.createDirectory(
-            at: eternalRoot(run),
-            withIntermediateDirectories: true
-        )
-        try? seed.write(to: progressFileURL(run), atomically: true, encoding: .utf8)
-
-        if run.mode == "sprint" {
-            // Empty sentinel so `tail` doesn't error on first read —
-            // see markActive for the rule-2 carveout.
-            try? Data().write(to: metricsFileURL(run))
+        // Snapshot Sendable primitives on @MainActor; one detached task
+        // runs every pre-spawn FS step (seed + sentinel + state.json +
+        // hooks + active marker) at .userInitiated. The worker reads
+        // these files on its first iteration — well after the writes
+        // complete. The hook wrappers are `[ -f active ] && exec`, so
+        // even a millisecond late-arriving `active` marker only delays
+        // the FIRST hook fire by that much; subsequent fires are
+        // unaffected.
+        let workerHookRoot = project.rootPath
+        let workerPaths = spawnPrepPaths(for: run)
+        let workerMode = run.mode
+        let workerCompletionMarker = run.completionMarker
+        Task.detached(priority: .userInitiated) {
+            await EternalService.writeWorkerSeedOffMain(
+                paths: workerPaths,
+                mode: workerMode,
+                completionMarker: workerCompletionMarker
+            )
+            await EternalService.installHooksOffMain(rootPath: workerHookRoot)
+            await EternalService.markActiveOffMain(paths: workerPaths)
         }
-
-        // Initial state.json
-        let started = Date().timeIntervalSince1970
-        let initial = EternalState(
-            mode: run.mode,
-            startedAt: started,
-            lastActivityAt: started,
-            iterations: 0,
-            sprints: 0,
-            compactions: 0,
-            phase: "working",
-            lastProgressNote: nil,
-            lastMetric: nil,
-            completionMarker: run.completionMarker,
-            sprintMarker: "[SPRINT-DONE]"
-        )
-        try? writeInitialState(initial, run: run)
-
-        try? installHooks(project)
-        try? markActive(run)
 
         // Build the worker prompt. Both builders now reference crafted.md as
         // the source brief — the worker reads that file every iteration. The
@@ -2408,19 +2583,29 @@ enum EternalService {
     /// upgrading.
     @MainActor
     static func refreshAllHookScripts(modelContext: ModelContext) {
-        let fm = FileManager.default
+        // Snapshot project root paths on @MainActor (cheap SwiftData read),
+        // then hop the actual file IO off the main thread. With N projects,
+        // each pass is N × 7 atomic writes + chmod calls — that used to
+        // freeze the canvas at app launch alongside `runEternalStartupMigrations`.
         let descriptor = FetchDescriptor<Project>()
         guard let projects = try? modelContext.fetch(descriptor) else { return }
-        for project in projects {
-            let hooksDir = hooksDirURL(project)
-            guard fm.fileExists(atPath: hooksDir.path) else { continue }
-            for (name, body) in hookScripts {
-                let url = hooksDir.appendingPathComponent(name)
-                try? body.write(to: url, atomically: true, encoding: .utf8)
-                _ = try? fm.setAttributes(
-                    [.posixPermissions: NSNumber(value: Int16(0o755))],
-                    ofItemAtPath: url.path
-                )
+        let projectPaths = projects.map(\.rootPath)
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            for path in projectPaths {
+                let hooksDir = URL(fileURLWithPath: path)
+                    .appendingPathComponent(".tado")
+                    .appendingPathComponent("eternal")
+                    .appendingPathComponent("hooks")
+                guard fm.fileExists(atPath: hooksDir.path) else { continue }
+                for (name, body) in hookScripts {
+                    let url = hooksDir.appendingPathComponent(name)
+                    try? body.write(to: url, atomically: true, encoding: .utf8)
+                    _ = try? fm.setAttributes(
+                        [.posixPermissions: NSNumber(value: Int16(0o755))],
+                        ofItemAtPath: url.path
+                    )
+                }
             }
         }
     }

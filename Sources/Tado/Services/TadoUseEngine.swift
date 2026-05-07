@@ -46,6 +46,13 @@ final class TadoUseEngine {
     private var stdoutSource: DispatchSourceRead?
     private var stderrSource: DispatchSourceRead?
     private var generatedMcpConfigPaths: [URL] = []
+    /// Per-engine stable MCP config path. The config payload is a
+    /// constant function of the engine (just MCP server entry points
+    /// + binary paths), so we materialize it once and reuse on every
+    /// turn instead of re-writing a UUID-named file per turn. That
+    /// removes a JSON-serialize + atomic file write from the
+    /// @MainActor path on every panel submission.
+    private var cachedMcpConfigPath: [TerminalEngine: URL] = [:]
 
     /// Background actor that owns the JSONL parser + delta
     /// coalescer. Lives off MainActor so per-chunk JSON parses
@@ -158,8 +165,15 @@ final class TadoUseEngine {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
 
-        let mcpConfigURL = try writeMcpConfig(for: engine)
-        generatedMcpConfigPaths.append(mcpConfigURL)
+        let mcpConfigURL: URL
+        if let cached = cachedMcpConfigPath[engine],
+           FileManager.default.fileExists(atPath: cached.path) {
+            mcpConfigURL = cached
+        } else {
+            mcpConfigURL = try writeMcpConfig(for: engine)
+            cachedMcpConfigPath[engine] = mcpConfigURL
+            generatedMcpConfigPaths.append(mcpConfigURL)
+        }
 
         let composedPrompt = composedPrompt(prompt: prompt, engine: engine)
         let shellCommand = buildClaudeCommand(
@@ -490,7 +504,11 @@ final class TadoUseEngine {
             ],
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])
-        let url = dir.appendingPathComponent("turn-\(UUID().uuidString).json")
+        // Stable path keyed by engine — the payload is a constant
+        // function of engine + binary paths, so we re-use the same
+        // file on every turn. First-spawn pays one atomic write; every
+        // subsequent turn pays nothing.
+        let url = dir.appendingPathComponent("engine-\(engine.rawValue).json")
         try data.write(to: url, options: [.atomic])
         return url
     }

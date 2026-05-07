@@ -135,11 +135,25 @@ extension EternalService {
         appState: AppState
     ) -> AcceptResult {
         if let note = reviewNote, !note.isEmpty {
-            try? FileManager.default.createDirectory(
-                at: eternalRoot(run),
-                withIntermediateDirectories: true
-            )
-            try? note.write(to: reviewNoteFileURL(run), atomically: true, encoding: .utf8)
+            // Off-main: capture the run-root + note-file paths as plain
+            // Strings, write the markdown asynchronously. The audit
+            // record is read by humans long after the spawn completes;
+            // a tens-of-ms late arrival is harmless.
+            let runRootPath = eternalRoot(run).path
+            let notePath = reviewNoteFileURL(run).path
+            let noteBytes = note
+            Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                try? fm.createDirectory(
+                    atPath: runRootPath,
+                    withIntermediateDirectories: true
+                )
+                try? noteBytes.write(
+                    toFile: notePath,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
         }
 
         if run.state != expectedState {
@@ -187,23 +201,45 @@ extension EternalService {
         // overwrite anything. The archive doubles as a record of
         // what the coordinator (or human) chose to reject — never
         // silently lose work.
-        let fm = FileManager.default
-        let crafted = craftedFileURL(run)
-        if fm.fileExists(atPath: crafted.path) {
-            let archive = rejectedCraftedArchiveURL(run)
-            let header = "<!-- rejected: \(reason) -->\n\n".data(using: .utf8) ?? Data()
-            if let body = try? Data(contentsOf: crafted) {
-                try? (header + body).write(to: archive)
+        //
+        // Off-main: the crafted body can be multi-KB and the archive
+        // write is durable IO; reading + writing on @MainActor would
+        // freeze the panel for the duration of the disk round-trip.
+        // The sidecar is read by humans during audit, never by the
+        // architect re-spawn — a late arrival is fine.
+        let craftedPath = craftedFileURL(run).path
+        let archivePath = rejectedCraftedArchiveURL(run).path
+        let archiveReason = reason
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: craftedPath) else { return }
+            let header = "<!-- rejected: \(archiveReason) -->\n\n".data(using: .utf8) ?? Data()
+            let archiveURL = URL(fileURLWithPath: archivePath)
+            if let body = try? Data(contentsOf: URL(fileURLWithPath: craftedPath)) {
+                try? (header + body).write(to: archiveURL)
             } else {
-                try? header.write(to: archive)
+                try? header.write(to: archiveURL)
             }
         }
 
         // Refined brief, if supplied, overwrites user-brief.md so
-        // the next architect run reads the new direction.
+        // the next architect run reads the new direction. Update the
+        // SwiftData @Model on @MainActor (cheap) and hop the actual
+        // file write to a detached task — `spawnArchitect` (called
+        // immediately below) will also write the brief from `run.userBrief`
+        // off-main via `resetAndWriteBriefOffMain`, so the path
+        // converges either way.
         if let rebrief, !rebrief.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             run.userBrief = rebrief
-            try? rebrief.write(to: userBriefFileURL(run), atomically: true, encoding: .utf8)
+            let briefPath = userBriefFileURL(run).path
+            let briefBytes = rebrief
+            Task.detached(priority: .userInitiated) {
+                try? briefBytes.write(
+                    toFile: briefPath,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
         }
 
         // resetEternal wipes crafted.md + the worker-side state

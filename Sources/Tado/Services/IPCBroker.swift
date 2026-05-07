@@ -49,9 +49,26 @@ final class IPCBroker {
         BackgroundLifecycle.cleanupStaleIPCDirectories(currentPid: pid)
 
         createDirectoryStructure()
-        writeHelperScripts()
-        writeExternalScripts()
-        installMCPServer()
+        // Helper-script writes are durable IO that no consumer needs
+        // until an external CLI invocation lands — typically seconds
+        // to minutes after launch. Hop them to a detached utility-
+        // priority task so the @MainActor runloop doesn't pay 11+
+        // atomic file writes on every cold start. The methods are
+        // marked `nonisolated` so they can run from the detached task
+        // without a hop back to @MainActor (they read no instance
+        // state — only the captured `binDir` URL).
+        //
+        // The Rust `tado-mcp` binary Claude Code talks to is
+        // registered separately via `TadoMcpAutoRegister.kickoff()`
+        // (called from `TadoApp` on launch) — the legacy Node-MCP
+        // self-register that used to live here was dead code (the
+        // `tado-mcp/dist/index.js` candidate path no longer exists).
+        let binDir = ipcRoot.appendingPathComponent("bin")
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            self.writeHelperScripts(to: binDir)
+            self.writeExternalScripts(to: binDir)
+        }
         startExternalInboxWatcher()
         startTopicsWatcher()
         startSpawnRequestWatcher()
@@ -280,9 +297,11 @@ final class IPCBroker {
 
     // MARK: - Helper Scripts
 
-    private func writeHelperScripts() {
-        let binDir = ipcRoot.appendingPathComponent("bin")
-
+    /// Materialize the in-tile shell helpers under `<ipcRoot>/bin/`.
+    /// `nonisolated` so it can run from a detached background task at
+    /// app launch (see `init`'s comment) — none of the writers read
+    /// instance state.
+    nonisolated private func writeHelperScripts(to binDir: URL) {
         writeTadoSend(to: binDir)
         writeTadoRecv(to: binDir)
         writeTadoList(to: binDir)
@@ -309,7 +328,7 @@ final class IPCBroker {
     /// `tado_ipc::events_socket`; this script is just a shell-out
     /// convenience so CI logs and ad-hoc debugging don't need a
     /// Python heredoc each time.
-    private func writeTadoEvents(to binDir: URL) {
+    nonisolated private func writeTadoEvents(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-events [filter]
@@ -347,7 +366,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoSend(to binDir: URL) {
+    nonisolated private func writeTadoSend(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-send [--project <name>] <target-name-or-uuid> <message>
@@ -461,7 +480,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoRecv(to binDir: URL) {
+    nonisolated private func writeTadoRecv(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-recv [--wait]
@@ -501,7 +520,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoList(to binDir: URL) {
+    nonisolated private func writeTadoList(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Lists all peer sessions
@@ -731,8 +750,11 @@ final class IPCBroker {
 
     // MARK: - Tado A2A CLI Scripts
 
-    private func writeExternalScripts() {
-        let binDir = ipcRoot.appendingPathComponent("bin")
+    /// Materialize the external Tado A2A CLI helpers — `tado-list`,
+    /// `tado-send`, `tado-read`, etc. under `<ipcRoot>/bin/` AND
+    /// re-install them to `~/.local/bin/` for PATH discovery.
+    /// `nonisolated` for the same reason as `writeHelperScripts`.
+    nonisolated private func writeExternalScripts(to binDir: URL) {
         writeExternalTadoList(to: binDir)
         writeExternalTadoSend(to: binDir)
         writeExternalTadoRead(to: binDir)
@@ -777,7 +799,7 @@ final class IPCBroker {
     /// into `~/.local/bin`. Idempotent: removes any existing symlink
     /// or file at the destination first so a stale build never
     /// shadows a fresh one.
-    private func installRustCLIs(to localBin: URL) {
+    nonisolated private func installRustCLIs(to localBin: URL) {
         let names = ["tado-projects", "tado-eternal", "tado-dispatch", "tado-bootstrap", "tado-system", "tado-kanban"]
 
         // Prefer release build (the Makefile's `make dev` produces
@@ -817,47 +839,8 @@ final class IPCBroker {
         }
     }
 
-    private func installMCPServer() {
-        // Auto-register tado-mcp as a user-scope MCP server for Claude Code
-        // so agents in any project can discover and use Tado's A2A tools.
-        let claudeConfig = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude.json")
 
-        // Check if already registered
-        if let data = try? Data(contentsOf: claudeConfig),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let mcpServers = json["mcpServers"] as? [String: Any],
-           mcpServers["tado"] != nil {
-            return // Already registered
-        }
-
-        // Find the tado-mcp server entry point relative to the app bundle or repo
-        let candidates = [
-            // Development: repo checkout
-            Bundle.main.bundleURL
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("tado-mcp/dist/index.js"),
-            // Installed alongside the app
-            Bundle.main.resourceURL?
-                .appendingPathComponent("tado-mcp/dist/index.js"),
-        ].compactMap { $0 }
-
-        guard let serverPath = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
-            return // MCP server not found, skip
-        }
-
-        // Register via claude CLI if available
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        task.arguments = ["claude", "mcp", "add", "tado", "--scope", "user", "--", "node", serverPath.path]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-    }
-
-    private func installScript(name: String, from srcDir: URL, to destDir: URL) {
+    nonisolated private func installScript(name: String, from srcDir: URL, to destDir: URL) {
         let src = srcDir.appendingPathComponent("ext-\(name)")
         let dest = destDir.appendingPathComponent(name)
         let fm = FileManager.default
@@ -866,7 +849,7 @@ final class IPCBroker {
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
     }
 
-    private func writeExternalTadoList(to binDir: URL) {
+    nonisolated private func writeExternalTadoList(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Lists all Tado terminal sessions (run from any terminal)
@@ -926,7 +909,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoSend(to binDir: URL) {
+    nonisolated private func writeExternalTadoSend(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-send [--project <name>] <target-name-substring> <message>
@@ -1031,7 +1014,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoRead(to binDir: URL) {
+    nonisolated private func writeExternalTadoRead(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Reads terminal output from a Tado session
@@ -1194,7 +1177,7 @@ final class IPCBroker {
 
     // MARK: - Broadcast Script
 
-    private func writeTadoBroadcast(to binDir: URL) {
+    nonisolated private func writeTadoBroadcast(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-broadcast [--project <name>] [--team <name>] <message>
@@ -1263,7 +1246,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoBroadcast(to binDir: URL) {
+    nonisolated private func writeExternalTadoBroadcast(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-broadcast [--project <name>] [--team <name>] <message>
@@ -1328,7 +1311,7 @@ final class IPCBroker {
 
     // MARK: - Publish/Subscribe Scripts
 
-    private func writeTadoPublish(to binDir: URL) {
+    nonisolated private func writeTadoPublish(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-publish <topic> <message>
@@ -1373,7 +1356,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoPublish(to binDir: URL) {
+    nonisolated private func writeExternalTadoPublish(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-publish <topic> <message>
@@ -1417,7 +1400,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoSubscribe(to binDir: URL) {
+    nonisolated private func writeTadoSubscribe(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-subscribe <topic> [--project <name>]
@@ -1474,7 +1457,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoSubscribe(to binDir: URL) {
+    nonisolated private func writeExternalTadoSubscribe(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-subscribe <topic> [--project <name>]
@@ -1532,7 +1515,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoUnsubscribe(to binDir: URL) {
+    nonisolated private func writeTadoUnsubscribe(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-unsubscribe <topic>
@@ -1570,7 +1553,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoUnsubscribe(to binDir: URL) {
+    nonisolated private func writeExternalTadoUnsubscribe(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-unsubscribe <topic>
@@ -1609,7 +1592,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoTopics(to binDir: URL) {
+    nonisolated private func writeTadoTopics(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Lists all topics with subscriber counts
@@ -1648,7 +1631,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoTopics(to binDir: URL) {
+    nonisolated private func writeExternalTadoTopics(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Lists all topics with subscriber counts
@@ -1688,7 +1671,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeExternalTadoDeploy(to binDir: URL) {
+    nonisolated private func writeExternalTadoDeploy(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
@@ -1776,7 +1759,7 @@ final class IPCBroker {
 
     // MARK: - Team Script
 
-    private func writeTadoTeam(to binDir: URL) {
+    nonisolated private func writeTadoTeam(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-team [--send <message>]
@@ -1857,7 +1840,7 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private func writeTadoDeploy(to binDir: URL) {
+    nonisolated private func writeTadoDeploy(to binDir: URL) {
         let script = """
         #!/bin/bash
         # Usage: tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]

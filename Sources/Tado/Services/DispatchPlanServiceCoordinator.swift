@@ -99,11 +99,22 @@ extension DispatchPlanService {
         appState: AppState
     ) -> AcceptResult {
         if let note = reviewNote, !note.isEmpty {
-            try? FileManager.default.createDirectory(
-                at: dispatchRoot(run),
-                withIntermediateDirectories: true
-            )
-            try? note.write(to: reviewNoteFileURL(run), atomically: true, encoding: .utf8)
+            // Off-main: same rationale as the Eternal coordinator.
+            let dispatchRootPath = dispatchRoot(run).path
+            let notePath = reviewNoteFileURL(run).path
+            let noteBytes = note
+            Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                try? fm.createDirectory(
+                    atPath: dispatchRootPath,
+                    withIntermediateDirectories: true
+                )
+                try? noteBytes.write(
+                    toFile: notePath,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
         }
 
         if run.state != expectedState {
