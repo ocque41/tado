@@ -353,9 +353,33 @@ async fn dome_code_search(client: &RpcClient, actor: &Actor, args: Value) -> Res
         "query": query,
         "limit": limit,
     });
+    let mut explicit_project_ids = false;
     if let Some(project_ids) = args.get("project_ids").cloned() {
         if !project_ids.is_null() {
-            body["project_ids"] = project_ids;
+            // Treat an empty array as "no filter" so callers that
+            // unconditionally serialize the field don't accidentally
+            // exclude every project.
+            let is_empty = project_ids.as_array().map_or(false, |a| a.is_empty());
+            if !is_empty {
+                body["project_ids"] = project_ids;
+                explicit_project_ids = true;
+            }
+        }
+    }
+    // When the agent didn't pin a project_ids list AND the spawn
+    // environment exposes `TADO_PROJECT_ID`, default to that project
+    // so an agent spawned inside a Tado tile sees its own project's
+    // code first instead of the soup of every codebase the operator
+    // has ever ingested. Mirrors the pattern `scoped_defaults` uses
+    // for `dome_search`. Operator can override by passing an
+    // explicit `project_ids` list (including an empty one is
+    // already filtered above).
+    if !explicit_project_ids {
+        if let Ok(env_project_id) = std::env::var("TADO_PROJECT_ID") {
+            let trimmed = env_project_id.trim();
+            if !trimmed.is_empty() {
+                body["project_ids"] = json!([trimmed]);
+            }
         }
     }
     if let Some(languages) = args.get("languages").cloned() {
@@ -915,7 +939,7 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         tool(
             "dome_search",
-            "Search Dome notes and knowledge. Returns ranked hits with snippets.",
+            "Search Dome notes and knowledge. Returns ranked hits with snippets. When called from a Tado-spawned tile, `knowledge_scope` defaults to `merged` (or `project` if the project has been flagged isolated), and `project_id` is auto-filled from `TADO_PROJECT_ID`. Pass `knowledge_scope: \"global\"` to opt out of project scoping.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1035,7 +1059,7 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "dome_code_search",
-            "Hybrid (vector + lexical) retrieval over indexed source code chunks. Use when an agent needs to find function/class/method bodies semantically — \"where do we spawn the PTY\", \"render the glyph atlas\", \"store user preferences\". Distinct from `dome_search`, which targets notes/topics/retros.",
+            "Hybrid (vector + lexical) retrieval over indexed source code chunks. Use when an agent needs to find function/class/method bodies semantically — \"where do we spawn the PTY\", \"render the glyph atlas\", \"store user preferences\". Distinct from `dome_search`, which targets notes/topics/retros. When called from a Tado-spawned tile the active project's UUID is auto-injected as `project_ids` from `TADO_PROJECT_ID`; pass an explicit `project_ids` list (including `[]` is rejected — use a different tool to search globally) to override.",
             json!({
                 "type": "object",
                 "required": ["query"],
@@ -1044,7 +1068,7 @@ fn tool_definitions() -> Vec<Value> {
                     "project_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Restrict to one or more registered code projects. Omit to search every project."
+                        "description": "Restrict to one or more registered code projects. Omit to inherit `TADO_PROJECT_ID` from the spawn environment (Tado tiles get this for free). Pass `[]` is treated the same as omitting."
                     },
                     "languages": {
                         "type": "array",

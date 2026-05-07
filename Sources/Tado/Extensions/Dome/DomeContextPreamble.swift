@@ -79,6 +79,14 @@ enum DomeContextPreamble {
         let projectRoot: String?
         let teamName: String?
         let teammates: [String]
+        /// When true the spawn site has flagged this project as
+        /// isolated from global knowledge. Drives the
+        /// `recentProjectNotesFragment` `includeGlobal` flag and
+        /// appends an extra line to the retrieval contract telling
+        /// the agent to default `dome_search` / `dome_code_search` to
+        /// `knowledge_scope: "project"`. Defaults to `false` so old
+        /// callers and the pre-warm hook keep the merged behaviour.
+        var scopeIsolation: Bool = false
     }
 
     /// Compose a context preamble. Returns nil when there's nothing
@@ -93,7 +101,14 @@ enum DomeContextPreamble {
     /// the integration test in `tests/byte_equivalence/` exercises
     /// the contract on every release.
     static func build(for ctx: Context) -> String? {
-        if useContextPacksV2() {
+        // When `scopeIsolation` is on, the Swift composer appends an
+        // extra retrieval-contract line that the Rust pack engine
+        // doesn't yet know how to render. To keep the byte-stable
+        // spawn-pack contract (CLAUDE.md rule 6) intact while still
+        // honouring the operator's per-project toggle, fall back to
+        // the Swift composer in the isolated case. The byte-equiv
+        // test fixtures cover non-isolated context only.
+        if useContextPacksV2() && !ctx.scopeIsolation {
             if let rustPreamble = composeViaRust(ctx) {
                 return rustPreamble
             }
@@ -251,7 +266,7 @@ extension DomeContextPreamble {
             id: id,
             name: ctx.projectName ?? "Project",
             rootPath: ctx.projectRoot ?? "",
-            includeGlobal: true
+            includeGlobal: !ctx.scopeIsolation
         )
         guard let notes = DomeRpcClient.listNotes(topic: topic, limit: 20, domeScope: domeScope),
               !notes.isEmpty else {
@@ -283,6 +298,15 @@ extension DomeContextPreamble {
         ]
         if let topic {
             lines.append("- For this project, start with topic `\(topic)` when using `dome_search`.")
+        }
+        if ctx.scopeIsolation && ctx.projectID != nil {
+            // Project-Knowledge surface flipped the isolation switch.
+            // Tell the agent so it doesn't paste in global notes from
+            // unrelated projects (the foot-gun the v1.0 vault soup
+            // surfaced when the operator works across many codebases).
+            lines.append(
+                "- This project is **isolated from global knowledge** — `dome_search` and `dome_code_search` should default to `knowledge_scope: \"project\"` / `project_ids: [\"<this project>\"]`. Pass `include_global: true` only when the user explicitly asks for cross-project facts."
+            )
         }
         return lines.joined(separator: "\n")
     }

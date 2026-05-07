@@ -192,7 +192,8 @@ struct MetalTerminalTileView: View {
             projectID: session.projectID,
             projectRoot: session.projectRoot,
             teamName: session.teamName,
-            teammates: session.teamAgents ?? []
+            teammates: session.teamAgents ?? [],
+            scopeIsolation: session.scopeIsolation
         )
         let userPrompt = session.todoText
         let modeFlagsRaw = modeFlags

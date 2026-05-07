@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import SwiftData
 
 @Observable
 @MainActor
@@ -219,6 +220,22 @@ final class TerminalManager {
         session.teamID = teamID
         session.projectRoot = cwd
         session.teamAgents = teamAgents
+        // Mirror the project's per-installation `scopeIsolation`
+        // toggle onto the session so the spawn preamble can append
+        // its "isolated scope" hint without hopping back to the
+        // model context inside @Sendable closures further down. We
+        // resolve via the live ModelContext attached to the todo
+        // (every persisted SwiftData model carries one). The
+        // FetchDescriptor is project-id pinned and runs on the main
+        // actor — cheap, non-blocking, and already has to be hot
+        // because the same ModelContainer just spawned the todo.
+        if let projectID = todo.projectID, let context = todo.modelContext {
+            let descriptor = FetchDescriptor<Project>()
+            if let project = (try? context.fetch(descriptor))?
+                .first(where: { $0.id == projectID }) {
+                session.scopeIsolation = project.scopeIsolation
+            }
+        }
         // Rehydrate the persisted tile size from the todo so a manual
         // resize survives quit + relaunch. Pre-v0.18 todos default to
         // CanvasLayout.contentWidth/Height via SwiftData lightweight

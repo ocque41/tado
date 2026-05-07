@@ -1013,6 +1013,11 @@ private struct DangerZoneSection: View {
                     .foregroundStyle(Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                Text("Looking for a per-project reset? Open Project → Knowledge → Danger zone — it can wipe one project's codebase or notes without touching the other projects in this vault.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Text("Storage root: \(StorePaths.root.path)")
                     .font(Typography.monoMicro)
                     .foregroundStyle(Palette.textTertiary)

@@ -158,8 +158,7 @@ struct ProjectDetailView: View {
             // Agents
             SectionRail(
                 label: "Agents",
-                count: "\(agents.count) total",
-                bottomDivider: false
+                count: "\(agents.count) total"
             ) {
                 ProjectAgentsSection(
                     project: project,
@@ -170,6 +169,20 @@ struct ProjectDetailView: View {
                 )
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
+            }
+
+            // Knowledge — per-project Dome management. New in v1.1:
+            // codebase ingest, vector bootstrap, recipes, scope-
+            // isolation toggle, and per-project resets so projects
+            // stop colliding in the global Dome vault.
+            SectionRail(
+                label: "Knowledge",
+                count: "scoped · /\(project.name)",
+                bottomDivider: false
+            ) {
+                ProjectKnowledgeView(project: project)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
             }
         }
         .onDisappear {

@@ -86,6 +86,13 @@ final class TerminalSession: Identifiable {
     var teamID: UUID?
     var projectRoot: String?
     var teamAgents: [String]?
+    /// Mirrors `Project.scopeIsolation` at spawn time. When true the
+    /// preamble appends an extra retrieval-contract line warning the
+    /// agent that this project is isolated from global knowledge, and
+    /// project-scoped Dome reads inherit `includeGlobal = false`. Read
+    /// once at spawn — flipping the project flag mid-session does not
+    /// retroactively change the prepended preamble.
+    @ObservationIgnored var scopeIsolation: Bool = false
     /// When non-nil, overrides the settings-derived `--permission-mode …` flags
     /// for this session's spawn. Set by EternalService so an Eternal tile can
     /// launch with `--dangerously-skip-permissions` or `bypassPermissions`

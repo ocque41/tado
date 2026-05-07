@@ -70,6 +70,20 @@ final class Project {
     /// architect terminal (not strictly required, but mirrors Dispatch's UX).
     var eternalArchitectTodoID: UUID? = nil
 
+    /// When true, Dome retrievals on this project default to
+    /// `knowledge_scope: "project"` instead of `"merged"`, so agents
+    /// don't pull in global notes / other projects' codebase chunks
+    /// unless the user explicitly asks. The Project Knowledge surface
+    /// surfaces this as "Isolate this project from global knowledge",
+    /// and the spawn-time preamble appends an extra retrieval-contract
+    /// line warning the agent of the isolation.
+    ///
+    /// Defaults to `false` so existing projects keep the v1.0 merged
+    /// behaviour. Stored on the SwiftData model rather than in
+    /// `<project>/.tado/local.json` because it's a per-installation
+    /// preference, not a committed project setting.
+    var scopeIsolation: Bool = false
+
     // MARK: - Runs (multi-concurrent)
     /// All Eternal runs ever created for this project, including archived
     /// ones. The one-shot `didMigrateToMultipleRuns` migration seeds one
