@@ -9,19 +9,22 @@ struct ContentView: View {
     @State private var eventMonitor: Any?
 
     var body: some View {
+        ZStack(alignment: .bottomTrailing) {
         VStack(spacing: 0) {
             // Hidden zero-sized button carrying Cmd+Shift+U so the
             // hotkey resolves while the main window is key. Matches
             // `DomeHotkeyRegistrar`'s pattern.
             TadoUseHotkeyRegistrar()
 
-            // .zIndex(1) forces the nav bar above the canvas ZStack in both
-            // rendering and hit-testing. Prevents a canvas tile whose NSView
-            // extends upward (via scale + pan transforms) from stealing
-            // clicks in the nav-bar's region. Replaces the former
-            // `.clipped()` on the canvas, which also broke tile drag /
-            // resize / scrollback.
-            TopNavBar()
+            // Relay redesign — RelayTopNavBar replaces TopNavBar.
+            // 56px horizontal nav with brand cell + workspace pill +
+            // 11 nav items + Jump (⌘K) button + responsive overflow
+            // collapse. The legacy TopNavBar is preserved in the file
+            // tree but no longer mounted; phase 15 cleanup removes it.
+            //
+            // .zIndex(1) forces the nav bar above the canvas ZStack
+            // in both rendering and hit-testing.
+            RelayTopNavBar()
                 .zIndex(1)
 
             HStack(spacing: 0) {
@@ -52,7 +55,11 @@ struct ContentView: View {
                         .opacity(appState.currentView == .canvas ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .canvas)
 
-                    TodoListView()
+                    // Relay redesign — RelayTodoListView replaces
+                    // TodoListView at the .todos route. Same data
+                    // flow (TodoItem + TerminalManager.spawnAndWire),
+                    // new chrome.
+                    RelayTodoListView()
                         .opacity(appState.currentView == .todos ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .todos)
 
@@ -178,6 +185,14 @@ struct ContentView: View {
         }
         .onChange(of: appState.currentView) { _, newView in
             releaseTerminalFocusIfNeeded(for: newView)
+        }
+
+        // Relay tweaks panel — bottom-right floating developer panel
+        // for switching nav mode + theme at runtime. Visibility
+        // gated by `@AppStorage("relay.tweaksVisible")` so it only
+        // renders when explicitly toggled on. Sits on top of all
+        // page content via the outer `ZStack(.bottomTrailing)`.
+        RelayTweaksPanel()
         }
     }
 

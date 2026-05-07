@@ -15,25 +15,67 @@ enum ViewMode: String, CaseIterable, Equatable {
     case todos
     case extensions
 
+    // Relay-redesign nav cases — added so the top-bar / rail can
+    // surface the eleven slots the brief enumerates (Todos / Canvas /
+    // Kanban / Projects / Teams / Sessions / Dispatch / Knowledge /
+    // Eternal / Pets / Settings). The new cases either open the
+    // existing extension window (Knowledge → Dome window, Pets →
+    // Pets window) or fall back to a related core surface until a
+    // dedicated page lands in subsequent redesign phases.
+    case kanban
+    case teams
+    case sessions
+    case dispatch
+    case knowledge
+    case eternal
+    case pets
+    case settings
+
     var label: String {
         switch self {
-        case .details: "Details"
-        case .canvas: "Canvas"
-        case .projects: "Projects"
-        case .todos: "Todos"
+        case .details:    "Details"
+        case .canvas:     "Canvas"
+        case .projects:   "Projects"
+        case .todos:      "Todos"
         case .extensions: "Extensions"
+        case .kanban:     "Kanban"
+        case .teams:      "Teams"
+        case .sessions:   "Sessions"
+        case .dispatch:   "Dispatch"
+        case .knowledge:  "Knowledge"
+        case .eternal:    "Eternal"
+        case .pets:       "Pets"
+        case .settings:   "Settings"
         }
     }
 
     var icon: String {
         switch self {
-        case .details: "chart.bar.doc.horizontal"
-        case .canvas: "square.grid.3x3"
-        case .projects: "folder"
-        case .todos: "checklist"
+        case .details:    "chart.bar.doc.horizontal"
+        case .canvas:     "square.grid.3x3"
+        case .projects:   "folder"
+        case .todos:      "checklist"
         case .extensions: "puzzlepiece.extension"
+        case .kanban:     "rectangle.split.3x1"
+        case .teams:      "person.3"
+        case .sessions:   "list.bullet.rectangle"
+        case .dispatch:   "arrow.triangle.branch"
+        case .knowledge:  "books.vertical"
+        case .eternal:    "infinity"
+        case .pets:       "pawprint"
+        case .settings:   "gearshape"
         }
     }
+}
+
+/// Relay nav mode toggle (developer-facing, persisted via AppStorage
+/// `relay.navMode`). `topbar` (default) is the 56px horizontal nav;
+/// `rail` is the 64px vertical alternate. Read inside ContentView
+/// via `@AppStorage("relay.navMode")` and switched via the
+/// RelayTweaksPanel.
+enum RelayNavMode: String, CaseIterable, Equatable {
+    case topbar
+    case rail
 }
 
 enum TerminalEngine: String, Codable, CaseIterable {
