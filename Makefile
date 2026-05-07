@@ -1,4 +1,4 @@
-.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench sync-header mcp bridge perf-suite perf-bench perf-detect perf-test
+.PHONY: dev debug release build clean core core-clean core-test all-test bench core-bench sync-header mcp bridge perf-suite perf-bench perf-detect perf-test plugin plugin-clean
 
 # Daily development: release-optimized Rust core + header sync + Swift app.
 # Launching the app this way boots Tado AND (via DomeExtension.onAppLaunch)
@@ -88,3 +88,50 @@ perf-detect: perf-suite
 # Run perf-suite's full test matrix (unit + integration + fixtures).
 perf-test:
 	cd tado-core && cargo test -p perf-suite
+
+# Build the bundled `tado-cowork-plugin` payload. Copies (or
+# symlinks in dev) the three Rust MCP binaries — `tado-mcp`,
+# `dome-mcp`, `tado-use-bridge` — into the plugin's `bin/`
+# directory so `claude plugin install` can find them.
+#
+# Production: `make plugin` after `make mcp` produces a complete
+# `tado-core/crates/tado-cowork-plugin/` tree ready to be bundled
+# into Tado.app/Contents/Resources/. Run `claude plugin
+# marketplace add <path> && claude plugin install
+# tado-cowork-plugin@tado-local` to install into Claude Desktop.
+#
+# Dev: the symlinks pick up live `cargo build` output without
+# re-copying.
+plugin: mcp
+	@echo "Populating tado-cowork-plugin/bin/ ..."
+	@PLUGIN_BIN="tado-core/crates/tado-cowork-plugin/bin"; \
+	mkdir -p "$$PLUGIN_BIN"; \
+	for binary in tado-mcp dome-mcp; do \
+		src="tado-core/target/release/$$binary"; \
+		if [ -f "$$src" ]; then \
+			cp -f "$$src" "$$PLUGIN_BIN/$$binary"; \
+			echo "  copied $$binary"; \
+		else \
+			echo "  MISSING $$src — run 'make mcp' first"; exit 1; \
+		fi; \
+	done; \
+	bridge_src=".build/release/tado-use-bridge"; \
+	if [ -f "$$bridge_src" ]; then \
+		cp -f "$$bridge_src" "$$PLUGIN_BIN/tado-use-bridge"; \
+		echo "  copied tado-use-bridge"; \
+	else \
+		echo "  MISSING $$bridge_src — run 'make bridge' first"; exit 1; \
+	fi; \
+	chmod +x "$$PLUGIN_BIN/tado-mcp" "$$PLUGIN_BIN/dome-mcp" "$$PLUGIN_BIN/tado-use-bridge"; \
+	chmod -x "$$PLUGIN_BIN/README.md" 2>/dev/null || true; \
+	echo "Plugin payload ready at tado-core/crates/tado-cowork-plugin/"
+
+# Remove the populated bin/ contents so a fresh `make plugin`
+# starts clean. Only deletes binaries — leaves README.md and
+# .gitignore in place.
+plugin-clean:
+	@PLUGIN_BIN="tado-core/crates/tado-cowork-plugin/bin"; \
+	if [ -d "$$PLUGIN_BIN" ]; then \
+		find "$$PLUGIN_BIN" -type f \! -name 'README.md' \! -name '.gitignore' -delete; \
+		echo "Cleaned $$PLUGIN_BIN/"; \
+	fi

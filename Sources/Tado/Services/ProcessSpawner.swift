@@ -1,7 +1,24 @@
 import Foundation
 
 enum ProcessSpawner {
-    static func command(for todoText: String, engine: TerminalEngine, modeFlags: [String] = [], effortFlags: [String] = [], modelFlags: [String] = [], agentName: String? = nil) -> (executable: String, args: [String]) {
+    static func command(for todoText: String, engine: TerminalEngine, modeFlags: [String] = [], effortFlags: [String] = [], modelFlags: [String] = [], agentName: String? = nil, projectRoot: String? = nil, runID: UUID? = nil) -> (executable: String, args: [String]) {
+        // Cowork has no CLI binary on PATH — Cowork is a tab inside
+        // the Claude Desktop app. Tado launches it via the bundled
+        // `tado-cowork` Rust binary, which builds the documented
+        // `claude://cowork/new?q=…&folder=…` URL and shells `open(1)`.
+        // The `tado-cowork` invocation is one-shot: it returns
+        // immediately after `open(1)` succeeds, so the tile's PTY
+        // sees the launcher's status preamble and then closes; the
+        // CoworkOutputPoller takes over from there, watching for
+        // the result file the bundled plugin's skill instructs
+        // Cowork to write.
+        if engine == .cowork {
+            return coworkCommand(
+                for: todoText,
+                projectRoot: projectRoot,
+                runID: runID
+            )
+        }
         let escaped = shellEscape(todoText)
         let cli = engine.rawValue
         var flags = modeFlags + effortFlags + modelFlags
@@ -17,6 +34,59 @@ enum ProcessSpawner {
         // themselves harmlessly, so no existing flag regresses.
         let allFlags = flags.map(shellEscape).joined(separator: " ")
         let cmd = allFlags.isEmpty ? "\(cli) \(escaped)" : "\(cli) \(allFlags) \(escaped)"
+        return ("/bin/zsh", ["-l", "-c", cmd])
+    }
+
+    /// Resolve the `tado-cowork` binary path. Tries the bundled
+    /// `.app/Contents/MacOS/tado-cowork` first (production), then
+    /// `~/.local/bin/tado-cowork` (where IPCBroker installs the
+    /// helper at app launch), then the dev workspace
+    /// `tado-core/target/release/tado-cowork`. If none exist, fall
+    /// back to a bare `tado-cowork` and let zsh's PATH lookup
+    /// surface the failure to the user.
+    private static func resolveTadoCoworkBinary() -> String {
+        let bundled = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/MacOS/tado-cowork")
+        if FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled.path
+        }
+        let userBin = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin/tado-cowork")
+        if FileManager.default.fileExists(atPath: userBin.path) {
+            return userBin.path
+        }
+        let devBuild = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("tado-core/target/release/tado-cowork")
+        if FileManager.default.fileExists(atPath: devBuild.path) {
+            return devBuild.path
+        }
+        return "tado-cowork"
+    }
+
+    /// Build a `tado-cowork --prompt … --folder … --run-id …`
+    /// invocation. The `tado-cowork` binary is what actually fires
+    /// the `claude://cowork/new` URL via `open(1)`. We pass the
+    /// project root as the `--folder` so Cowork attaches it to the
+    /// task; the run-id is what the bundled `cowork-tado-tools`
+    /// skill teaches Cowork to use as the result-file basename
+    /// (`<projectRoot>/.tado/cowork/<runID>.md`), which is what
+    /// `CoworkOutputPoller` watches for.
+    static func coworkCommand(
+        for todoText: String,
+        projectRoot: String?,
+        runID: UUID?
+    ) -> (executable: String, args: [String]) {
+        let binary = resolveTadoCoworkBinary()
+        // Default the folder to the user's home if no projectRoot
+        // is provided — that's the safe fallback for an ad-hoc
+        // Cowork tile spawned outside any registered project.
+        let folder = projectRoot ?? FileManager.default
+            .homeDirectoryForCurrentUser.path
+        let runIDString = (runID ?? UUID()).uuidString.lowercased()
+        let cmd = "\(shellEscape(binary)) " +
+                  "--prompt \(shellEscape(todoText)) " +
+                  "--folder \(shellEscape(folder)) " +
+                  "--run-id \(shellEscape(runIDString))"
         return ("/bin/zsh", ["-l", "-c", cmd])
     }
 
@@ -953,6 +1023,100 @@ enum ProcessSpawner {
     /// `<shortid>` placeholder keeps the example readable and the agent will
     /// resolve via `tado-list` or env vars.
     private static let projectShortIDPlaceholder = "<shortid>"
+
+    // MARK: - Bootstrap Cowork plugin
+
+    /// One-shot prompt for the agent that installs the bundled
+    /// `tado-cowork-plugin` into the user's Claude install. This is
+    /// the fifth `Bootstrap …` action; it complements the four
+    /// existing ones (A2A, Team, Auto Mode, Knowledge) by extending
+    /// the same surface to Claude Cowork running inside the Desktop
+    /// app.
+    ///
+    /// The prompt is engine-agnostic — the spawned agent can be
+    /// either Claude Code or Codex; both can shell `claude plugin
+    /// install`. The prompt instructs the agent to run the install
+    /// + smoke-test the result + report back, then exit. No code
+    /// changes, no project mutations.
+    static func bootstrapCoworkPluginPrompt(
+        projectName: String,
+        projectRoot: String
+    ) -> String {
+        """
+        You are bootstrapping the bundled `tado-cowork-plugin` into the user's Claude \
+        install. After this runs, Claude Cowork (and any Claude Code session) will see \
+        Tado's full 71-tool MCP surface (16 `tado_*` + 18 `dome_*` + 41 `tado_use_*`) \
+        plus a teaching skill (`cowork-tado-tools`) and an agent persona \
+        (`cowork-canvas-coworker`). Project: "\(projectName)" at \(projectRoot).
+
+        ═══════════════════════════════════════════════════════════
+        WHY THIS MATTERS
+        ═══════════════════════════════════════════════════════════
+        Tado's Eternal/Dispatch architects, the canvas tiles, and Tado Use already drive \
+        the same MCP surface from Claude Code's side. Cowork — the desktop-first \
+        knowledge-work coworker that ships inside the Claude Desktop app — has no CLI \
+        binary; the only way to give it the same tool surface is via the plugin model. \
+        This bootstrap closes the parity gap so Cowork can sit on top of an active \
+        Tado canvas as a long-form planning surface, delegating executable work to \
+        running Code/Codex tiles via `tado_send`.
+
+        ═══════════════════════════════════════════════════════════
+        WHAT TO DO
+        ═══════════════════════════════════════════════════════════
+        1. Verify the `claude` CLI is on PATH:
+             Bash: `claude --version`
+           If it errors, tell the user "Claude Code CLI not found — install from \
+           https://code.claude.com/docs/en/setup before running this bootstrap" and stop.
+
+        2. Resolve the bundled plugin path. Tado's installer looks for the plugin tree \
+           at one of these paths in order:
+             a. `Tado.app/Contents/Resources/tado-cowork-plugin/` (production)
+             b. `<repo>/tado-core/crates/tado-cowork-plugin/` (dev)
+           Use whichever exists. If neither exists, tell the user "tado-cowork-plugin \
+           tree not found — Tado.app may be incomplete or `make plugin` hasn't run yet" \
+           and stop.
+
+        3. Register the local marketplace + install the plugin:
+             Bash: `claude plugin marketplace add <plugin-path>`
+             Bash: `claude plugin install tado-cowork-plugin@tado-local`
+
+           The first command is idempotent — re-running it on an existing tado-local \
+           marketplace just refreshes the path. The second installs the plugin if not \
+           already enabled; it's a no-op otherwise.
+
+        4. Verify install:
+             Bash: `claude plugin list`
+           Confirm `tado-cowork-plugin@tado-local` appears in the output.
+
+        5. Smoke-test the MCP surface (optional but informative):
+             Bash: `claude --plugin-dir <plugin-path> -p "Run dome_recipe_apply with intent_key=architecture-review and tell me how many citations came back."`
+           This proves Cowork (and any other Claude Code session) can reach the plugin's \
+           MCP servers. If it errors, the most common cause is a stale `dome` token — \
+           tell the user to open Tado's Settings → Knowledge → Agent tokens and copy \
+           a fresh one.
+
+        6. Tell the user the plugin is installed, then exit. Do NOT modify any files in \
+           \(projectRoot) — this bootstrap is purely about registering the plugin with \
+           Claude.
+
+        ═══════════════════════════════════════════════════════════
+        WHAT NOT TO DO
+        ═══════════════════════════════════════════════════════════
+          • Do NOT edit `~/.claude/settings.json` or `~/.claude/plugins/` directly. The \
+            `claude plugin` CLI does the right thing; bypassing it leaves stale state.
+          • Do NOT attempt to install the plugin into anything other than the user's \
+            Claude install. The plugin is meant for Claude Cowork (and Claude Code as a \
+            consequence); it doesn't make sense for Codex.
+          • Do NOT start an Eternal/Dispatch run with `engine = cowork`. Cowork has no \
+            PTY-attached output and the perf/sprint Stop-hook contract can't fire \
+            against it. The Eternal modal already filters Cowork out of the engine \
+            picker; agents that hand-edit state.json will see clear error messages \
+            from `EternalService.startWorker`.
+          • Do NOT skip the `claude --version` preflight. The plugin install commands \
+            silently no-op when the CLI isn't installed, which is the worst possible \
+            failure mode.
+        """
+    }
 
     // MARK: - Dispatch Architect
 
@@ -2187,6 +2351,23 @@ enum ProcessSpawner {
               • Never ask the user a question via the CLI — log it to \
                 progress.md and decide.
             """
+        case .cowork:
+            // Eternal does not support Cowork — Cowork has no PTY, no
+            // turn-marker contract, and no headless output capture, so
+            // the per-iteration `[SCORE-OK]` / `ETERNAL-DONE` Stop-hook
+            // dance can't run. EternalService rejects cowork runs at
+            // the architect/worker spawn site. This branch exists for
+            // switch-exhaustiveness only.
+            return """
+            ═══════════════════════════════════════════════════════════
+            NON-STOP HYGIENE — Cowork is NOT a supported Eternal engine
+            ═══════════════════════════════════════════════════════════
+            Eternal runs need a PTY-attached, turn-marker-aware CLI \
+            (Claude Code or Codex). Cowork lives inside the Claude \
+            Desktop app and has no per-turn output Tado can read, so \
+            Sprint / Performance gates can't fire. Stop the run and \
+            re-create it with `engine = claude` or `engine = codex`.
+            """
         }
     }
 
@@ -2741,6 +2922,18 @@ enum ProcessSpawner {
                  running server, background it with `& disown`. Prefer \
                  writing scratch files under `.tado/scratch/` or \
                  `\(runDir)/`.
+            """
+        case .cowork:
+            // Eternal does not support Cowork — see the matching
+            // branch in eternalNonStopHygiene above. This first-rule
+            // string is dead code in normal operation; reuse the
+            // Claude rule shape so the architect prompt parses if
+            // someone hand-edits state.json.
+            firstRule = """
+              1. BEFORE any `Write` or `Edit` on a new path, run `Bash(mkdir -p <dir>)` \
+                 first. (Note: Eternal does not support Cowork as an architect/worker \
+                 engine. Stop the run and recreate with `engine = claude` or `engine = \
+                 codex`.)
             """
         }
         return """

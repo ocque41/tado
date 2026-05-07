@@ -73,7 +73,7 @@ struct SettingsView: View {
                             )
                         }
                         .pickerStyle(.menu)
-                    } else {
+                    } else if settings.engine == .codex {
                         Picker(selection: Binding(
                             get: { settings.codexMode },
                             set: { settings.codexMode = $0; try? modelContext.save() }
@@ -85,6 +85,22 @@ struct SettingsView: View {
                             labelWithTip(
                                 "Approval mode:",
                                 "How Codex prompts before running a command. Matches Codex's own --approval flag."
+                            )
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        // Cowork
+                        Picker(selection: Binding(
+                            get: { settings.coworkMode },
+                            set: { settings.coworkMode = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(CoworkMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        } label: {
+                            labelWithTip(
+                                "Cowork mode:",
+                                "Async task: the tile waits for Cowork to write its result file (`<project>/.tado/cowork/<run-id>.md`) and renders it back. Interactive: Tado opens the Desktop app's Cowork tab and the tile shows a one-shot status line — you continue inside the app."
                             )
                         }
                         .pickerStyle(.menu)
@@ -107,7 +123,7 @@ struct SettingsView: View {
                             )
                         }
                         .pickerStyle(.menu)
-                    } else {
+                    } else if settings.engine == .codex {
                         Picker(selection: Binding(
                             get: { settings.codexModel },
                             set: { settings.codexModel = $0; try? modelContext.save() }
@@ -119,6 +135,22 @@ struct SettingsView: View {
                             labelWithTip(
                                 "Codex model:",
                                 "Default Codex model for new tiles."
+                            )
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        // Cowork
+                        Picker(selection: Binding(
+                            get: { settings.coworkModel },
+                            set: { settings.coworkModel = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(CoworkModel.allCases, id: \.self) { model in
+                                Text(model.displayName).tag(model)
+                            }
+                        } label: {
+                            labelWithTip(
+                                "Cowork model (hint):",
+                                "Cowork picks the model from its own Desktop app settings — Tado's selection is a hint the bundled plugin's preamble passes to Cowork. It does NOT override the Desktop app's configured model. Pick `Auto` to let the Desktop app decide."
                             )
                         }
                         .pickerStyle(.menu)
@@ -141,7 +173,7 @@ struct SettingsView: View {
                             )
                         }
                         .pickerStyle(.menu)
-                    } else {
+                    } else if settings.engine == .codex {
                         Picker(selection: Binding(
                             get: { settings.codexEffort },
                             set: { settings.codexEffort = $0; try? modelContext.save() }
@@ -153,6 +185,22 @@ struct SettingsView: View {
                             labelWithTip(
                                 "Reasoning effort:",
                                 "Reasoning depth Codex applies. Higher = slower and more thorough."
+                            )
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        // Cowork
+                        Picker(selection: Binding(
+                            get: { settings.coworkEffort },
+                            set: { settings.coworkEffort = $0; try? modelContext.save() }
+                        )) {
+                            ForEach(CoworkEffort.allCases, id: \.self) { effort in
+                                Text(effort.displayName).tag(effort)
+                            }
+                        } label: {
+                            labelWithTip(
+                                "Cowork effort (hint):",
+                                "Cowork has no `--effort` flag — it picks depth from its own internal heuristics + your Desktop app account tier. Tado's pick is a hint the bundled plugin's preamble surfaces to Cowork."
                             )
                         }
                         .pickerStyle(.menu)
@@ -193,7 +241,7 @@ struct SettingsView: View {
                             )
                         }
                         .disabled(!settings.claudeNoFlicker)
-                    } else {
+                    } else if settings.engine == .codex {
                         Toggle(isOn: Binding(
                             get: { settings.codexAlternateScreen },
                             set: { settings.codexAlternateScreen = $0; try? modelContext.save() }
@@ -203,9 +251,47 @@ struct SettingsView: View {
                                 "Codex's alt-screen toggle. Off keeps --no-alt-screen on, which is required for Codex to render correctly in embedded tiles today. Turn on only when testing a Codex build that handles alt-screen."
                             )
                         }
+                    } else {
+                        // Cowork — no harness-display knobs (it runs in
+                        // the Desktop app, not in a Tado-rendered PTY).
+                        // The actual Cowork-specific surface is the
+                        // Bootstrap Cowork plugin button (added below
+                        // in its own dedicated section).
+                        Text("Cowork runs inside the Claude Desktop app — no Tado-side display knobs apply. Use Settings → Engine → Bootstrap Cowork plugin to install the Tado tool surface into Cowork.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Palette.textSecondary)
                     }
                 } header: {
                     Text("Harness Display")
+                }
+
+                if settings.engine == .cowork {
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Cowork-Tado bridge")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("Tado ships a Claude plugin that exposes its full 71-tool surface (16 `tado_*` + 18 `dome_*` + 41 `tado_use_*`) plus a teaching skill (`cowork-tado-tools`) and an agent persona (`cowork-canvas-coworker`). When installed, Cowork can read/write Dome notes, list/send/read Tado tiles, drive the autonomous control plane — exactly the same surface Claude Code already has via the auto-registered MCP servers.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Palette.textSecondary)
+                            HStack(spacing: 8) {
+                                Button("Bootstrap Cowork plugin") {
+                                    confirmInstallCoworkPlugin()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button("Uninstall Cowork plugin") {
+                                    confirmUninstallCoworkPlugin()
+                                }
+                                .buttonStyle(.bordered)
+                                Spacer()
+                                let installed = CoworkPluginInstaller.isInstalled()
+                                Text(installed ? "Plugin installed" : "Plugin not installed")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(installed ? Color.green : Palette.textTertiary)
+                            }
+                        }
+                    } header: {
+                        Text("Cowork plugin")
+                    }
                 }
 
                 Section {
@@ -357,6 +443,57 @@ struct SettingsView: View {
         HStack(spacing: 6) {
             Text(label)
             InfoTip(text: tip)
+        }
+    }
+
+    /// Cowork plugin install prompt. Mirrors `confirmReset` shape —
+    /// the action is constructive (writes a Tado plugin into the
+    /// user's `~/.claude/plugins/` cache via `claude plugin install`).
+    /// Surfaces the file paths the user is allowing Tado to touch so
+    /// there are no surprises. Lives on `SettingsView` directly so the
+    /// button click site (Settings → Engine → Cowork section) can
+    /// reach it without a closure-passing dance.
+    private func confirmInstallCoworkPlugin() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Install Tado-Cowork plugin into Claude Desktop?"
+        alert.informativeText = """
+            Tado will register `tado-cowork-plugin` as a local Claude plugin marketplace, \
+            then install it. This touches:
+
+            • `~/.claude/plugins/cache/tado-cowork-plugin/` — bundled MCP servers (tado, dome, tado-use-bridge), the `cowork-tado-tools` skill, and the `cowork-canvas-coworker` agent definition.
+            • `~/.claude/settings.json` — adds the plugin to `enabledPlugins`.
+
+            After install, Cowork (and any Claude Code session) will see Tado's full 71-tool surface (16 `tado_*` + 18 `dome_*` + 41 `tado_use_*` MCP tools).
+
+            You can uninstall any time from this same Settings panel.
+            """
+        alert.addButton(withTitle: "Cancel")
+        _ = alert.addButton(withTitle: "Install plugin")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        Task.detached(priority: .userInitiated) {
+            CoworkPluginInstaller.install()
+        }
+    }
+
+    private func confirmUninstallCoworkPlugin() {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Uninstall Tado-Cowork plugin?"
+        alert.informativeText = """
+            Removes `tado-cowork-plugin` from Claude Desktop / Claude Code. \
+            Cowork loses access to the Tado tool surface (tado_*, dome_*, tado_use_*) \
+            until you re-install it.
+
+            This does NOT touch your Tado data or your Dome vault — only the plugin \
+            cache and the `enabledPlugins` entry in `~/.claude/settings.json`.
+            """
+        alert.addButton(withTitle: "Cancel")
+        let confirm = alert.addButton(withTitle: "Uninstall plugin")
+        confirm.hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        Task.detached(priority: .userInitiated) {
+            CoworkPluginInstaller.uninstall()
         }
     }
 }

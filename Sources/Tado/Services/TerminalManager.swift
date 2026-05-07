@@ -18,6 +18,18 @@ final class TerminalManager {
     /// repeats when randomTileColors is on.
     private var lastTheme: TerminalTheme?
 
+    /// Active CoworkOutputPollers keyed by session id. Each poller
+    /// watches `<projectRoot>/.tado/cowork/<sessionID>.md` for the
+    /// Cowork task's result markdown and surfaces it back into the
+    /// originating tile. Cleared on `terminateSession` so a tile
+    /// that's stopped before Cowork finishes drops the watcher
+    /// (the user told us they don't care any more).
+    ///
+    /// One poller per Cowork tile by construction; non-Cowork tiles
+    /// never create entries here. Keyed by `TerminalSession.id` so
+    /// multiple concurrent Cowork tiles don't interfere.
+    private var coworkPollers: [UUID: CoworkOutputPoller] = [:]
+
     func spawnSession(
         todoID: UUID,
         todoText: String,
@@ -111,6 +123,9 @@ final class TerminalManager {
             session.isRunning = false
             ipcBroker?.unregisterSession(id)
         }
+        // Cancel any active Cowork output poller. Idempotent.
+        coworkPollers[id]?.cancel()
+        coworkPollers[id] = nil
         sessions.removeAll { $0.id == id }
     }
 
@@ -119,6 +134,8 @@ final class TerminalManager {
             session.coreSession?.kill(signal: hard ? SIGKILL : SIGTERM)
             session.isRunning = false
             ipcBroker?.unregisterSession(session.id)
+            coworkPollers[session.id]?.cancel()
+            coworkPollers[session.id] = nil
             sessions.removeAll { $0.id == session.id }
         }
     }
@@ -147,6 +164,11 @@ final class TerminalManager {
             session.isRunning = false
             ipcBroker?.unregisterSession(session.id)
         }
+        // Cancel every Cowork poller too — Cmd+Q means the user
+        // is leaving; pending Cowork tasks should not keep ticking
+        // file-system observers in a now-zombie process.
+        for poller in coworkPollers.values { poller.cancel() }
+        coworkPollers.removeAll()
         sessions.removeAll()
     }
 
@@ -300,6 +322,78 @@ final class TerminalManager {
         if isEternalWorker && eternalLoopKind == "internal" {
             session.promptQueue.append(todo.text)
         }
+
+        // Cowork tiles need an output poller — Cowork doesn't stream
+        // its result back through the PTY (the `tado-cowork`
+        // launcher's PTY closes immediately after `open(1)` returns,
+        // so the bundled plugin's `cowork-tado-tools` skill teaches
+        // Cowork to write its result markdown to a known file path
+        // instead). The poller watches that path; when it fires,
+        // it streams the file contents into the tile's PTY surface
+        // via `enqueueOrSend()` and the session transitions to
+        // `.completed` via the existing onStatusChange wiring.
+        if engine == .cowork, let projectRoot = cwd {
+            startCoworkPoller(
+                session: session,
+                todo: todo,
+                projectRoot: projectRoot
+            )
+        }
+    }
+
+    /// Start a CoworkOutputPoller for a freshly-spawned Cowork
+    /// tile. Idempotent — replaces any prior poller for the same
+    /// session id.
+    private func startCoworkPoller(
+        session: TerminalSession,
+        todo: TodoItem,
+        projectRoot: String
+    ) {
+        // Cancel + replace any prior poller for this session id
+        // (e.g. a respawn).
+        coworkPollers[session.id]?.cancel()
+
+        let sessionID = session.id
+        let poller = CoworkOutputPoller(
+            projectRoot: projectRoot,
+            runID: sessionID,
+            onResult: { [weak self, weak session, weak todo] content in
+                guard let self else { return }
+                // Render the result into the tile's terminal log
+                // surface — this is where the user sees Cowork's
+                // output. The status transition happens after.
+                if let session {
+                    let banner = "\n\n--- Cowork result ---\n"
+                    let footer = "\n--- end of Cowork result ---\n"
+                    let payload = banner + content + footer
+                    if let todo {
+                        todo.terminalLog.append(payload)
+                        if todo.terminalLog.count > TodoItem.maxLogSize {
+                            todo.terminalLog.removeFirst(todo.terminalLog.count - TodoItem.maxLogSize)
+                        }
+                    }
+                    session.status = .completed
+                }
+                self.coworkPollers[sessionID] = nil
+            },
+            onTimeout: { [weak self, weak session, weak todo] in
+                guard let self else { return }
+                if let session {
+                    let banner = "\n\n--- Cowork timed out (30 min) ---\n" +
+                                 "No result file appeared at \(projectRoot)/.tado/cowork/\(sessionID.uuidString.lowercased()).md\n" +
+                                 "Cowork may still be running in Claude Desktop — check there.\n"
+                    if let todo {
+                        todo.terminalLog.append(banner)
+                        if todo.terminalLog.count > TodoItem.maxLogSize {
+                            todo.terminalLog.removeFirst(todo.terminalLog.count - TodoItem.maxLogSize)
+                        }
+                    }
+                    session.status = .completed
+                }
+                self.coworkPollers[sessionID] = nil
+            }
+        )
+        coworkPollers[sessionID] = poller
     }
 
     /// Per-tile fallback ladder. Fires once when a non-Eternal-worker
@@ -349,6 +443,13 @@ final class TerminalManager {
             switch eng {
             case .claude: return ClaudeMode.askPermissions.cliFlags
             case .codex:  return CodexMode.defaultPermissions.cliFlags
+            // Cowork's spawn path runs through `tado-cowork` (URL-scheme
+            // launcher), not `claude` / `codex` — the spawn-fallback
+            // ladder doesn't apply here. Empty flag list is the right
+            // default; if a Cowork tile somehow reaches the fallback
+            // logic it'll respawn with no engine flags at all, which
+            // is what the URL-scheme path expects.
+            case .cowork: return []
             }
         } ?? []
         var effortOverride = deadSession.effortFlagsOverride ?? []

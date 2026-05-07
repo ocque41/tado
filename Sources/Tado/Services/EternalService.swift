@@ -2015,6 +2015,21 @@ enum EternalService {
             modelFlags = settings.codexModel.cliFlags
             effortFlags = settings.codexEffort.cliFlags
             useCodexExec = true
+        case .cowork:
+            // Cowork is not a supported Eternal architect engine — it
+            // has no PTY, no per-turn output capture, and no way for
+            // the perf/sprint Stop-hook contract to read marker lines.
+            // Fall back to the Claude Code flag set so the spawn path
+            // doesn't crash if a stale `engine = cowork` run somehow
+            // reaches this code; in practice `EternalRun.engine` is
+            // restricted to claude/codex by the New Eternal modal, and
+            // any operator who hand-edits state.json into a Cowork
+            // architect run will see Claude flags applied to a tile
+            // that won't actually contact Cowork.
+            modeFlags = ProcessSpawner.eternalPermissionFlags(skipPermissions: run.skipPermissions)
+            modelFlags = ["--model", settings.claudeModel.rawValue]
+            effortFlags = settings.claudeEffort.cliFlags
+            useCodexExec = false
         }
         terminalManager.spawnAndWire(
             todo: todo,
@@ -2122,6 +2137,16 @@ enum EternalService {
             modelFlags = settings.codexModel.cliFlags
             effortFlags = settings.codexEffort.cliFlags
             useCodexExec = true
+        case .cowork:
+            // Eternal interventor never runs against Cowork — the
+            // architect/worker rejection further up means no Cowork
+            // run reaches the Intervene button. Fall back to Haiku/
+            // Claude shape so the switch is exhaustive without
+            // introducing a fatal-error path.
+            modeFlags = ProcessSpawner.eternalPermissionFlags(skipPermissions: run.skipPermissions)
+            modelFlags = ["--model", ClaudeModel.haiku45.rawValue]
+            effortFlags = ["--effort", ClaudeEffort.high.rawValue]
+            useCodexExec = false
         }
         terminalManager.spawnAndWire(
             todo: todo,
@@ -2299,6 +2324,19 @@ enum EternalService {
                 allowAlternateScreen: settings.codexAlternateScreen
             ) + ProcessSpawner.eternalCodexPermissionFlags()
             codexPostFlags = settings.codexModel.cliFlags + settings.codexEffort.cliFlags
+        case .cowork:
+            // Cowork is not a supported Eternal worker engine — it
+            // has no PTY, no per-turn marker lines, and no Stop-hook
+            // contract. We fall back to Claude Code flags here purely
+            // for switch exhaustiveness; the New Eternal modal already
+            // hides the Cowork choice for `engine`, so this branch is
+            // dead in normal operation. If a hand-edited state.json
+            // lands here, the spawned tile will run Claude Code rather
+            // than Cowork — visibly wrong but not crashing.
+            workerModelID = settings.claudeModel.rawValue
+            workerEffortLevel = settings.claudeEffort.rawValue
+            codexPreFlags = nil
+            codexPostFlags = nil
         }
 
         terminalManager.spawnAndWire(

@@ -1,0 +1,14 @@
+{
+  "name": "tado-local",
+  "owner": {
+    "name": "Tado",
+    "email": "noreply@tado.app"
+  },
+  "plugins": [
+    {
+      "name": "tado-cowork-plugin",
+      "source": "./",
+      "description": "Tado bridge for Claude Cowork — full 71-tool surface (tado, dome, tado-use-bridge) plus a teaching skill and an agent persona."
+    }
+  ]
+}

@@ -838,23 +838,43 @@ struct CanvasView: View {
     private func modeFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
-        if engine == .claude { return settings.claudeMode.cliFlags }
-        // Codex needs the Tado embed shim regardless of mode (env inheritance for
-        // tado-send, plus optional --no-alt-screen so SwiftTerm doesn't break).
-        return ProcessSpawner.codexEmbedShim(allowAlternateScreen: settings.codexAlternateScreen)
-            + settings.codexMode.cliFlags
+        switch engine {
+        case .claude:
+            return settings.claudeMode.cliFlags
+        case .codex:
+            // Codex needs the Tado embed shim regardless of mode (env inheritance for
+            // tado-send, plus optional --no-alt-screen so SwiftTerm doesn't break).
+            return ProcessSpawner.codexEmbedShim(allowAlternateScreen: settings.codexAlternateScreen)
+                + settings.codexMode.cliFlags
+        case .cowork:
+            // Cowork has no CLI flags — `tado-cowork` (the URL-scheme
+            // launcher) takes only `--prompt / --folder / --run-id`,
+            // none of which flow from `AppSettings.coworkMode`. The
+            // user's Cowork mode pick rides into the prompt preamble
+            // as a hint the bundled plugin's skill surfaces, not into
+            // a CLI flag.
+            return []
+        }
     }
 
     private func effortFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
-        return engine == .claude ? settings.claudeEffort.cliFlags : settings.codexEffort.cliFlags
+        switch engine {
+        case .claude: return settings.claudeEffort.cliFlags
+        case .codex:  return settings.codexEffort.cliFlags
+        case .cowork: return []
+        }
     }
 
     private func modelFlags(for engine: TerminalEngine) -> [String] {
         let descriptor = FetchDescriptor<AppSettings>()
         guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
-        return engine == .claude ? settings.claudeModel.cliFlags : settings.codexModel.cliFlags
+        switch engine {
+        case .claude: return settings.claudeModel.cliFlags
+        case .codex:  return settings.codexModel.cliFlags
+        case .cowork: return []
+        }
     }
 
     private func claudeDisplayEnv() -> ProcessSpawner.ClaudeDisplayEnv {

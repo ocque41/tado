@@ -39,11 +39,23 @@ enum ViewMode: String, CaseIterable, Equatable {
 enum TerminalEngine: String, Codable, CaseIterable {
     case claude = "claude"
     case codex = "codex"
+    /// Claude Cowork — the desktop-first knowledge-work coworker that
+    /// ships inside the Claude Desktop app (`com.anthropic.claudefordesktop`).
+    /// Unlike Claude Code and Codex, Cowork has NO standalone CLI binary.
+    /// Tado launches it via the documented `claude://cowork/new?q=…&folder=…`
+    /// URL scheme, shelled by the bundled `tado-cowork` Rust CLI. Output
+    /// capture is one-way: Cowork writes its result markdown to
+    /// `<project>/.tado/cowork/<run-id>.md` (a convention the bundled
+    /// `tado-cowork-plugin` skill teaches Cowork to follow), and
+    /// `CoworkOutputPoller` watches the file and renders it back into
+    /// the tile. See the "Cowork engine + plugin" section of CLAUDE.md.
+    case cowork = "cowork"
 
     var displayName: String {
         switch self {
         case .claude: "Claude Code"
         case .codex: "Codex"
+        case .cowork: "Claude Cowork"
         }
     }
 }
@@ -325,6 +337,83 @@ enum CodexModel: String, Codable, CaseIterable {
         case .gpt54Mini:   return nil
         case .gpt53Codex:  return .gpt54Mini
         case .gpt52:       return nil
+        }
+    }
+}
+
+/// Cowork's "mode" picker. Cowork has no CLI flags — it runs as a tab
+/// inside the Claude Desktop app — so these modes don't translate to a
+/// command-line argument. Instead, `tado-cowork` encodes the mode into
+/// the prompt preamble it sends through `claude://cowork/new?q=…` so
+/// Cowork's own intent classifier picks the right run shape.
+///
+/// `asyncTask` (default): the user describes an outcome and Cowork goes
+/// off to work on it. Tado's tile waits for the result file at
+/// `<project>/.tado/cowork/<run-id>.md` (the round-trip convention the
+/// bundled `tado-cowork-plugin` skill teaches Cowork to follow).
+/// `interactive`: the user wants to converse with Cowork directly from
+/// the Desktop app — Tado fires the URL, opens the app, and the tile
+/// shows a one-shot status line ("Cowork session opened in Claude
+/// Desktop") with no output round-trip.
+enum CoworkMode: String, Codable, CaseIterable {
+    case asyncTask
+    case interactive
+
+    var displayName: String {
+        switch self {
+        case .asyncTask: "Async task (write result file)"
+        case .interactive: "Interactive (use Desktop app)"
+        }
+    }
+}
+
+/// Cowork's effort/depth picker. Translated into prompt preamble hints
+/// rather than CLI flags (Cowork has no `--effort` flag — it picks the
+/// depth based on its own internal heuristics + your Desktop app
+/// account tier). `auto` is the default and means "let Cowork decide."
+enum CoworkEffort: String, Codable, CaseIterable {
+    case auto
+    case standard
+    case extended
+
+    var displayName: String {
+        switch self {
+        case .auto: "Auto (let Cowork pick)"
+        case .standard: "Standard"
+        case .extended: "Extended"
+        }
+    }
+}
+
+/// Cowork's model picker. Cowork picks the model from its own Desktop
+/// app settings — Tado's selection here is a *hint* the bundled plugin's
+/// preamble surfaces to Cowork ("the user prefers …"). It does NOT
+/// override the Desktop app's configured model.
+///
+/// As of Claude Desktop v1.6259 Cowork supports the same Sonnet/Opus
+/// family as Claude Code. The list intentionally trails Claude Code's
+/// by one tick because Cowork availability for the freshest model can
+/// lag by ~1 release.
+enum CoworkModel: String, Codable, CaseIterable {
+    case auto
+    case opus47 = "claude-opus-4-7"
+    case sonnet46 = "claude-sonnet-4-6"
+
+    var displayName: String {
+        switch self {
+        case .auto: "Auto (Desktop app default)"
+        case .opus47: "Opus 4.7 (hint)"
+        case .sonnet46: "Sonnet 4.6 (hint)"
+        }
+    }
+
+    static func normalizedRawValue(_ raw: String) -> String {
+        switch raw {
+        case "auto": return CoworkModel.auto.rawValue
+        case "opus47": return CoworkModel.opus47.rawValue
+        case "sonnet46": return CoworkModel.sonnet46.rawValue
+        default:
+            return CoworkModel(rawValue: raw)?.rawValue ?? CoworkModel.auto.rawValue
         }
     }
 }

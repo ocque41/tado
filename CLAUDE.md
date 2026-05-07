@@ -128,9 +128,9 @@ freeze fix per CLAUDE.md rule 9),
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
-`tado-cli` (the canvas-agent CLI surface — hosts six binaries: `tado-bootstrap`,
-`tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-projects`, `tado-system` —
-all auto-installed under `~/.local/bin/` on first launch),
+`tado-cli` (the canvas-agent CLI surface — hosts seven binaries: `tado-bootstrap`,
+`tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-projects`, `tado-system`,
+`tado-cowork` — all auto-installed under `~/.local/bin/` on first launch),
 `dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
 `replay`, `corpus run`, `explain` subcommands; the v0.10.0 Phase 2 CI gate),
 `perf-suite` (Rust [[bin]] + [[lib]] for the v0.19.0 Eternal Performance step
@@ -1212,6 +1212,144 @@ Tado Use was promoted from a v1.0 single-tool surface into a
 streaming turn so parse work runs off the main actor, restoring
 smooth typing during long completions.
 
+## Cowork engine + plugin (v1.4)
+
+Cowork is the **third Tado engine**, alongside Claude Code and
+Codex. Unlike its peers, Cowork has NO standalone CLI binary — it
+lives inside the Claude Desktop app
+(`com.anthropic.claudefordesktop`) and is driven through the
+documented `claude://cowork/new?q=…&folder=…&file=…` URL scheme.
+Tado launches Cowork via a bundled Rust CLI (`tado-cowork`) that
+builds the URL and shells `open(1)`; the `claude` binary path
+that other engines use is replaced by a one-shot URL-scheme
+launch.
+
+### The mental model
+
+Cowork has no PTY-attached output. The launcher's process exits
+the moment `open(1)` returns, so there is nothing for Tado's tile
+to read line-by-line. The bridge back to Tado's tile is a
+**file-convention round-trip**: Cowork writes its result markdown
+to `<projectRoot>/.tado/cowork/<runID>.md`, and a `CoworkOutput-
+Poller` watches that path with a DispatchSource file-system
+observer (debounced 500 ms, 30-min hard deadline). When the file
+appears with non-empty content, the poller renders it back into
+the originating canvas tile and transitions the session to
+`.completed`.
+
+The convention is taught to Cowork by the bundled
+`tado-cowork-plugin`'s `cowork-tado-tools` skill — the launcher
+ALSO seeds a `[Tado run <id>]` preamble into the prompt that
+explicitly names the result file Cowork should write to. The
+result-file dance is therefore robust to Cowork choosing to
+ignore the skill (the preamble alone is enough) but works
+better when both are in effect.
+
+### The bundled `tado-cowork-plugin`
+
+Tado ships a Claude plugin (`tado-cowork-plugin`) that exposes
+its full **71-tool surface** to Cowork:
+
+| Server | Tools | Purpose |
+|---|---|---|
+| `tado` | 16 | Per-session A2A: list/send/read across running tiles, broadcast, notifications, scoped config + memory, Pets sprite ops |
+| `dome` | 18 | Knowledge vault: hybrid + code search, notes, retrieval recipes, lifecycle (supersede/verify/decay), code watch, agent status |
+| `tado-use-bridge` | 41 | Drive Tado itself: navigation, modal/sheet control, todo + project + Eternal + Dispatch lifecycle, Kanban, settings, extensions |
+
+Plus a teaching skill (`cowork-tado-tools`) that orients Cowork
+inside Tado's mental model (canvas, tiles, todos, projects,
+teams, Eternal/Dispatch, Dome, Pets, Kanban) and an agent
+persona (`cowork-canvas-coworker`) for the planning + knowledge-
+work-half-of-a-canvas pattern: Cowork reasons about the project
+and delegates executable work to running Claude Code / Codex
+tiles via `tado_send`.
+
+The plugin lives at `tado-core/crates/tado-cowork-plugin/`:
+
+```
+.claude-plugin/
+  plugin.json          # name, version, mcpServers, userConfig
+  marketplace.json     # local marketplace manifest (tado-local)
+skills/
+  cowork-tado-tools/
+    SKILL.md           # Tado mental model + tool reference
+agents/
+  cowork-canvas-coworker.md
+bin/
+  tado-mcp             # bundled MCP server (16 tools)
+  dome-mcp             # bundled MCP server (18 tools)
+  tado-use-bridge      # bundled MCP server (41 tools)
+```
+
+`make plugin` populates `bin/` from the release builds of the
+three Rust MCP servers + the Swift `tado-use-bridge` product.
+
+### "Bootstrap Cowork plugin" surface
+
+Two ways to install the plugin:
+
+1. **Settings → Engine → Cowork → "Bootstrap Cowork plugin"** —
+   in-process install via `CoworkPluginInstaller.install()`. Runs
+   `claude plugin marketplace add <bundled-path>` then
+   `claude plugin install tado-cowork-plugin@tado-local`. Mirrors
+   the `TadoMcpAutoRegister` pattern: shell out to the `claude`
+   CLI and let it own the file writes into `~/.claude/plugins/
+   cache/` and `~/.claude/settings.json`. Critical-style NSAlert
+   confirmation on both install and uninstall.
+
+2. **Project card → bootstrap row → "Cowork" button** — fifth
+   bootstrap action alongside A2A / Team / Auto / Knowledge.
+   Spawns a one-shot Claude Code agent tile with the
+   `bootstrapCoworkPluginPrompt` text (in
+   `Sources/Tado/Services/ProcessSpawner.swift`). The agent runs
+   the same install + verifies + smoke-tests + reports back. Same
+   end state, more visible feedback in the canvas.
+
+### Engine flag handling
+
+Cowork's `CoworkMode` / `CoworkModel` / `CoworkEffort` enums all
+emit `cliFlags = []`. There ARE no Cowork CLI flags; the picker
+selections ride into the prompt preamble as hints the bundled
+plugin's skill surfaces back to Cowork. `CoworkModel` selections
+do NOT override the Desktop app's configured model — they're
+informational only.
+
+### Eternal / Dispatch are NOT supported with Cowork
+
+Eternal and Dispatch depend on per-turn marker lines in the
+PTY output (`ETERNAL-DONE`, `[SCORE-OK]`, `[PERF-OK]`). Cowork
+has no PTY output at all, so the perf-gate / sprint-gate
+contracts can't fire. The New Eternal modal already filters
+Cowork out of the engine picker; `EternalService.startWorker`
+will spawn with Claude Code flags if a hand-edited state.json
+asks for `engine = cowork`, surfacing a clear error message
+through the Eternal architect's prompt.
+
+### Tado Use can NOT drive Cowork per-turn
+
+The Tado Use streaming engine spawns `claude -p ... --mcp-config
+<ephemeral.json>` on every turn — there's no Cowork analog for
+that ephemeral config (Cowork picks up MCP servers from the
+plugin model, not from a per-turn flag). Tado Use's
+`spawn(engine: .cowork, …)` surfaces an explanatory turn
+("Cowork doesn't accept a per-turn `--mcp-config`...") rather
+than failing in a confusing way. The user is told to either
+submit a Cowork todo from the canvas OR switch the header
+engine to Claude for in-bridge tool calling.
+
+### Critical files
+
+- [Sources/Tado/App/AppState.swift](Sources/Tado/App/AppState.swift) — `TerminalEngine.cowork` + `CoworkMode` / `CoworkEffort` / `CoworkModel` enums.
+- [Sources/Tado/Models/AppSettings.swift](Sources/Tado/Models/AppSettings.swift) — `coworkModeRaw` / `coworkEffortRaw` / `coworkModelRaw` SwiftData fields + computed properties.
+- [Sources/Tado/Services/ProcessSpawner.swift](Sources/Tado/Services/ProcessSpawner.swift) — `coworkCommand(...)` builds the `tado-cowork --prompt … --folder … --run-id …` invocation; `bootstrapCoworkPluginPrompt(...)` is the prose for the project bootstrap action.
+- [Sources/Tado/Services/CoworkOutputPoller.swift](Sources/Tado/Services/CoworkOutputPoller.swift) — file-convention round-trip; one-shot DispatchSource watcher with a 30-min hard deadline.
+- [Sources/Tado/Services/CoworkPluginInstaller.swift](Sources/Tado/Services/CoworkPluginInstaller.swift) — install / uninstall / status; shells `claude plugin install`.
+- [Sources/Tado/Services/ProjectActionsService.swift](Sources/Tado/Services/ProjectActionsService.swift) — `bootstrapCoworkPlugin(...)` spawns the bootstrap agent tile.
+- [Sources/Tado/Services/TerminalManager.swift](Sources/Tado/Services/TerminalManager.swift) — `coworkPollers` dictionary + `startCoworkPoller(...)` lifecycle wiring.
+- [Sources/Tado/Views/SettingsView.swift](Sources/Tado/Views/SettingsView.swift) — Cowork-specific Mode/Model/Effort sections + "Bootstrap Cowork plugin" / "Uninstall Cowork plugin" buttons.
+- [tado-core/crates/tado-cli/src/bin/tado-cowork.rs](tado-core/crates/tado-cli/src/bin/tado-cowork.rs) — Rust URL-scheme launcher (`claude://cowork/new`).
+- [tado-core/crates/tado-cowork-plugin/](tado-core/crates/tado-cowork-plugin/) — the Claude plugin tree (manifest, marketplace, skill, agent, bin/).
+
 ## Pets (canvas companion, hatch, live-agent panel)
 
 Pets is a **floating-panel companion** that lives on top of the
@@ -1543,29 +1681,44 @@ this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
 - **post-v1.0 stream** (2026-05-07, unreleased on master) — *Tado
-  Use + Sprint step + Pets + Kanban + smooth-software contract.*
-  The post-v1.0 work that hasn't been tagged yet: (a) **Tado Use**
-  expanded from a v1.0 single-tool surface into a 41-tool
-  autonomous control plane with its own `tado-use-bridge` Swift
-  product (commits `ffd15d3` `1c2e74f` `26b6d04`); (b) **Sprint
-  step** (`kind=sprint`) shipped as a peer of the Performance
-  step — sprint-suite Rust crate + sprint-gate.sh hook +
-  EternalState sprint-cycle fields + ProcessSpawner sprint
-  addendum + EternalFileModal third button (commits `9c77b53`
-  through `5a1dcc1`); (c) **Pets extension** (canvas companion
-  + hatch flow + live-agent panel) and **Kanban system**
-  (per-project board mirror + tado-kanban CLI) landed as a
-  bundled WIP; (d) the **smooth-software pass** contract
-  baked into CLAUDE.md as the maintenance contract for every
-  expansion / scaling change going forward; (e) the v1.0 →
-  v1.3 cleanup itself (delete EternalWatchdog rule-1 zombie,
-  gitignore `.tado/kanban/`, document empty-sentinel atomic-store
-  carveout, tolerant EternalState decoder restoring rule-3
-  promise, dead-test cleanup unblocking the Swift suite,
-  TileVisibility signature migration, headless-safe
-  PetsHatchService stub-sprite). Workspace at twelve Rust crates
-  (sprint-suite added). Swift test suite restored from broken to
-  127 passing; Rust matrix at 323 passing.
+  Use + Sprint step + Pets + Kanban + Cowork engine + smooth-
+  software contract.* The post-v1.0 work that hasn't been tagged
+  yet: (a) **Tado Use** expanded from a v1.0 single-tool surface
+  into a 41-tool autonomous control plane with its own
+  `tado-use-bridge` Swift product (commits `ffd15d3` `1c2e74f`
+  `26b6d04`); (b) **Sprint step** (`kind=sprint`) shipped as a
+  peer of the Performance step — sprint-suite Rust crate +
+  sprint-gate.sh hook + EternalState sprint-cycle fields +
+  ProcessSpawner sprint addendum + EternalFileModal third button
+  (commits `9c77b53` through `5a1dcc1`); (c) **Pets extension**
+  (canvas companion + hatch flow + live-agent panel) and **Kanban
+  system** (per-project board mirror + tado-kanban CLI) landed as
+  a bundled WIP; (d) **Cowork engine** — third Tado engine
+  alongside Claude Code and Codex; URL-scheme launcher
+  (`tado-cowork` Rust CLI builds `claude://cowork/new?q=…&folder=
+  …` and shells `open(1)`); file-convention round-trip via
+  `<projectRoot>/.tado/cowork/<runID>.md` watched by
+  `CoworkOutputPoller`; bundled `tado-cowork-plugin` exposes
+  Tado's full 71-tool surface (16 `tado_*` + 18 `dome_*` + 41
+  `tado_use_*`) to Cowork via three MCP servers + a
+  `cowork-tado-tools` skill + a `cowork-canvas-coworker` agent
+  persona; "Bootstrap Cowork plugin" surface in Settings → Engine
+  + as a fifth project bootstrap action; `make plugin` populates
+  the plugin payload from release-built MCP binaries; (e) the
+  **smooth-software pass** contract baked into CLAUDE.md as the
+  maintenance contract for every expansion / scaling change
+  going forward; (f) the v1.0 → v1.3 cleanup itself (delete
+  EternalWatchdog rule-1 zombie, gitignore `.tado/kanban/`,
+  document empty-sentinel atomic-store carveout, tolerant
+  EternalState decoder restoring rule-3 promise, dead-test
+  cleanup unblocking the Swift suite, TileVisibility signature
+  migration, headless-safe PetsHatchService stub-sprite).
+  Workspace at twelve Rust crates (sprint-suite added) plus the
+  new `tado-cowork-plugin` plugin tree (not a crate but a
+  bundled-resource sibling). Swift test suite at **128 passing**
+  (one more than the v1.3.x baseline thanks to the Cowork URL-
+  encoding probe); Rust matrix at **335 passing** (up from 323
+  for the same reason).
 
 - **v1.0.0** (2026-05-06) — *The unified release.* Consolidates
   ten incremental ships (v0.10 through v0.19) into one official

@@ -163,6 +163,54 @@ enum ProjectActionsService {
         appState.currentView = .canvas
     }
 
+    /// Install the bundled `tado-cowork-plugin` into the user's
+    /// Claude install. Runs as a one-shot Claude Code agent tile so
+    /// the operator sees what's happening (rather than firing the
+    /// install silently from a `Task.detached` somewhere). Mirrors
+    /// the four existing bootstrap actions exactly: spawns a tile,
+    /// the prompt instructs the agent to run `claude plugin
+    /// marketplace add` + `claude plugin install`, the agent reports
+    /// back, then exits.
+    ///
+    /// This is the project-scoped front door for the same install
+    /// the Settings → Engine → "Bootstrap Cowork plugin" button
+    /// fires (which in turn calls `CoworkPluginInstaller.install()`
+    /// — the in-process equivalent that doesn't spawn a tile).
+    /// Both surfaces converge on the same `claude plugin install`
+    /// invocation; the difference is whether the operator wants
+    /// visible feedback (this surface) or quiet feedback (the
+    /// Settings button).
+    static func bootstrapCoworkPlugin(
+        project: Project,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager,
+        appState: AppState
+    ) {
+        let prompt = ProcessSpawner.bootstrapCoworkPluginPrompt(
+            projectName: project.name,
+            projectRoot: project.rootPath
+        )
+        let settings = fetchOrCreateSettings(modelContext: modelContext)
+        let index = nextAvailableGridIndex(modelContext: modelContext)
+        let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        todo.projectID = project.id
+        modelContext.insert(todo)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: .claude,
+            cwd: project.rootPath,
+            projectName: project.name
+        )
+
+        try? modelContext.save()
+
+        appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+    }
+
     /// Tear down every session belonging to the project, then delete
     /// the project itself. Caller is responsible for clearing any
     /// `appState.activeProjectID` it owns — kept out of here so the

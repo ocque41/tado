@@ -1,0 +1,5 @@
+# Plugin binaries are build artifacts, not source. The bundled
+# installer copies them in via `make plugin` / `make dev`.
+*
+!.gitignore
+!README.md

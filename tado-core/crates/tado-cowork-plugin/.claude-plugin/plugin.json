@@ -1,0 +1,35 @@
+{
+  "name": "tado-cowork-plugin",
+  "version": "1.4.0",
+  "description": "Tado bridge for Claude Cowork — exposes Tado's full 71-tool surface (16 tado_*, 18 dome_*, 41 tado_use_*) as MCP servers, plus a teaching skill that orients Cowork inside Tado's mental model and an agent persona for canvas-coworker collaboration with Claude Code / Codex tiles.",
+  "author": "Tado",
+  "mcpServers": {
+    "tado": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/tado-mcp",
+      "args": []
+    },
+    "dome": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/dome-mcp",
+      "args": [
+        "${USER_CONFIG.vaultPath}",
+        "${USER_CONFIG.domeToken}"
+      ]
+    },
+    "tado-use-bridge": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/tado-use-bridge",
+      "args": []
+    }
+  },
+  "userConfig": {
+    "vaultPath": {
+      "description": "Path to your Tado Dome vault. Defaults to ~/Library/Application Support/Tado/dome/. Override only if you've moved Tado's storage root.",
+      "default": "~/Library/Application Support/Tado/dome",
+      "type": "string"
+    },
+    "domeToken": {
+      "description": "Agent token for the Dome MCP server. Tado mints one automatically when the bundled installer runs (Settings → Engine → Bootstrap Cowork plugin); copy it from there if prompted.",
+      "default": "",
+      "type": "string"
+    }
+  }
+}

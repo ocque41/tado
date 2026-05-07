@@ -37,6 +37,7 @@ struct ProjectCard: View {
     let onBootstrapTeam: () -> Void
     let onBootstrapAutoMode: () -> Void
     let onBootstrapKnowledge: () -> Void
+    let onBootstrapCoworkPlugin: () -> Void
     let onDispatch: () -> Void
     let onStart: () -> Void
     let onDelete: () -> Void
@@ -167,6 +168,8 @@ struct ProjectCard: View {
                 .help("Bootstrap Claude auto mode (permission policy)")
             OutlineButton("Knowledge", size: .small, variant: .standard, action: onBootstrapKnowledge)
                 .help("Bootstrap knowledge layer (Dome second brain)")
+            OutlineButton("Cowork", size: .small, variant: .standard, action: onBootstrapCoworkPlugin)
+                .help("Bootstrap Cowork plugin (install Tado tool surface into Claude Cowork)")
 
             Spacer(minLength: 8)
 

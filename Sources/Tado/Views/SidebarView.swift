@@ -149,6 +149,7 @@ struct SidebarView: View {
         }
         switch session.engine {
         case .codex: return prettifyModel(settings?.codexModel.rawValue ?? "")
+        case .cowork: return prettifyModel(settings?.coworkModel.rawValue ?? "")
         case .claude, .none: return prettifyModel(settings?.claudeModel.rawValue ?? "")
         }
     }
@@ -313,6 +314,7 @@ private struct SessionRow: View {
         let raw: String?
         switch session.engine {
         case .codex: raw = settings?.codexModel.rawValue
+        case .cowork: raw = settings?.coworkModel.rawValue
         case .claude, .none: raw = settings?.claudeModel.rawValue
         }
         guard let raw else { return nil }

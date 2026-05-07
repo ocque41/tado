@@ -65,6 +65,7 @@ struct DetailsView: View {
         case all       = "All"
         case claude    = "Claude"
         case codex     = "Codex"
+        case cowork    = "Cowork"
         case eternal   = "Eternal"
         case stuck     = "Stuck"
         var id: String { rawValue }
@@ -163,6 +164,7 @@ struct DetailsView: View {
         case .all:     return true
         case .claude:  return s.engine == .claude
         case .codex:   return s.engine == .codex
+        case .cowork:  return s.engine == .cowork
         case .eternal: return s.isEternalWorker
         case .stuck:   return s.status == .awaitingResponse
         }
@@ -266,6 +268,7 @@ struct DetailsView: View {
             case .all:     return true
             case .claude:  return s.engine == .claude
             case .codex:   return s.engine == .codex
+            case .cowork:  return s.engine == .cowork
             case .eternal: return s.isEternalWorker
             case .stuck:   return s.status == .awaitingResponse
             }

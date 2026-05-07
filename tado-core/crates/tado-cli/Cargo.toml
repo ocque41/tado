@@ -1,7 +1,7 @@
 #
 # tado-cli — coordinator-driven Tado CLIs.
 #
-# Five binaries, one shared library:
+# Seven binaries, one shared library:
 #
 #   tado-projects   — list / resolve project names → root paths
 #   tado-eternal    — propose/status/crafted/accept/reject/list/stop
@@ -9,6 +9,10 @@
 #   tado-dispatch   — same surface against Dispatch
 #   tado-bootstrap  — drive the four bootstrap actions per project
 #   tado-system     — app + vault status snapshot
+#   tado-kanban     — read / mutate the per-project Kanban board
+#   tado-cowork     — fire `claude://cowork/new?q=…&folder=…` so
+#                     `ProcessSpawner` can launch a Cowork session
+#                     against the bundled Tado-Cowork plugin
 #
 # Read-only operations (list, status, crafted) hit the on-disk
 # index directly: `<storage-root>/projects.json` for projects, and
@@ -58,6 +62,10 @@ path = "src/bin/tado-system.rs"
 [[bin]]
 name = "tado-kanban"
 path = "src/bin/tado-kanban.rs"
+
+[[bin]]
+name = "tado-cowork"
+path = "src/bin/tado-cowork.rs"
 
 [dependencies]
 anyhow = "1"

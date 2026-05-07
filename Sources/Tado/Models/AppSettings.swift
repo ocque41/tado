@@ -12,6 +12,9 @@ final class AppSettings {
     var codexEffortRaw: String = CodexEffort.auto.rawValue
     var claudeModelRaw: String = ClaudeModel.opus47.rawValue
     var codexModelRaw: String = CodexModel.gpt55.rawValue
+    var coworkModeRaw: String = CoworkMode.asyncTask.rawValue
+    var coworkEffortRaw: String = CoworkEffort.auto.rawValue
+    var coworkModelRaw: String = CoworkModel.auto.rawValue
 
     // Display / harness UI. Off by default because the fullscreen ("no flicker")
     // UI runs in alt-screen mode — every frame Claude Code paints replaces the
@@ -110,6 +113,9 @@ final class AppSettings {
         self.codexEffortRaw = CodexEffort.auto.rawValue
         self.claudeModelRaw = ClaudeModel.opus47.rawValue
         self.codexModelRaw = CodexModel.gpt55.rawValue
+        self.coworkModeRaw = CoworkMode.asyncTask.rawValue
+        self.coworkEffortRaw = CoworkEffort.auto.rawValue
+        self.coworkModelRaw = CoworkModel.auto.rawValue
     }
 
     var engine: TerminalEngine {
@@ -145,6 +151,21 @@ final class AppSettings {
     var codexModel: CodexModel {
         get { CodexModel(rawValue: CodexModel.normalizedRawValue(codexModelRaw)) ?? .gpt55 }
         set { codexModelRaw = newValue.rawValue }
+    }
+
+    var coworkMode: CoworkMode {
+        get { CoworkMode(rawValue: coworkModeRaw) ?? .asyncTask }
+        set { coworkModeRaw = newValue.rawValue }
+    }
+
+    var coworkEffort: CoworkEffort {
+        get { CoworkEffort(rawValue: coworkEffortRaw) ?? .auto }
+        set { coworkEffortRaw = newValue.rawValue }
+    }
+
+    var coworkModel: CoworkModel {
+        get { CoworkModel(rawValue: CoworkModel.normalizedRawValue(coworkModelRaw)) ?? .auto }
+        set { coworkModelRaw = newValue.rawValue }
     }
 }
 

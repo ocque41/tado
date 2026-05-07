@@ -158,6 +158,31 @@ final class TadoUseEngine {
                 """
             )
             return
+        case .cowork:
+            // Cowork doesn't expose a per-turn MCP config either — it
+            // runs as a tab inside the Claude Desktop app and picks up
+            // MCP servers from the user-installed `tado-cowork-plugin`
+            // (the Tado-bundled plugin that ships the same 71-tool
+            // surface as Tado Use's bridge). Tado Use streams a turn
+            // by spawning `claude -p ... --mcp-config <ephemeral>`,
+            // which has no Cowork analog. Surface an explanatory turn
+            // pointing the operator at the Cowork tile flow + the
+            // Bootstrap Cowork plugin button rather than failing in
+            // a confusing way.
+            failTurn(
+                error: "cowork_unsupported_in_use_bridge",
+                message: """
+                Cowork doesn't accept a per-turn `--mcp-config`, so the \
+                Tado Use bridge can't drive it from this panel. Two ways \
+                forward: (1) submit a Cowork todo from the canvas — Tado \
+                will fire `claude://cowork/new` and Cowork picks up the \
+                bundled plugin's tools automatically; (2) for in-bridge \
+                tool calling, switch the engine in the header to Claude. \
+                If you haven't installed the plugin yet, click \
+                "Bootstrap Cowork plugin" in Settings → Engine first.
+                """
+            )
+            return
         case .claude:
             break
         }

@@ -284,13 +284,19 @@ struct MetalTerminalTileView: View {
                     let flags = modeFlagsClean + effortFlagsClean + modelFlagsClean
                     cmd = ProcessSpawner.codexExecCommand(for: enrichedPrompt, flags: flags)
                 } else {
+                    // Pass projectRoot + sessionID through so the .cowork
+                    // branch of `command()` can build the
+                    // `tado-cowork --folder … --run-id …` invocation.
+                    // Other engines ignore both params.
                     cmd = ProcessSpawner.command(
                         for: enrichedPrompt,
                         engine: engineSnapshot,
                         modeFlags: modeFlagsClean,
                         effortFlags: effortFlagsClean,
                         modelFlags: modelFlagsClean,
-                        agentName: agentNameSnapshot
+                        agentName: agentNameSnapshot,
+                        projectRoot: projectRoot,
+                        runID: sessionID
                     )
                 }
                 executable = cmd.executable

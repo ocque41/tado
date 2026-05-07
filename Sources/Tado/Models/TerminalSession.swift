@@ -409,10 +409,13 @@ final class TerminalSession: Identifiable {
         // (`claude` CLI parses `/loop <interval> <prompt>` and runs an
         // in-session scheduler). Codex doesn't have it — typing
         // `/loop …` into a Codex TUI would land as plain text in the
-        // user's prompt buffer and corrupt the next message. So we
-        // skip the secondary driver for Codex internal-mode workers
-        // and rely on Tado's idle injection (the primary driver) only.
-        if !eternalLoopCommandInstalled && engine != .codex {
+        // user's prompt buffer and corrupt the next message. Cowork
+        // is doubly-not-applicable: it's not a supported Eternal
+        // worker engine in the first place, and even if a stale
+        // state.json forced a Cowork worker spawn the URL-scheme
+        // launcher exits immediately and never drains the prompt
+        // queue. So we install /loop only for `.claude` workers.
+        if !eternalLoopCommandInstalled && engine == .claude {
             eternalLoopCommandInstalled = true
             // Queue the /loop command first — it'll fire on the next
             // idle transition (turn 2). Continue prompt goes second so

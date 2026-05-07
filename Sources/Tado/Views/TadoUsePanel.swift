@@ -516,6 +516,8 @@ struct TadoUsePanel: View {
             return prettifyModel(settings?.claudeModel.rawValue ?? "claude-opus-4-7")
         case .codex:
             return prettifyModel(settings?.codexModel.rawValue ?? "gpt-5.5")
+        case .cowork:
+            return prettifyModel(settings?.coworkModel.rawValue ?? "auto")
         }
     }
 
@@ -525,6 +527,8 @@ struct TadoUsePanel: View {
             return settings?.claudeEffort.displayName ?? "Auto"
         case .codex:
             return settings?.codexEffort.displayName ?? "Auto"
+        case .cowork:
+            return settings?.coworkEffort.displayName ?? "Auto"
         }
     }
 
@@ -534,6 +538,8 @@ struct TadoUsePanel: View {
             return settings?.claudeMode.displayName ?? "Ask permissions"
         case .codex:
             return settings?.codexMode.displayName ?? "Default permissions"
+        case .cowork:
+            return settings?.coworkMode.displayName ?? "Async task"
         }
     }
 
