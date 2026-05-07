@@ -7,6 +7,12 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var allSettings: [AppSettings]
     @State private var eventMonitor: Any?
+    /// Phase 3 — ⌘K command palette presentation state. Toggled by
+    /// the palette's keyboard shortcut and the Jump button in the
+    /// topbar (already wired via `.keyboardShortcut("k", modifiers:
+    /// .command)`). The palette overlays everything else via the
+    /// outer `ZStack`.
+    @State private var paletteOpen: Bool = false
 
     /// Surface name shown in the titlebar accessory — derived from
     /// the active `currentView`. Renders as "Tado · {Surface}" in
@@ -189,6 +195,30 @@ struct ContentView: View {
         .onChange(of: appState.currentView) { _, newView in
             releaseTerminalFocusIfNeeded(for: newView)
         }
+
+        // Phase 3 — ⌘K command palette overlay. Sits inside the
+        // outer ZStack so its scrim + backdrop blur applies to the
+        // host content. Only renders when `paletteOpen` is true.
+        if paletteOpen {
+            RelayCommandPalette(
+                isPresented: $paletteOpen,
+                onOpenExplore: {
+                    // Phase 4 — wire to Explore. Today: Details fallback.
+                    appState.currentView = .details
+                }
+            )
+            .transition(.opacity)
+        }
+
+        // Hidden zero-sized button — registers ⌘K everywhere so
+        // the palette opens regardless of the focused control.
+        Button("Open palette") {
+            paletteOpen = true
+        }
+        .keyboardShortcut("k", modifiers: .command)
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
 
         // Relay tweaks panel — bottom-right floating developer panel
         // for switching nav mode + theme at runtime. Visibility
