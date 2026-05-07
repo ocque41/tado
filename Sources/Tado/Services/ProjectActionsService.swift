@@ -25,6 +25,12 @@ enum ProjectActionsService {
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
         let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        // Stamp the bootstrap tile onto the project being bootstrapped
+        // so it shows up in that project's canvas zone. The agent's
+        // cwd stays the Tado repo (it reads Tado's own CLAUDE.md /
+        // AGENTS.md as source) and projectName stays "Tado" for env-
+        // var injection — the projectID is purely a UI filter.
+        todo.projectID = project.id
         modelContext.insert(todo)
 
         terminalManager.spawnAndWire(
@@ -62,6 +68,11 @@ enum ProjectActionsService {
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
         let todo = TodoItem(text: prompt, gridIndex: index, canvasPosition: position)
+        // Same projectID-filter rule as bootstrapTools — without
+        // this stamp the tile lands in General and disappears the
+        // moment the user is filtered to the project being
+        // bootstrapped.
+        todo.projectID = project.id
         modelContext.insert(todo)
 
         terminalManager.spawnAndWire(
