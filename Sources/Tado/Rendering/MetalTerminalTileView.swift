@@ -153,6 +153,12 @@ struct MetalTerminalTileView: View {
     private func spawnIfNeeded() {
         guard session.coreSession == nil else { return }
 
+        // Mark spawn-path entry on the system trace. Pairs with
+        // `spawnIfNeeded.coreSessionSet` below — the gap between the
+        // two is the user-visible "tado-core spawn pending…" lifetime.
+        // See `Sources/Tado/Core/SpawnSignposts.swift` for usage.
+        SpawnSignposts.event("spawnIfNeeded.entry")
+
         // === @MainActor capture-snapshot ============================
         //
         // Phase 1: capture every input the Task closure will need into
@@ -272,10 +278,12 @@ struct MetalTerminalTileView: View {
                 // for the FFI/SQLite hit. Returns byte-identical output
                 // to the sync sibling; `spawn_pack_byte_equiv` pins the
                 // contract.
-                let enrichedPrompt = await DomeContextPreamble.prependedPrompt(
-                    for: preambleCtx,
-                    userPrompt: userPrompt
-                )
+                let enrichedPrompt = await SpawnSignposts.intervalAsync("preamble.fetch") {
+                    await DomeContextPreamble.prependedPrompt(
+                        for: preambleCtx,
+                        userPrompt: userPrompt
+                    )
+                }
                 let modeFlagsClean = ProcessSpawner.sanitizeFlags(modeFlagsRaw, engine: engineSnapshot)
                 let effortFlagsClean = ProcessSpawner.sanitizeFlags(effortFlagsRaw, engine: engineSnapshot)
                 let modelFlagsClean = ProcessSpawner.sanitizeFlags(modelFlagsRaw, engine: engineSnapshot)
@@ -361,21 +369,23 @@ struct MetalTerminalTileView: View {
             // tado_last_spawn_error() reads a thread_local, so the
             // failure-reason capture MUST stay on the spawn thread —
             // hence the tuple return.
-            let outcome: (TadoCore.Session?, String?) = await Task.detached(priority: .userInitiated) {
-                let s = TadoCore.Session(
-                    command: spawnedCommand,
-                    args: spawnedArgs,
-                    cwd: spawnedCwd,
-                    environment: spawnedEnv,
-                    cols: cols,
-                    rows: rows
-                )
-                let reason = (s == nil)
-                    ? (TadoCore.lastSpawnErrorFromCore()
-                        ?? "tado_session_spawn returned null with no error detail")
-                    : nil
-                return (s, reason)
-            }.value
+            let outcome: (TadoCore.Session?, String?) = await SpawnSignposts.intervalAsync("ptySpawn") {
+                await Task.detached(priority: .userInitiated) {
+                    let s = TadoCore.Session(
+                        command: spawnedCommand,
+                        args: spawnedArgs,
+                        cwd: spawnedCwd,
+                        environment: spawnedEnv,
+                        cols: cols,
+                        rows: rows
+                    )
+                    let reason = (s == nil)
+                        ? (TadoCore.lastSpawnErrorFromCore()
+                            ?? "tado_session_spawn returned null with no error detail")
+                        : nil
+                    return (s, reason)
+                }.value
+            }
 
             // Back on the main actor — `Task` from a SwiftUI view body
             // inherits the @MainActor isolation of the surrounding view.
@@ -400,6 +410,12 @@ struct MetalTerminalTileView: View {
             }
             session.coreSession = spawned
             session.processID = spawned.processID
+            // The placeholder swap happens on the next SwiftUI body
+            // evaluation triggered by `session.coreSession = spawned`.
+            // This event marks the @MainActor-visible end of the
+            // spawn pipeline; the duration from `spawnIfNeeded.entry`
+            // is the user-perceived freeze window.
+            SpawnSignposts.event("spawnIfNeeded.coreSessionSet")
             EventBus.shared.publish(
                 .terminalSpawned(
                     sessionID: sessionID,

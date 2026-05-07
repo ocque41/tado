@@ -48,6 +48,8 @@ enum DomeExtension: AppExtension {
     /// daemon — they render an "offline" state if the RPC client
     /// can't reach the socket.
     static func onAppLaunch() async {
+        SpawnSignposts.event("dome.onAppLaunch.entry")
+        defer { SpawnSignposts.event("dome.onAppLaunch.exit") }
         let vaultURL = DomeVault.resolveRoot()
         do {
             try FileManager.default.createDirectory(
@@ -59,8 +61,16 @@ enum DomeExtension: AppExtension {
             return
         }
 
-        let status = vaultURL.path.withCString { cstr in
-            tado_dome_start(cstr)
+        // The bt-core daemon boot — opens SQLite, replays the WAL,
+        // applies any pending migration, opens the IPC socket, spawns
+        // the four enrichment workers. All blocking until it returns.
+        // Runs on the detached `.utility` task ExtensionRegistry
+        // dispatched, but if anything ever calls onAppLaunch on the
+        // main actor this signpost makes the regression visible.
+        let status = SpawnSignposts.interval("dome.daemon.start") {
+            vaultURL.path.withCString { cstr in
+                tado_dome_start(cstr)
+            }
         }
 
         if status == 0 {
@@ -79,14 +89,16 @@ enum DomeExtension: AppExtension {
             // (IO/syscall reduction via amortization).
             // See `.claude/skills/tado-canvas-spawn-smooth/SKILL.md`.
             Task.detached(priority: .utility) {
-                _ = DomeContextPreamble.build(for: DomeContextPreamble.Context(
-                    agentName: nil,
-                    projectName: nil,
-                    projectID: nil,
-                    projectRoot: nil,
-                    teamName: nil,
-                    teammates: []
-                ))
+                SpawnSignposts.interval("dome.preamble.prewarm") {
+                    _ = DomeContextPreamble.build(for: DomeContextPreamble.Context(
+                        agentName: nil,
+                        projectName: nil,
+                        projectID: nil,
+                        projectRoot: nil,
+                        teamName: nil,
+                        teammates: []
+                    ))
+                }
             }
             let mcpPath = resolveMcpBinaryPath()
             let statusLinePath = installStatusLineScript(vaultPath: vaultURL.path)

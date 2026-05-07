@@ -115,9 +115,15 @@ final class IPCBroker {
     // MARK: - Registry
 
     func registerSession(_ session: TerminalSession, engine: TerminalEngine) {
-        createSessionDirectories(sessionID: session.id)
-        updateRegistry()
-        startWatching(session: session)
+        // The registry write hops to Rust via FFI; the directory
+        // creates are 3 syscalls. None of it is supposed to be
+        // visible on the trace, but if a regression introduces a
+        // sync write the interval makes it visible immediately.
+        SpawnSignposts.interval("ipc.registerSession") {
+            createSessionDirectories(sessionID: session.id)
+            updateRegistry()
+            startWatching(session: session)
+        }
     }
 
     func unregisterSession(_ sessionID: UUID) {

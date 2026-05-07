@@ -231,7 +231,14 @@ final class TerminalMTKView: MTKView {
         self.cols = cols
         self.rows = rows
 
-        let device = MTLCreateSystemDefaultDevice()
+        // First-call cold-start of `MTLCreateSystemDefaultDevice` is
+        // measurable on @MainActor (driver init, GPU enumeration); the
+        // pre-warm in `TadoApp.init` covers it via `MetalPipelineCache`,
+        // but we re-call here too. Bracketing it surfaces the actual
+        // duration on the trace if the pre-warm is somehow short-circuited.
+        let device = SpawnSignposts.interval("metal.deviceInit") {
+            MTLCreateSystemDefaultDevice()
+        }
         super.init(frame: .zero, device: device)
 
         self.clearColor = MTLClearColorMake(0, 0, 0, 1)
@@ -252,15 +259,21 @@ final class TerminalMTKView: MTKView {
         self.autoResizeDrawable = false
 
         if let device = device {
-            do {
-                self.renderer = try MetalTerminalRenderer(
-                    device: device,
-                    metrics: metrics,
-                    cols: UInt32(cols),
-                    rows: UInt32(rows)
-                )
-            } catch {
-                NSLog("tado: MetalTerminalRenderer init failed: \(error)")
+            // Renderer init is the historic suspect: shader compile +
+            // pipeline state. The cache should make this O(dictionary
+            // lookup); the signpost catches a regression where the
+            // cache misses.
+            SpawnSignposts.interval("metal.rendererInit") {
+                do {
+                    self.renderer = try MetalTerminalRenderer(
+                        device: device,
+                        metrics: metrics,
+                        cols: UInt32(cols),
+                        rows: UInt32(rows)
+                    )
+                } catch {
+                    NSLog("tado: MetalTerminalRenderer init failed: \(error)")
+                }
             }
         }
 

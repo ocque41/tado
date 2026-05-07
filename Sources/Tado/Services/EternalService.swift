@@ -1914,6 +1914,7 @@ enum EternalService {
         terminalManager: TerminalManager,
         appState: AppState
     ) {
+        SpawnSignposts.event("eternal.architect.entry")
         guard let project = run.project else { return }
 
         // Snapshot every primitive the spawn-prep needs while we're on
@@ -2069,6 +2070,7 @@ enum EternalService {
         terminalManager: TerminalManager,
         appState: AppState
     ) {
+        SpawnSignposts.event("eternal.interventor.entry")
         guard let project = run.project else { return }
 
         // Off-main: ensure the inbox + inbox-processed dirs exist and
@@ -2199,6 +2201,7 @@ enum EternalService {
         terminalManager: TerminalManager,
         appState: AppState
     ) {
+        SpawnSignposts.event("eternal.worker.entry")
         guard let project = run.project else { return }
 
         // Snapshot Sendable primitives on @MainActor; one detached task

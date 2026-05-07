@@ -193,16 +193,24 @@ final class ControlSocketServer {
     }
 
     private nonisolated func dispatch(request: ControlRequest) async -> Data {
-        let result: ControlResponseEnvelope = await MainActor.run {
-            guard let handler = self.onRequest else {
-                return ControlResponseEnvelope(
-                    requestID: request.requestID,
-                    ok: false,
-                    data: nil,
-                    error: "router_unavailable"
-                )
+        // The handler runs on @MainActor — for `tado_use_eternal_start`
+        // (and every other panel-driven control RPC) this is the moment
+        // a slow handler can stall the UI. Bracketing the whole
+        // `MainActor.run { handler(request) }` makes the handler's wall
+        // time visible on the trace. Method name is the request shape's
+        // discriminator so the trace shows which RPC is hot.
+        let result: ControlResponseEnvelope = await SpawnSignposts.intervalAsync("controlSocket.dispatch") {
+            await MainActor.run {
+                guard let handler = self.onRequest else {
+                    return ControlResponseEnvelope(
+                        requestID: request.requestID,
+                        ok: false,
+                        data: nil,
+                        error: "router_unavailable"
+                    )
+                }
+                return handler(request)
             }
-            return handler(request)
         }
         return (try? JSONEncoder().encode(result)) ?? encodeError(
             requestID: request.requestID,

@@ -45,10 +45,17 @@ struct TadoApp: App {
     private let kanbanInboxWatcher: KanbanInboxWatcher
 
     init() {
+        // Mark the start of the @MainActor boot sequence on the system
+        // trace. Pairs with `boot.bodyEntered` (fired from
+        // `MainWindowRoot.onAppear`) — the gap is everything that runs
+        // during `App.init` before SwiftUI hands the runloop back.
+        SpawnSignposts.event("boot.appInit.entry")
         // Register Plus Jakarta Sans with Core Text before any view
         // asks for it. Safe to call from `init()`; only touches
         // `CTFontManager`, not SwiftUI state.
-        Typography.registerFonts()
+        SpawnSignposts.interval("boot.fonts.register") {
+            Typography.registerFonts()
+        }
 
         StorageLocationManager.applyPendingMoveIfNeeded()
         StorageLocationManager.importLegacySwiftDataStoreIfNeeded()
@@ -119,8 +126,12 @@ struct TadoApp: App {
         // up. SwiftUI views see the same container and redraw when the
         // cache row refreshes.
         MainActor.assumeIsolated {
-            MigrationRunner.run(context: ModelContext(container))
-            ScopedConfig.shared.bootstrap()
+            SpawnSignposts.interval("boot.migrations.run") {
+                MigrationRunner.run(context: ModelContext(container))
+            }
+            SpawnSignposts.interval("boot.scopedConfig.bootstrap") {
+                ScopedConfig.shared.bootstrap()
+            }
             // Phase 4 — keep `DomeContextPreamble._contextPacksV2Override`
             // synced with the live `global.json` value. Bootstrap reads
             // the flag once; the `addOnChange` hook propagates Settings
@@ -151,6 +162,7 @@ struct TadoApp: App {
         }
         self.kanbanInboxWatcher = kanban
         MainActor.assumeIsolated {
+            SpawnSignposts.event("boot.syncs.start")
             sync.start()
             pSync.start()
             rew.start()
@@ -190,8 +202,11 @@ struct TadoApp: App {
         // Detached so extensions that block (model downloads, daemon
         // boot, etc.) never stall the first-frame paint. Extensions are
         // expected to run their own MainActor hops for UI work.
+        SpawnSignposts.event("boot.extensions.dispatch")
         Task.detached(priority: .utility) {
-            await ExtensionRegistry.runOnAppLaunchHooks()
+            await SpawnSignposts.intervalAsync("boot.extensions.onAppLaunch") {
+                await ExtensionRegistry.runOnAppLaunchHooks()
+            }
         }
 
         // Pre-warm the Metal shader library + render pipeline state
@@ -259,6 +274,7 @@ struct TadoApp: App {
                 BackgroundLifecycle.shared.teardown()
             }
         }
+        SpawnSignposts.event("boot.appInit.exit")
     }
 
     var body: some Scene {
@@ -468,6 +484,12 @@ struct MainWindowRoot: View {
             // the predicate is true and Cmd+/-/0 app-zooms the window.
             .windowZoom(zoomState, shouldIntercept: { appState.currentView != .canvas })
             .onAppear {
+                // Marks the moment the runloop reaches the first
+                // visible scene. Compare to `boot.appInit.exit` —
+                // anything between the two is SwiftUI body evaluation
+                // for the root window. If this gap is large, the freeze
+                // is during view-tree construction, not during init.
+                SpawnSignposts.event("boot.bodyEntered")
                 if !ipcBrokerInitialized {
                     terminalManager.ipcBroker = IPCBroker(terminalManager: terminalManager)
                     // Install the macOS background-lifecycle hub

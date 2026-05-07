@@ -209,6 +209,14 @@ final class TerminalManager {
         dispatchRunID: UUID? = nil,
         runRole: String? = nil
     ) {
+        // Common entry point for every spawn that wires a `TerminalSession`
+        // to a `TodoItem` (architect, worker, interventor, panel-driven,
+        // canvas-driven). The interval brackets the @MainActor work
+        // between session insert and the model-context `save()` below,
+        // so a slow SwiftData save (which would invalidate the @Query
+        // observers and re-render Projects/Cross-Run/Pets) shows up
+        // here. See `Sources/Tado/Core/SpawnSignposts.swift`.
+        SpawnSignposts.event("terminalManager.spawnAndWire.entry")
         let session = spawnSession(
             todoID: todo.id,
             todoText: todo.text,
@@ -339,6 +347,7 @@ final class TerminalManager {
                 projectRoot: projectRoot
             )
         }
+        SpawnSignposts.event("terminalManager.spawnAndWire.exit")
     }
 
     /// Start a CoworkOutputPoller for a freshly-spawned Cowork

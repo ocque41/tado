@@ -65,6 +65,13 @@ extension EternalService {
         terminalManager: TerminalManager,
         appState: AppState
     ) -> EternalRun {
+        // Brackets the SwiftData insert + save + spawnArchitect handoff.
+        // The save() is the @Query-invalidation moment — every observer
+        // (Projects detail, Cross-Run Browser, Pets popover) re-evaluates
+        // its body. If any of them does sync IO inside body, that work
+        // shows up as a child interval inside this one.
+        SpawnSignposts.event("coordinator.propose.entry")
+        defer { SpawnSignposts.event("coordinator.propose.exit") }
         // Idempotency: if the same coordinator already proposed a
         // run that's still drafted/planning/awaitingReview, hand
         // back the existing one instead of forking a second tree.
