@@ -48,9 +48,33 @@ enum SpawnSignposts {
     /// signposts together.
     static let subsystem = "com.tado.spawn"
 
-    /// Shared `OSLog` handle. Initialized lazily so a unit-test
-    /// build that never fires a signpost pays nothing.
+    /// Per-spawn category — used for tile-mount + PTY-spawn
+    /// intervals. Boot signpost names route through `bootLog` via
+    /// `log(for:)` so Console.app's `category:boot` filter can
+    /// isolate startup timing from per-spawn timing without losing
+    /// the shared subsystem grouping.
     static let log = OSLog(subsystem: subsystem, category: "spawn")
+
+    /// Boot-phase category. Names starting with `boot.` route here
+    /// automatically. Filter `subsystem:com.tado.spawn category:boot`
+    /// in Console.app to see only the startup pipeline; the
+    /// `category:spawn` filter shows only per-tile work.
+    static let bootLog = OSLog(subsystem: subsystem, category: "boot")
+
+    /// Pick the right `OSLog` for a given signpost name. `boot.*`
+    /// names go to `bootLog`; everything else stays on the
+    /// per-spawn category. `@inline(__always)` so signposts named
+    /// at compile-time (every call site is a `StaticString`) inline
+    /// to a single load on Apple Silicon.
+    @inline(__always)
+    private static func selectLog(for name: StaticString) -> OSLog {
+        // `StaticString` doesn't expose a `hasPrefix` of its own;
+        // round-trip through `String` for the lookup. Cheap when the
+        // signpost itself is firing (the trace cost dominates), and
+        // a no-op when no trace is attached because `os_signpost`
+        // short-circuits on the first arg.
+        return "\(name)".hasPrefix("boot.") ? bootLog : log
+    }
 
     /// Time a synchronous closure under one signpost interval.
     /// Returns the closure's value; rethrows on failure. The end
@@ -58,9 +82,10 @@ enum SpawnSignposts {
     /// span even on throws.
     @discardableResult
     static func interval<T>(_ name: StaticString, _ body: () throws -> T) rethrows -> T {
-        let id = OSSignpostID(log: log)
-        os_signpost(.begin, log: log, name: name, signpostID: id)
-        defer { os_signpost(.end, log: log, name: name, signpostID: id) }
+        let osLog = selectLog(for: name)
+        let id = OSSignpostID(log: osLog)
+        os_signpost(.begin, log: osLog, name: name, signpostID: id)
+        defer { os_signpost(.end, log: osLog, name: name, signpostID: id) }
         return try body()
     }
 
@@ -68,17 +93,29 @@ enum SpawnSignposts {
     /// exit path, including suspension cancellation and throws.
     @discardableResult
     static func intervalAsync<T>(_ name: StaticString, _ body: () async throws -> T) async rethrows -> T {
-        let id = OSSignpostID(log: log)
-        os_signpost(.begin, log: log, name: name, signpostID: id)
-        defer { os_signpost(.end, log: log, name: name, signpostID: id) }
+        let osLog = selectLog(for: name)
+        let id = OSSignpostID(log: osLog)
+        os_signpost(.begin, log: osLog, name: name, signpostID: id)
+        defer { os_signpost(.end, log: osLog, name: name, signpostID: id) }
         return try await body()
     }
 
     /// One-shot signpost event (no duration). Useful for marking
     /// transitions like "session.coreSession set" where the
     /// duration is implicit (from the previous interval's end to
-    /// this event).
-    static func event(_ name: StaticString, _ message: StaticString = "") {
-        os_signpost(.event, log: log, name: name, "%{public}s", String(describing: message))
+    /// this event). Allocation-free at the call site — `os_signpost`'s
+    /// no-format-string variant skips the per-event message
+    /// serialization the previous helper unconditionally paid.
+    static func event(_ name: StaticString) {
+        os_signpost(.event, log: selectLog(for: name), name: name)
+    }
+
+    /// Variant with an attached `StaticString` message. Use sparingly:
+    /// every firing serializes the message into the trace buffer
+    /// even when no trace is attached, which is exactly the cost
+    /// the parameter-less `event(_:)` exists to avoid. Restricted
+    /// to `StaticString` so the message can't be a per-call format.
+    static func event(_ name: StaticString, message: StaticString) {
+        os_signpost(.event, log: selectLog(for: name), name: name, "%{public}s", "\(message)")
     }
 }

@@ -67,6 +67,10 @@ path = "src/bin/tado-kanban.rs"
 name = "tado-cowork"
 path = "src/bin/tado-cowork.rs"
 
+[[bin]]
+name = "tado-deploy"
+path = "src/bin/tado-deploy.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

@@ -162,36 +162,54 @@ struct TadoApp: App {
         }
         self.kanbanInboxWatcher = kanban
         MainActor.assumeIsolated {
-            SpawnSignposts.event("boot.syncs.start")
-            sync.start()
-            pSync.start()
-            rew.start()
-            kanban.start()
-            // Live run-state caches. They feed `ProjectEternalSection`
-            // and `ProjectDispatchSection` so view bodies never call
-            // `EternalService.readState` / `DispatchPlanService.
-            // planExistsOnDisk` synchronously on @MainActor inside a
-            // 2s `TimelineView` tick (the freeze-mode the prior four
-            // smooth-software passes missed). The 10s `.utility`
-            // background poll catches FSEvent misses without ever
-            // hitting the UI thread.
-            EternalRunStateCache.shared.start()
-            DispatchRunStateCache.shared.start()
-            // ProjectIndexService instantiates and starts observing
-            // in its initializer; nothing to do here beyond holding
-            // the reference so the observer survives.
-            _ = self.projectIndexService
-            // Event deliverers — subscribe once, fire for every
-            // event the bus publishes thereafter. Order doesn't
-            // matter (each deliverer is independent).
-            SoundPlayer.shared.install()
-            DockBadgeUpdater.shared.install()
-            SystemNotifier.shared.install()
-            // A6: real-time A2A socket at
-            // `/tmp/tado-ipc-<pid>/events.sock`. Install before
-            // `.systemAppLaunched` so that the boundary event
-            // itself is on the firehose for any early subscriber.
-            EventsSocketBridge.install()
+            // Wrap the whole boot-syncs block in one outer signpost
+            // so the trace surfaces "everything between scopedConfig
+            // and extensions.dispatch" as one bounded span; per-
+            // service sub-intervals tell you which call inside cost
+            // most. This is the most common @MainActor stall we hit
+            // when projects accumulate (each project's DispatchSource
+            // watcher arms here).
+            SpawnSignposts.interval("boot.syncs.installAll") {
+                SpawnSignposts.interval("boot.syncs.appSettings") { sync.start() }
+                SpawnSignposts.interval("boot.syncs.projectSettings") { pSync.start() }
+                SpawnSignposts.interval("boot.syncs.runEventWatcher") { rew.start() }
+                SpawnSignposts.interval("boot.syncs.kanbanInbox") { kanban.start() }
+                // Live run-state caches. They feed
+                // `ProjectEternalSection` and `ProjectDispatchSection`
+                // so view bodies never call `EternalService.readState`
+                // / `DispatchPlanService.planExistsOnDisk`
+                // synchronously on @MainActor inside a 2s
+                // `TimelineView` tick (the freeze-mode the prior four
+                // smooth-software passes missed). The 10s `.utility`
+                // background poll catches FSEvent misses without ever
+                // hitting the UI thread.
+                SpawnSignposts.interval("boot.syncs.eternalCache") {
+                    EternalRunStateCache.shared.start()
+                }
+                SpawnSignposts.interval("boot.syncs.dispatchCache") {
+                    DispatchRunStateCache.shared.start()
+                }
+                // ProjectIndexService instantiates and starts
+                // observing in its initializer; nothing to do here
+                // beyond holding the reference so the observer
+                // survives.
+                _ = self.projectIndexService
+                // Event deliverers — subscribe once, fire for every
+                // event the bus publishes thereafter. Order doesn't
+                // matter (each deliverer is independent).
+                SpawnSignposts.interval("boot.syncs.eventDeliverers") {
+                    SoundPlayer.shared.install()
+                    DockBadgeUpdater.shared.install()
+                    SystemNotifier.shared.install()
+                }
+                // A6: real-time A2A socket at
+                // `/tmp/tado-ipc-<pid>/events.sock`. Install before
+                // `.systemAppLaunched` so that the boundary event
+                // itself is on the firehose for any early subscriber.
+                SpawnSignposts.interval("boot.syncs.eventsSocket") {
+                    EventsSocketBridge.install()
+                }
+            }
             // Mark the session boundary for the event log. Useful
             // when paging through `events/current.ndjson` — you can
             // spot where one launch ended and the next began.

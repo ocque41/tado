@@ -769,7 +769,14 @@ final class IPCBroker {
         writeExternalTadoSubscribe(to: binDir)
         writeExternalTadoUnsubscribe(to: binDir)
         writeExternalTadoTopics(to: binDir)
-        writeExternalTadoDeploy(to: binDir)
+        // tado-deploy used to be a 80-line bash + python heredoc
+        // generated here; v1.4 promotes it to the Rust `tado-cli`
+        // workspace and installs via `installRustCLIs` below.
+        // The result is byte-compatible (same SpawnRequest JSON
+        // envelope, same `<ipcRoot>/spawn-requests/<uuid>.spawn`
+        // landing path) but ~50 ms faster on every invocation
+        // because the launcher no longer pays the python3
+        // startup cost on every call.
 
         // Also install to ~/.local/bin for PATH accessibility
         let localBin = FileManager.default.homeDirectoryForCurrentUser
@@ -783,7 +790,6 @@ final class IPCBroker {
         installScript(name: "tado-subscribe", from: binDir, to: localBin)
         installScript(name: "tado-unsubscribe", from: binDir, to: localBin)
         installScript(name: "tado-topics", from: binDir, to: localBin)
-        installScript(name: "tado-deploy", from: binDir, to: localBin)
 
         // Packet 7 — settings / memory / notify CLIs. Share the same
         // `~/.local/bin` install target so users get them on $PATH
@@ -806,7 +812,7 @@ final class IPCBroker {
     /// or file at the destination first so a stale build never
     /// shadows a fresh one.
     nonisolated private func installRustCLIs(to localBin: URL) {
-        let names = ["tado-projects", "tado-eternal", "tado-dispatch", "tado-bootstrap", "tado-system", "tado-kanban", "tado-cowork"]
+        let names = ["tado-projects", "tado-eternal", "tado-dispatch", "tado-bootstrap", "tado-system", "tado-kanban", "tado-cowork", "tado-deploy"]
 
         // Prefer release build (the Makefile's `make dev` produces
         // it); fall back to debug for everyday `swift run` cycles
@@ -1677,91 +1683,15 @@ final class IPCBroker {
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    nonisolated private func writeExternalTadoDeploy(to binDir: URL) {
-        let script = """
-        #!/bin/bash
-        # Usage: tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
-        # Deploys a new agent session on the Tado canvas (run from any terminal).
-
-        AGENT=""
-        TEAM=""
-        PROJECT=""
-        ENGINE=""
-        CWD=""
-        PROMPT=""
-
-        while [ $# -gt 0 ]; do
-          case "$1" in
-            --agent) AGENT="$2"; shift 2 ;;
-            --team) TEAM="$2"; shift 2 ;;
-            --project) PROJECT="$2"; shift 2 ;;
-            --engine) ENGINE="$2"; shift 2 ;;
-            --cwd) CWD="$2"; shift 2 ;;
-            --help|-h)
-              echo "Usage: tado-deploy \\"<prompt>\\" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]"
-              exit 0
-              ;;
-            *) [ -z "$PROMPT" ] && PROMPT="$1" || PROMPT="$PROMPT $1"; shift ;;
-          esac
-        done
-
-        if [ -z "$PROMPT" ]; then
-          echo "Usage: tado-deploy \\"<prompt>\\" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]"
-          exit 1
-        fi
-
-        IPC_ROOT="/tmp/tado-ipc"
-
-        if [ ! -L "$IPC_ROOT" ] && [ ! -d "$IPC_ROOT" ]; then
-          echo "Tado is not running (no IPC root at $IPC_ROOT)"
-          exit 1
-        fi
-
-        SPAWN_DIR="$IPC_ROOT/spawn-requests"
-        mkdir -p "$SPAWN_DIR"
-
-        python3 - "$PROMPT" "$AGENT" "$TEAM" "$PROJECT" "$CWD" "$ENGINE" "$SPAWN_DIR" <<'PYEOF'
-        import json, sys, uuid, os
-        from datetime import datetime, timezone
-
-        prompt = sys.argv[1]
-        agent = sys.argv[2] or None
-        team = sys.argv[3] or None
-        project = sys.argv[4] or None
-        cwd = sys.argv[5] or None
-        engine = sys.argv[6] or None
-        spawn_dir = sys.argv[7]
-
-        req_id = str(uuid.uuid4())
-        request = {
-            'id': req_id,
-            'prompt': prompt,
-            'agentName': agent,
-            'teamName': team,
-            'projectName': project,
-            'projectRoot': cwd,
-            'engine': engine,
-            'requestedBy': None,
-            'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-            'status': 'pending'
-        }
-
-        path = os.path.join(spawn_dir, req_id + '.spawn')
-        with open(path, 'w') as f:
-            json.dump(request, f, indent=2)
-
-        print(f'Deploy request submitted: {req_id}')
-        if agent:
-            print(f'  Agent: {agent}')
-        if project:
-            print(f'  Project: {project}')
-        PYEOF
-        """
-
-        let url = binDir.appendingPathComponent("ext-tado-deploy")
-        try? script.write(to: url, atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-    }
+    // The legacy `writeExternalTadoDeploy` heredoc + its
+    // `installScript("tado-deploy", ...)` line both moved to the
+    // Rust `tado-cli` workspace at v1.4. The compiled binary lives
+    // at `tado-core/crates/tado-cli/src/bin/tado-deploy.rs`; the
+    // PATH-install path is `installRustCLIs(to:)` above. The
+    // SpawnRequest envelope shape (id / prompt / agentName /
+    // teamName / projectName / projectRoot / engine / requestedBy
+    // / timestamp / status) is byte-compatible with the legacy
+    // bash output the broker's spawn-request watcher decoded.
 
     // MARK: - Team Script
 

@@ -23,12 +23,24 @@ enum MigrationRunner {
         // Snapshot the app-support tree before the first migration
         // fires. If any migration corrupts state, the user can
         // untar `backups/tado-backup-<ts>-pre-migration.tar.gz`
-        // back into place and relaunch.
-        BackupManager.createBackup(reason: "pre-migration")
+        // back into place and relaunch. Tarball creation can take
+        // hundreds of ms when the storage root is large; surface
+        // it as its own signpost so the trace separates "backup
+        // time" from "actual migration time".
+        SpawnSignposts.interval("boot.migrations.preBackup") {
+            BackupManager.createBackup(reason: "pre-migration")
+        }
 
         for migration in pending {
             do {
-                try migration.apply(context: context)
+                // Per-migration sub-interval. The only way the trace
+                // tells you *which* migration was slow once the list
+                // grows past a handful — Console.app's Points-of-
+                // Interest view sorts them in order, so a 1.2s outlier
+                // sticks out at a glance.
+                try SpawnSignposts.interval("boot.migrations.apply") {
+                    try migration.apply(context: context)
+                }
                 writeApplied(migration.id)
                 NSLog("[Migration] applied \(migration.id): \(migration.name)")
                 EventBus.shared.publish(.systemMigrationRan(id: migration.id, name: migration.name))
