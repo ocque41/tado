@@ -231,10 +231,42 @@ public final class PetsHatchService {
     }
 
     private func writeStubSprite(prompt: String, to url: URL) throws {
+        // Draw directly into an NSBitmapImageRep with a custom
+        // NSGraphicsContext so this works in headless test
+        // environments (no AppKit run loop). Going through
+        // NSImage.lockFocus / tiffRepresentation requires an
+        // active window-server connection that the test target
+        // doesn't have.
         let size = NSSize(width: 96, height: 96)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        defer { image.unlockFocus() }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width),
+            pixelsHigh: Int(size.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 32
+        ) else {
+            throw NSError(
+                domain: "PetsHatchService",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to allocate stub sprite bitmap"]
+            )
+        }
+
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            throw NSError(
+                domain: "PetsHatchService",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create graphics context for stub sprite"]
+            )
+        }
+        let prevContext = NSGraphicsContext.current
+        NSGraphicsContext.current = context
+        defer { NSGraphicsContext.current = prevContext }
 
         // Background — soft purple gradient circle so the user
         // immediately sees this is a hatched pet, not a built-in.
@@ -286,11 +318,11 @@ public final class PetsHatchService {
             y: size.height - stubSize.height - 2
         ))
 
-        guard
-            let tiff = image.tiffRepresentation,
-            let rep = NSBitmapImageRep(data: tiff),
-            let pngData = rep.representation(using: .png, properties: [:])
-        else {
+        // Flush the context so the bitmap rep sees every draw
+        // call before we encode it.
+        context.flushGraphics()
+
+        guard let pngData = rep.representation(using: .png, properties: [:]) else {
             throw NSError(
                 domain: "PetsHatchService",
                 code: 1,

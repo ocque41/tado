@@ -2,12 +2,18 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado at v1.0.0. It is grouped so you can
-navigate by purpose rather than by feature: build mechanics first, then the
-product surface, then the cross-cutting subsystems (state, knowledge, A2A),
-then the operational playbooks (bootstraps, releases, history). When two
-sections touch the same code path the more abstract one comes first; jump
-to **Key Files** for the quickest "where do I edit?" answer.
+This file is the canonical map of Tado as of v1.3.x (post-v1.0 stream). It
+is grouped so you can navigate by purpose rather than by feature: build
+mechanics first, then the product surface, then the cross-cutting subsystems
+(state, knowledge, A2A), then the operational playbooks (bootstraps,
+releases, history). When two sections touch the same code path the more
+abstract one comes first; jump to **Key Files** for the quickest "where do
+I edit?" answer.
+
+This file is **the contract**, not the docs. If you find a section that
+contradicts the code, the code is right and this file is stale — fix it
+in the same PR as the code change. The smooth-software pass (see below)
+exists in part to keep this file honest.
 
 ## Table of Contents
 
@@ -15,6 +21,7 @@ to **Key Files** for the quickest "where do I edit?" answer.
 - [What This Is](#what-this-is)
 - [Rules (the discrete checklist)](#rules-the-discrete-checklist)
 - [Conventions (foundation-v2 and beyond)](#conventions-foundation-v2-and-beyond)
+- [Smooth-software pass (the maintenance contract)](#smooth-software-pass-the-maintenance-contract)
 - [Architecture](#architecture)
 - [Operations Runbook](#operations-runbook)
 - [Persistence (settings / memory / events / Dome vault)](#persistence-settings--memory--events--dome-vault)
@@ -23,8 +30,12 @@ to **Key Files** for the quickest "where do I edit?" answer.
 - [Knowledge & Memory (Dome second brain + spawn-time context)](#knowledge--memory-dome-second-brain--spawn-time-context)
 - [Tado A2A (CLI + MCP + real-time events)](#tado-a2a-cli--mcp--real-time-events)
 - [Performance step (Eternal `kind = perf`)](#performance-step-eternal-kind--perf)
+- [Sprint step (Eternal `kind = sprint`)](#sprint-step-eternal-kind--sprint)
+- [Tado Use (drawable agent panel + autonomous control plane)](#tado-use-drawable-agent-panel--autonomous-control-plane)
+- [Pets (canvas companion, hatch, live-agent panel)](#pets-canvas-companion-hatch-live-agent-panel)
+- [Kanban (per-project board mirrored to disk)](#kanban-per-project-board-mirrored-to-disk)
 - [Bootstrapping a project (the four `Bootstrap …` actions)](#bootstrapping-a-project-the-four-bootstrap--actions)
-- [Extensions (Notifications, Dome, Cross-Run Browser)](#extensions-notifications-dome-cross-run-browser)
+- [Extensions (Notifications, Dome, Cross-Run Browser, Pets)](#extensions-notifications-dome-cross-run-browser-pets)
 - [Execution (build matrix, verification, rollback)](#execution-build-matrix-verification-rollback)
 - [Key Files](#key-files)
 - [Releasing ("release next version")](#releasing-release-next-version)
@@ -92,17 +103,19 @@ happening again.
 
 ```bash
 swift build                                  # Build the Swift app
-swift run Tado                               # Build and run the macOS app (the package now also has a tado-use-bridge product, so the explicit name is required)
+swift run Tado                               # Build and run the macOS app (the package also has a tado-use-bridge product, so the explicit name is required)
+swift test                                   # Run the Swift test suite (~127 tests across ~17 files)
 make dev                                     # Build Rust core (release) + sync header + run Swift app
 make mcp                                     # Build dome-mcp + tado-mcp stdio bridges (Rust [[bin]]s)
 make perf-suite                              # Build perf-suite binary (Eternal Performance step)
 make perf-test                               # Run perf-suite full test matrix
 make perf-bench                              # Self-bench (Criterion harness, <30s)
-cargo test -p tado-ipc -p tado-settings      # Rust unit tests for IPC + settings crates
+cargo test --workspace                       # Full Rust matrix (~323 tests, all 12 crates)
+cargo test -p tado-ipc -p tado-settings      # Targeted: IPC + settings crates only
 ```
 
 The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+)
-plus a Cargo workspace under `tado-core/` with ten crates:
+plus a Cargo workspace under `tado-core/` with **twelve crates**:
 `tado-terminal` (PTY + grid + VT parser + cbindgen FFI),
 `tado-shared` (cross-crate primitives),
 `tado-ipc` (IPC contract types + registry serialization),
@@ -110,13 +123,25 @@ plus a Cargo workspace under `tado-core/` with ten crates:
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
+`tado-cli` (the canvas-agent CLI surface — hosts six binaries: `tado-bootstrap`,
+`tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-projects`, `tado-system` —
+all auto-installed under `~/.local/bin/` on first launch),
 `dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
 `replay`, `corpus run`, `explain` subcommands; the v0.10.0 Phase 2 CI gate),
-and `perf-suite` (Rust [[bin]] + [[lib]] for the v0.19.0 Eternal
-Performance step — auto-detects project stack and measures eight
-curated performance dimensions; invoked from
-`.tado/eternal/hooks/perf-gate.sh`).
-Every member links into the same `libtado_core.a` Package.swift consumes.
+`perf-suite` (Rust [[bin]] + [[lib]] for the v0.19.0 Eternal Performance step
+— auto-detects project stack and measures eight curated performance
+dimensions; invoked from `.tado/eternal/hooks/perf-gate.sh`),
+and `sprint-suite` (the v1.3 Sprint step — same shape as perf-suite but
+optimizes the SprintSuccessScore over a project's `sprint_rules.txt`;
+invoked from `.tado/eternal/hooks/sprint-gate.sh`).
+
+The Swift package has **four products**: the `Tado` macOS app
+executable, the `tado-use-bridge` CLI executable that backs the Tado
+Use control plane (see its dedicated section below), the `CTadoCore`
+system-library shim that exposes `libtado_core.a` to Swift, and the
+`TadoCoreTests` test bundle. Every Rust crate that the app needs at
+runtime links into the same `libtado_core.a` static archive that
+Package.swift consumes — there are no .dylib runtime hops.
 
 ## What This Is
 
@@ -174,6 +199,59 @@ between sibling tiles, and an extension host that adds optional surfaces
   `bootstrapTeamPrompt`, `bootstrapAutoModePrompt`,
   `bootstrapKnowledgePrompt`) so freshly-bootstrapped projects see the
   current shape, not a v0.4.0-era snapshot.
+
+## Smooth-software pass (the maintenance contract)
+
+The user-level `smooth-software` skill at
+`~/.claude/skills/smooth-software/SKILL.md` is the **maintenance
+contract** for this codebase. It is project-agnostic by construction
+but Tado-aware in practice — when working in this repo, the
+six-phase shape (DETECT → DIAGNOSE → TRIAGE → REFORM → VERIFY+COMMIT
+→ optional follow-ups) lands cleanly because the matrix it expects
+(swift build / swift test / cargo test --workspace / launch +
+Knowledge → System smoke) is already documented and working. The
+deeper `tado-rust-refactor` skill remains the right tool for
+Tado-specific institutional knowledge (FFI parity, atomic-store
+discipline, Pets-companion deadlock pattern, canvas-spawn-freeze
+recipe); `smooth-software` is the right tool for whole-codebase
+hygiene passes that touch every layer in one auditable commit.
+
+When to run a smooth-software pass on Tado:
+
+- **Before every release.** Pair it with the release procedure
+  below: a smooth-software pass first, then the release pass.
+  This is the explicit replacement for "audit-and-cleanup
+  releases" like v0.11–v0.15.
+- **After landing a major feature surface.** Tado Use, Sprint
+  step, Pets, Kanban — each of these added 1k–8k lines and
+  deserves a dedicated smooth-software pass within ~10 commits
+  of landing so dead test refs, watchdog regressions, schema
+  drift, and god-file growth don't accumulate.
+- **When you scale the project further.** New extension, new
+  crate, new MCP tool family — run smooth-software end-to-end
+  before claiming the expansion is done. The contract's three
+  preservation guards (test count, public surface, smoke) catch
+  the silent regressions that grow the orphan-feature inventory.
+- **When the inherited tree is unfamiliar.** Picking up the
+  repo after a long pause, after a teammate's branch lands, or
+  after an Eternal-driven autonomous burst — smooth-software's
+  DIAGNOSE pass is the cheapest way to reorient.
+
+Hard rule: **a smooth-software pass commits only if all three
+preservation guards are green.** Tests can move up; they cannot
+move down. Public symbols can be added; they can only be removed
+when removal was an approved finding. Smoke (build + Knowledge →
+System renders without errors) must still pass. The pass refuses
+to absorb mid-flight WIP — if there's uncommitted work you didn't
+make, capture it as a single labeled WIP commit *first*, then run
+the pass on the clean tree (this is exactly the discipline used
+to land the v1.0 → v1.3 cleanup).
+
+When you ship a new feature that adds a code-path the existing
+DIAGNOSE dimensions wouldn't catch, **extend the skill** — the
+SKILL.md at `~/.claude/skills/smooth-software/SKILL.md` is owned
+by the user and is meant to grow alongside the codebase. Don't
+work around it; teach it.
 
 ## Architecture
 
@@ -302,13 +380,17 @@ What MUST pass before a release ships. Listed in dependency order.
 
 | Gate | Command | Catches |
 |---|---|---|
-| Rust compile | `cargo build --release -p bt-core -p tado-core -p perf-suite` | FFI shim drift, missing header sync, perf-suite drift |
+| Rust compile | `cargo build --release -p bt-core -p tado-core -p perf-suite -p sprint-suite` | FFI shim drift, missing header sync, perf-suite + sprint-suite drift |
 | Swift build | `cd /Users/miguel/Documents/tado && swift build` | C-header / Swift binding drift |
+| Swift tests | `swift test` (~127 tests across 17 files) | EternalState decoder backward-compat, Pets aggregate, retrieval surfaces, polish budgets, tile visibility |
+| Rust tests (full) | `cargo test --workspace` (~323 tests) | every Rust crate in dependency order |
 | bt-core unit | `cargo test -p bt-core` | service.rs invariants, migration drift |
 | dome-eval lib | `cargo test -p dome-eval` | retrieval-quality regression (Phase 2 corpus) |
 | perf-suite full | `cargo test -p perf-suite` | composite scoring, baseline ratchet, stack detection, proposal patterns |
+| sprint-suite full | `cargo test -p sprint-suite` | SprintSuccessScore composite, baseline ratchet, per-component guards |
 | Spawn-pack contract | `cargo test -p bt-core --test spawn_pack_byte_equiv` | byte-stability of preamble (rule 6) |
 | Ingest scope contract | `cargo test -p bt-core --test ingest_scope_contract` | accidental global pollution rule |
+| Smooth-software guards | the three guards inside `~/.claude/skills/smooth-software/SKILL.md` | test count, public surface, smoke — run as part of every smooth-software pass commit |
 | Live smoke | manual: launch app → Knowledge → System renders without errors | wiring drift, daemon-down behavior |
 
 ### Recovery procedures
@@ -355,10 +437,14 @@ Per-project state lives under `<project>/.tado/`:
 config.json                   project-shared settings (commit by default)
 local.json                    project-local overrides (gitignored)
 memory/project.md             long-lived project context
-memory/notes/<ISO>-*.md       timestamped running notes
+memory/notes/<ISO>-*.md       timestamped running notes (gitignored)
 .gitignore                    auto-maintained by Tado (honors commitPolicy)
-eternal/runs/<uuid>/          per-run state
-dispatch/runs/<uuid>/         per-run state
+eternal/runs/<uuid>/          per-run state (gitignored)
+dispatch/runs/<uuid>/         per-run state (gitignored)
+kanban/state.json             per-project Kanban board mirror (gitignored)
+kanban/inbox/                 drop-zone for external Kanban additions (gitignored)
+sprint-baselines/<safe>.json  sprint-suite all-time-best baseline (committed)
+perf-baselines/<safe>.json    perf-suite all-time-best baseline (committed)
 ```
 
 **Scope hierarchy** (highest wins on merge): runtime > project-local >
@@ -701,6 +787,11 @@ event, send, and broadcast hits the same in-process `EventBus` and
 
 ### CLI (`~/.local/bin/`)
 
+Two families of binaries are auto-installed on first launch:
+
+**Tado A2A surface** (the original tile-and-event CLI, in
+`Sources/CTadoCore` / IPCBroker codegen):
+
 ```bash
 tado-list                                         # Active sessions (UUID, engine, grid, status, name)
 tado-list --toon                                  # AXI-style compact output (~45% fewer tokens)
@@ -712,6 +803,20 @@ tado-config {get,set,list,path,export,import} [scope] [key] [value]
 tado-notify {send "<title>", tail}
 tado-memory {read,note,search,path} [scope]
 tado-dome {register,query,...}                    # Scoped Dome knowledge from canvas agents
+```
+
+**`tado-cli` workspace binaries** (built from
+`tado-core/crates/tado-cli/`, six [[bin]] targets — these are
+typed-Rust drop-ins that operate on the same on-disk state the
+Swift app reads):
+
+```bash
+tado-bootstrap …                                  # Project bootstrap orchestration
+tado-dispatch …                                   # Dispatch run state read / write
+tado-eternal …                                    # Eternal run state read / write
+tado-kanban {list,move,add,read,…}                # Per-project Kanban board mutation
+tado-projects …                                   # Project CRUD across the storage root
+tado-system …                                     # Storage-root introspection / health checks
 ```
 
 **Target resolution** (same for `tado-read` and `tado-send`, in
@@ -1065,7 +1170,126 @@ about, refresh the corresponding `bootstrap*Prompt` function and bump
 the project's bootstraps — old projects need to re-run them to pick up
 the new shape.
 
-## Extensions (Notifications, Dome, Cross-Run Browser)
+## Tado Use (drawable agent panel + autonomous control plane)
+
+Tado Use is the **left-edge drawable panel** that gives the user (and
+external agents) a unified control surface over the entire app — a
+single chat-like interface that can read project state, mutate it,
+broadcast to running tiles, dispatch new work, and manage the
+Knowledge graph. Triggered by `Cmd+Shift+U` or by clicking the
+left-edge tab. Lives at `Sources/Tado/Views/TadoUsePanel.swift` (the
+view) and is backed by:
+
+- [TadoUseEngine.swift](Sources/Tado/Services/TadoUseEngine.swift)
+  — the streaming Claude API turn, off-actor parse, brand + settings
+  parity. Split per the v1.x Tado Use perf overhaul.
+- [TadoUseAutonomousHandlers.swift](Sources/Tado/Services/TadoUseAutonomousHandlers.swift)
+  — the 41-tool autonomous control plane (project CRUD, todo CRUD,
+  tile send/read, dispatch, eternal, knowledge writes, kanban,
+  pets, settings, etc.). Each tool is a typed handler invoked by
+  the streaming engine.
+- [TadoUseBridge/main.swift](Sources/TadoUseBridge/main.swift) —
+  the standalone CLI executable that backs external agents talking
+  to Tado Use. Auto-registered as an MCP server so an external
+  Claude Code session can drive Tado the same way the in-app panel
+  does.
+- [TadoUseBridgeAutoRegister.swift](Sources/Tado/Services/TadoUseBridgeAutoRegister.swift)
+  — the boot-time MCP installer.
+- [TadoUseBridgeHandlers.swift](Sources/Tado/Services/TadoUseBridgeHandlers.swift)
+  — the bridge-side dispatcher; mirrors the in-app autonomous
+  handlers.
+- [TadoUseState.swift](Sources/Tado/Services/TadoUseState.swift)
+  — the panel's observable state.
+
+Tado Use was promoted from a v1.0 single-tool surface into a
+**41-tool autonomous control plane** in the post-v1.0 stream
+(commits `ffd15d3` and `1c2e74f`). The v1.x perf overhaul split the
+streaming turn so parse work runs off the main actor, restoring
+smooth typing during long completions.
+
+## Pets (canvas companion, hatch, live-agent panel)
+
+Pets is a **floating-panel companion** that lives on top of the
+Tado canvas and mirrors what the user's agents are doing. It's an
+optional extension (`PetsExtension` registered in
+`ExtensionRegistry.all`) but ships in the default build.
+
+Components:
+
+- [PetsCoordinator.swift](Sources/Tado/Extensions/Pets/PetsCoordinator.swift)
+  — observable hub: aggregates `terminal.*` / `eternal.*` /
+  `dispatch.*` events into a single `PetsAggregate`, drives the
+  floating panel, hosts the live-companion spawn path.
+- [PetsExtension.swift](Sources/Tado/Extensions/Pets/PetsExtension.swift)
+  — `onAppLaunch` bootstrap, conforms to `AppExtension`.
+- [PetsFloatingPanelController.swift](Sources/Tado/Extensions/Pets/PetsFloatingPanelController.swift)
+  — `NSPanel` wrapper that floats above all windows and persists
+  drag-saved positions.
+- [PetsHatchService.swift](Sources/Tado/Extensions/Pets/PetsHatchService.swift)
+  — the **/pet hatch** flow: takes a free-form prompt, generates a
+  stub sprite (drawn directly into an `NSBitmapImageRep` so the
+  same code path works in headless tests), persists the hatched
+  pet into the user's pet library.
+- [PetsHatchSheet.swift](Sources/Tado/Extensions/Pets/PetsHatchSheet.swift)
+  — modal sheet for the hatch flow.
+- [PetSpriteCache.swift](Sources/Tado/Extensions/Pets/PetSpriteCache.swift)
+  + [PetSpriteView.swift](Sources/Tado/Extensions/Pets/PetSpriteView.swift)
+  — sprite-asset cache + the SwiftUI view that renders the
+  cross-fading sprite.
+- [PetsExpandedPopoverView.swift](Sources/Tado/Extensions/Pets/PetsExpandedPopoverView.swift)
+  — the per-project breakdown popover that opens when the user
+  clicks the floating panel.
+- [PetsModels.swift](Sources/Tado/Extensions/Pets/PetsModels.swift)
+  — `PetsAggregate`, `PetsAggregateResolver`, `PetsPreferences`,
+  `PetSessionRow`, `PetRunRow`, `PetProjectStatus`.
+- [PetsWindowRoot.swift](Sources/Tado/Extensions/Pets/PetsWindowRoot.swift)
+  — settings-window root view.
+
+The Pets coordinator hosts a **live-companion** path
+(`spawnLiveCompanionIfNeeded`) that boots a long-running tile via
+`tado-deploy`, running the `tado-pet-companion` agent definition.
+The companion polls every active session every 60 s and accepts
+free-form messages from the user via the floating panel's
+double-click prompt.
+
+Boot-order discipline is critical — the `applySettings(initial:)`
+gate is the explicit fix for the May 2026 Pets-companion deadlock,
+where a persisted `liveAgent: true` flag would shell `tado-deploy`
+during `onAppLaunch` before the IPC broker is wired in
+`MainWindowRoot.onAppear`. Initial settings load **never**
+auto-spawns; the user has to explicitly start it from the Pets
+settings window.
+
+## Kanban (per-project board mirrored to disk)
+
+Kanban is the **per-project board view** for todos: drag-and-drop
+columns the user manages themselves, mirrored to a JSON file at
+`<project>/.tado/kanban/state.json`. Inbox folder under
+`<project>/.tado/kanban/inbox/` lets external tools (or the
+`tado-kanban` CLI) drop new cards without re-launching the app.
+
+Components:
+
+- [Models/KanbanColumn.swift](Sources/Tado/Models/KanbanColumn.swift)
+  — the SwiftData model (per-project columns).
+- [Services/KanbanInboxWatcher.swift](Sources/Tado/Services/KanbanInboxWatcher.swift)
+  — debounced DispatchSource watcher that picks up files dropped
+  into the inbox and converts them into todos.
+- [Services/KanbanMirror.swift](Sources/Tado/Services/KanbanMirror.swift)
+  — atomic JSON writer that mirrors live SwiftData state into
+  `state.json` so external tools see the current board.
+- [Views/Projects/ProjectKanbanView.swift](Sources/Tado/Views/Projects/ProjectKanbanView.swift)
+  — the SwiftUI board view (drag-and-drop cards, column CRUD,
+  inline rename).
+- [tado-core/crates/tado-cli/src/bin/tado-kanban.rs](tado-core/crates/tado-cli/src/bin/tado-kanban.rs)
+  — the CLI: `tado-kanban list / move / add / read` for canvas
+  agents and external scripts.
+
+`.tado/kanban/` is gitignored alongside `.tado/eternal/`,
+`.tado/dispatch/`, and `.tado/memory/notes/` — it's per-project
+runtime state that regenerates on app launch from SwiftData.
+
+## Extensions (Notifications, Dome, Cross-Run Browser, Pets)
 
 Extensions are the home for optional surfaces. They conform to
 `AppExtension` ([AppExtensionProtocol.swift](Sources/Tado/Extensions/AppExtensionProtocol.swift)),
@@ -1090,6 +1314,9 @@ Currently shipped:
   across every project. See
   [CrossRunBrowserExtension.swift](Sources/Tado/Extensions/CrossRunBrowser/CrossRunBrowserExtension.swift)
   and [CrossRunBrowserView.swift](Sources/Tado/Extensions/CrossRunBrowser/CrossRunBrowserView.swift).
+- **Pets** — floating-panel companion + hatch flow + live-agent
+  panel. See the dedicated [Pets section](#pets-canvas-companion-hatch-live-agent-panel)
+  above for the full component list.
 
 ## Execution (build matrix, verification, rollback)
 
@@ -1109,15 +1336,22 @@ place to look up "how do I check that this PR is good".
 
 ### Test matrix
 
-Run all of these green before tagging:
+Run all of these green before tagging. The fastest path is
+`cargo test --workspace` (covers all 12 crates ≈ 323 tests in
+< 30 s on a warm cache), then `swift test` for the Swift side
+(≈ 127 tests in < 5 s):
 
 ```bash
+swift test                                         # 127 Swift tests across 17 files
 cd tado-core
-cargo test -p bt-core                              # 132+ unit + integration
+cargo test --workspace                             # 323 Rust tests, full matrix
+# Targeted gates if you want to spot a specific failure surface:
+cargo test -p bt-core                              # ~140 bt-core unit + integration
 cargo test -p bt-core --test spawn_pack_byte_equiv # spawn-pack contract (4 fixtures)
 cargo test -p bt-core --test ingest_scope_contract # ingest scope locked
 cargo test -p dome-eval                            # corpus regression
 cargo test -p perf-suite                           # perf-suite (33 unit + 9 e2e + 8 fixture)
+cargo test -p sprint-suite                         # sprint-suite (composite + ratchet + guards)
 cargo test -p tado-ipc -p tado-settings            # contract types + atomic IO
 ```
 
@@ -1154,10 +1388,17 @@ When a release breaks something:
 
 The exact procedure (also documented in [Releasing](#releasing-release-next-version) below). Listed here so it's part of the Execution checklist:
 
+0. **Run a smooth-software pass first.** Invoke the global
+   `smooth-software` skill end-to-end. The pass DIAGNOSEs across
+   eight dimensions, REFORMs Critical+Warning findings, and lands
+   one consolidated cleanup commit. Releases never go out on top of
+   a tree that hasn't had a smooth-software pass within the
+   previous 10 commits — this is the explicit replacement for the
+   v0.11–v0.15 "audit-and-cleanup releases" pattern.
 1. Read CHANGELOG → bump to next minor version.
 2. Audit: `git status`, `git log v<prev>..HEAD`.
-3. Verify: `swift build` + `make mcp` + the test matrix above.
-4. Keep `.tado/eternal/` / `.tado/dispatch/` / `.tado/memory/notes/` gitignored.
+3. Verify: `swift build` + `swift test` + `make mcp` + `cargo test --workspace`.
+4. Keep `.tado/eternal/` / `.tado/dispatch/` / `.tado/memory/notes/` / `.tado/kanban/` gitignored.
 5. Update CHANGELOG.md with `### Added / Changed / Fixed / Removed` sections.
 6. Stage explicitly by path; `git rm` for intentional deletions.
 7. Commit with `Release vX.Y.Z — <headline>` subject.
@@ -1199,6 +1440,23 @@ The exact procedure (also documented in [Releasing](#releasing-release-next-vers
 - `Extensions/Dome/DomeContextPreamble.swift` — spawn-time markdown block prepended to every prompt
 - `Extensions/Dome/DomeScopeSelection.swift` — global vs project scope (with includeGlobal merge)
 - `Extensions/CrossRunBrowser/CrossRunBrowserExtension.swift` + `CrossRunBrowserView.swift` — global run timeline
+- `Extensions/Pets/PetsExtension.swift` + `PetsCoordinator.swift` + `PetsFloatingPanelController.swift` + `PetsHatchService.swift` + `PetsModels.swift` + `PetsExpandedPopoverView.swift` + `PetSpriteCache.swift` + `PetSpriteView.swift` + `PetsHatchSheet.swift` + `PetsWindowRoot.swift` — Pets extension (canvas companion + hatch + live-agent)
+
+**Tado Use (drawable agent panel + autonomous control plane)**
+- `Views/TadoUsePanel.swift` — the drawable left-edge panel UI
+- `Services/TadoUseEngine.swift` — streaming Claude API turn, off-actor parse
+- `Services/TadoUseAutonomousHandlers.swift` — 41-tool autonomous control plane
+- `Services/TadoUseState.swift` — observable panel state
+- `Services/TadoUseBridgeAutoRegister.swift` — boot-time MCP installer
+- `Services/TadoUseBridgeHandlers.swift` — bridge-side autonomous dispatcher
+- `Sources/TadoUseBridge/main.swift` — standalone CLI executable (the `tado-use-bridge` Swift product)
+
+**Kanban**
+- `Models/KanbanColumn.swift` — per-project columns (SwiftData)
+- `Services/KanbanInboxWatcher.swift` — debounced DispatchSource watcher for `<project>/.tado/kanban/inbox/`
+- `Services/KanbanMirror.swift` — atomic JSON writer for `<project>/.tado/kanban/state.json`
+- `Views/Projects/ProjectKanbanView.swift` — board view (drag-and-drop, column CRUD)
+- `tado-core/crates/tado-cli/src/bin/tado-kanban.rs` — typed-Rust CLI
 
 **Persistence + events**
 - `Persistence/StorageLocation.swift` — relocator (locator file + scheduled move + verify)
@@ -1279,6 +1537,31 @@ confirmation prompts — this is a documented release procedure.
 Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
+
+- **post-v1.0 stream** (2026-05-07, unreleased on master) — *Tado
+  Use + Sprint step + Pets + Kanban + smooth-software contract.*
+  The post-v1.0 work that hasn't been tagged yet: (a) **Tado Use**
+  expanded from a v1.0 single-tool surface into a 41-tool
+  autonomous control plane with its own `tado-use-bridge` Swift
+  product (commits `ffd15d3` `1c2e74f` `26b6d04`); (b) **Sprint
+  step** (`kind=sprint`) shipped as a peer of the Performance
+  step — sprint-suite Rust crate + sprint-gate.sh hook +
+  EternalState sprint-cycle fields + ProcessSpawner sprint
+  addendum + EternalFileModal third button (commits `9c77b53`
+  through `5a1dcc1`); (c) **Pets extension** (canvas companion
+  + hatch flow + live-agent panel) and **Kanban system**
+  (per-project board mirror + tado-kanban CLI) landed as a
+  bundled WIP; (d) the **smooth-software pass** contract
+  baked into CLAUDE.md as the maintenance contract for every
+  expansion / scaling change going forward; (e) the v1.0 →
+  v1.3 cleanup itself (delete EternalWatchdog rule-1 zombie,
+  gitignore `.tado/kanban/`, document empty-sentinel atomic-store
+  carveout, tolerant EternalState decoder restoring rule-3
+  promise, dead-test cleanup unblocking the Swift suite,
+  TileVisibility signature migration, headless-safe
+  PetsHatchService stub-sprite). Workspace at twelve Rust crates
+  (sprint-suite added). Swift test suite restored from broken to
+  127 passing; Rust matrix at 323 passing.
 
 - **v1.0.0** (2026-05-06) — *The unified release.* Consolidates
   ten incremental ships (v0.10 through v0.19) into one official
