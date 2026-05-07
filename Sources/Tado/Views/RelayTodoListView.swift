@@ -271,8 +271,17 @@ struct RelayTodoListView: View {
         let settings = fetchOrCreateSettings()
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
         let todo = TodoItem(text: text, gridIndex: index, canvasPosition: position)
+        let activeProject = projects.first { $0.id == appState.activeProjectID }
+        if let activeProject {
+            todo.projectID = activeProject.id
+        }
         modelContext.insert(todo)
-        terminalManager.spawnAndWire(todo: todo, engine: settings.engine)
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: settings.engine,
+            cwd: activeProject?.rootPath,
+            projectName: activeProject?.name
+        )
         try? modelContext.save()
         inputText = ""
     }
@@ -283,6 +292,10 @@ struct RelayTodoListView: View {
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
         let todo = TodoItem(text: originalText, gridIndex: index, canvasPosition: position)
         todo.isCoordinator = true
+        let activeProject = projects.first { $0.id == appState.activeProjectID }
+        if let activeProject {
+            todo.projectID = activeProject.id
+        }
         modelContext.insert(todo)
         try? modelContext.save()
         let prompt = ProcessSpawner.coordinatorPrompt(brief: brief, todoID: todo.id)
@@ -291,6 +304,8 @@ struct RelayTodoListView: View {
         terminalManager.spawnAndWire(
             todo: todo,
             engine: .claude,
+            cwd: activeProject?.rootPath,
+            projectName: activeProject?.name,
             modelFlagsOverride: ["--model", ClaudeModel.opus47.rawValue]
         )
         EventBus.shared.publish(TadoEvent.coordinatorSpawned(todoID: todo.id, brief: brief))

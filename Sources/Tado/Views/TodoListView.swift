@@ -23,6 +23,7 @@ struct TodoListView: View {
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
+    @Query(sort: \Project.createdAt) private var projects: [Project]
     @State private var inputText: String = ""
     @State private var composerTab: ComposerTab = .compose
     @FocusState private var isInputFocused: Bool
@@ -419,9 +420,23 @@ struct TodoListView: View {
         let position = CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
         let todo = TodoItem(text: text, gridIndex: index, canvasPosition: position)
+        // Stamp the canvas's active-project filter onto the todo so a
+        // tile spawned from this surface lands inside the user's
+        // currently-viewed project zone. Without this the freshly-
+        // spawned session has projectID=nil and CanvasView's
+        // filteredSessions hides it the moment a project is active.
+        let activeProject = projects.first { $0.id == appState.activeProjectID }
+        if let activeProject {
+            todo.projectID = activeProject.id
+        }
         modelContext.insert(todo)
 
-        terminalManager.spawnAndWire(todo: todo, engine: settings.engine)
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: settings.engine,
+            cwd: activeProject?.rootPath,
+            projectName: activeProject?.name
+        )
 
         try? modelContext.save()
         inputText = ""

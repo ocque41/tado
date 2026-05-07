@@ -202,7 +202,20 @@ enum TadoUseAutonomousHandlers {
         guard let text = payload.string("text"), !text.isEmpty else {
             return ControlRequestRouter.error(requestID, code: "missing_param", message: "text required")
         }
-        let project = resolveProject(payload: payload, modelContext: modelContext)
+        // Fall back to the canvas's active-project filter when the
+        // caller doesn't specify a project. Without this fallback the
+        // todo lands with projectID=nil and CanvasView.filteredSessions
+        // hides it from the user's currently-viewed zone — which the
+        // user reads as "nothing happened".
+        let project: Project? = {
+            if let explicit = resolveProject(payload: payload, modelContext: modelContext) {
+                return explicit
+            }
+            guard let activeID = appState.activeProjectID else { return nil }
+            let descriptor = FetchDescriptor<Project>()
+            let projects = (try? modelContext.fetch(descriptor)) ?? []
+            return projects.first { $0.id == activeID }
+        }()
         let spawnTile = payload.bool("spawn_tile") ?? false
         let agentName = payload.string("agent")
         let teamName = payload.string("team")
