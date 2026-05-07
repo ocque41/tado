@@ -13,6 +13,11 @@ struct ContentView: View {
     /// .command)`). The palette overlays everything else via the
     /// outer `ZStack`.
     @State private var paletteOpen: Bool = false
+    /// Phase 4 — ⌘E Explore left panel presentation state. Toggled
+    /// by the keyboard shortcut, by clicking the workspace pill in
+    /// the topbar, or by clicking the brand-mark dot in the rail
+    /// nav.
+    @State private var exploreOpen: Bool = false
 
     /// Surface name shown in the titlebar accessory — derived from
     /// the active `currentView`. Renders as "Tado · {Surface}" in
@@ -196,6 +201,17 @@ struct ContentView: View {
             releaseTerminalFocusIfNeeded(for: newView)
         }
 
+        // Phase 4 — Explore left panel overlay. Sits inside the
+        // outer ZStack at the leading edge. Only renders when
+        // `exploreOpen` is true.
+        if exploreOpen {
+            HStack(spacing: 0) {
+                RelayExplorePanel(isPresented: $exploreOpen)
+                Spacer(minLength: 0)
+            }
+            .transition(.move(edge: .leading))
+        }
+
         // Phase 3 — ⌘K command palette overlay. Sits inside the
         // outer ZStack so its scrim + backdrop blur applies to the
         // host content. Only renders when `paletteOpen` is true.
@@ -203,19 +219,27 @@ struct ContentView: View {
             RelayCommandPalette(
                 isPresented: $paletteOpen,
                 onOpenExplore: {
-                    // Phase 4 — wire to Explore. Today: Details fallback.
-                    appState.currentView = .details
+                    paletteOpen = false
+                    withAnimation(.easeOut(duration: 0.24)) {
+                        exploreOpen = true
+                    }
                 }
             )
             .transition(.opacity)
         }
 
-        // Hidden zero-sized button — registers ⌘K everywhere so
-        // the palette opens regardless of the focused control.
-        Button("Open palette") {
-            paletteOpen = true
+        // Hidden zero-sized buttons — register ⌘K and ⌘E everywhere
+        // so palette + Explore toggle regardless of focused control.
+        Group {
+            Button("Open palette") { paletteOpen = true }
+                .keyboardShortcut("k", modifiers: .command)
+            Button("Toggle Explore") {
+                withAnimation(.easeOut(duration: 0.24)) {
+                    exploreOpen.toggle()
+                }
+            }
+            .keyboardShortcut("e", modifiers: .command)
         }
-        .keyboardShortcut("k", modifiers: .command)
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
