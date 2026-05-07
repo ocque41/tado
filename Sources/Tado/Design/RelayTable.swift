@@ -103,6 +103,14 @@ extension RelayTableRow {
         self.content = content()
         self.onClick = nil
     }
+
+    /// Clickable row variant — used by Sessions / Dispatch /
+    /// Eternal landing pages where clicking opens a detail modal.
+    init(@ViewBuilder content: () -> RowContent, onClick: @escaping () -> Void) {
+        self.isHovered = false
+        self.content = content()
+        self.onClick = onClick
+    }
 }
 
 /// Cell — typed body or metadata variant. Mirrors the column

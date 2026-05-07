@@ -76,7 +76,10 @@ struct ContentView: View {
                         .opacity(appState.currentView == .todos ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .todos)
 
-                    ProjectsView()
+                    // Phase 7 — Relay Projects landing surface.
+                    // Drills into the legacy ProjectsView chain
+                    // when an active project is selected.
+                    RelayProjectsView()
                         .opacity(appState.currentView == .projects ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .projects)
 
@@ -100,6 +103,23 @@ struct ContentView: View {
                     RelaySessionsView()
                         .opacity(appState.currentView == .sessions ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .sessions)
+
+                    // Phase 7 + 10 — Teams / Kanban / Dispatch / Eternal
+                    // landing surfaces. Each renders the full-page
+                    // overview; clicking through drills into the
+                    // existing project-scoped detail flows.
+                    RelayTeamsView()
+                        .opacity(appState.currentView == .teams ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .teams)
+                    RelayKanbanView()
+                        .opacity(appState.currentView == .kanban ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .kanban)
+                    RelayDispatchView()
+                        .opacity(appState.currentView == .dispatch ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .dispatch)
+                    RelayEternalView()
+                        .opacity(appState.currentView == .eternal ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .eternal)
 
                     // Non-blocking banner overlay. Sits on top of whatever
                     // page is active; hit-testing limited to visible pills
