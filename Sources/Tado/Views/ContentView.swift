@@ -8,6 +8,13 @@ struct ContentView: View {
     @Query private var allSettings: [AppSettings]
     @State private var eventMonitor: Any?
 
+    /// Surface name shown in the titlebar accessory — derived from
+    /// the active `currentView`. Renders as "Tado · {Surface}" in
+    /// the centered title slot.
+    private var surfaceName: String? {
+        appState.currentView.label
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
         VStack(spacing: 0) {
@@ -16,17 +23,12 @@ struct ContentView: View {
             // `DomeHotkeyRegistrar`'s pattern.
             TadoUseHotkeyRegistrar()
 
-            // Relay redesign — RelayTopNavBar replaces TopNavBar.
-            // 56px horizontal nav with brand cell + workspace pill +
-            // 11 nav items + Jump (⌘K) button + responsive overflow
-            // collapse. The legacy TopNavBar is preserved in the file
-            // tree but no longer mounted; phase 15 cleanup removes it.
-            //
-            // .zIndex(1) forces the nav bar above the canvas ZStack
-            // in both rendering and hit-testing.
-            RelayTopNavBar()
-                .zIndex(1)
-
+            // Phase 2 — Relay shell. Wraps the titlebar accessory
+            // (32px, with version pill + paper/ink toggle) and the
+            // width-aware nav (topbar default / rail alternate /
+            // narrow-viewport drawer trigger). The page tree below
+            // is the shell's content — it stays unchanged.
+            RelayShell(surfaceName: surfaceName) {
             HStack(spacing: 0) {
                 // Tado Use drawer — slides in from the left edge,
                 // sibling to the existing SidebarView. Both can
@@ -91,7 +93,8 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+            } // closes the inner HStack(spacing: 0)
+        } // closes the `RelayShell { ... }` content closure
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Paint the window base as neutral dark. Individual views
         // (TodoList, Projects) may add their own `surface` /

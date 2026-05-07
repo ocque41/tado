@@ -364,12 +364,15 @@ struct TadoApp: App {
         .windowResizability(CrossRunBrowserExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
         WindowGroup(id: ExtensionWindowID.string(for: PetsExtension.manifest.id)) {
-            PetsExtension.makeView()
-                .environment(appState)
-                .environment(terminalManager)
-                .relayTheme(themeStore.theme)
-                .environment(themeStore)
-                .frame(minWidth: 360, minHeight: 480)
+            VStack(spacing: 0) {
+                RelayTitlebarAccessory(surfaceName: "Pets")
+                PetsExtension.makeView()
+                    .environment(appState)
+                    .environment(terminalManager)
+                    .frame(minWidth: 360, minHeight: 480)
+            }
+            .relayTheme(themeStore.theme)
+            .environment(themeStore)
         }
         .modelContainer(modelContainer)
         .windowResizability(PetsExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
@@ -485,13 +488,13 @@ struct NotificationsWindowRoot: View {
     let zoomState: WindowZoomState
 
     var body: some View {
-        NotificationsExtension.makeView()
-            .environment(appState)
-            // Theme injection (paper/ink) is applied at the WindowGroup
-            // root via `.relayTheme(themeStore.theme)` so it can be
-            // toggled at runtime without a relaunch.
-            .frame(minWidth: 240, minHeight: 180)
-            .windowZoom(zoomState)
+        VStack(spacing: 0) {
+            RelayTitlebarAccessory(surfaceName: "Notifications")
+            NotificationsExtension.makeView()
+                .environment(appState)
+                .frame(minWidth: 240, minHeight: 180)
+        }
+        .windowZoom(zoomState)
     }
 }
 
@@ -500,13 +503,13 @@ struct DomeWindowRoot: View {
     let zoomState: WindowZoomState
 
     var body: some View {
-        DomeExtension.makeView()
-            .environment(appState)
-            // Theme injection (paper/ink) is applied at the WindowGroup
-            // root via `.relayTheme(themeStore.theme)` so it can be
-            // toggled at runtime without a relaunch.
-            .frame(minWidth: 240, minHeight: 180)
-            .windowZoom(zoomState)
+        VStack(spacing: 0) {
+            RelayTitlebarAccessory(surfaceName: "Knowledge")
+            DomeExtension.makeView()
+                .environment(appState)
+                .frame(minWidth: 240, minHeight: 180)
+        }
+        .windowZoom(zoomState)
     }
 }
 
@@ -515,12 +518,12 @@ struct CrossRunBrowserWindowRoot: View {
     let zoomState: WindowZoomState
 
     var body: some View {
-        CrossRunBrowserExtension.makeView()
-            .environment(appState)
-            // Theme injection (paper/ink) is applied at the WindowGroup
-            // root via `.relayTheme(themeStore.theme)` so it can be
-            // toggled at runtime without a relaunch.
-            .frame(minWidth: 760, minHeight: 480)
-            .windowZoom(zoomState)
+        VStack(spacing: 0) {
+            RelayTitlebarAccessory(surfaceName: "Cross-Run Browser")
+            CrossRunBrowserExtension.makeView()
+                .environment(appState)
+                .frame(minWidth: 760, minHeight: 480)
+        }
+        .windowZoom(zoomState)
     }
 }
