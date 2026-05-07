@@ -132,31 +132,23 @@ final class MetalTerminalRenderer {
 
         self.atlas = try GlyphAtlas(device: device, metrics: metrics, atlasSize: atlasSize)
 
-        // Load shader library. SwiftPM's `.process()` rule only COPIES the
-        // .metal source into Bundle.module — it doesn't precompile it (no
-        // Xcode metal compiler is invoked by `swift build`). So we compile
-        // from source at runtime, which takes ~100ms on first launch and
-        // is cached by Metal afterwards.
-        let library: MTLLibrary
-        if let url = Bundle.module.url(forResource: "Shaders", withExtension: "metal"),
-           let source = try? String(contentsOf: url, encoding: .utf8) {
-            library = try device.makeLibrary(source: source, options: nil)
-        } else if let lib = device.makeDefaultLibrary() {
-            library = lib
-        } else {
-            throw RendererError.libraryCreationFailed
-        }
-
-        guard let vertexFn = library.makeFunction(name: "terminal_vertex"),
-              let fragFn = library.makeFunction(name: "terminal_fragment") else {
-            throw RendererError.pipelineCreationFailed
-        }
-
-        let desc = MTLRenderPipelineDescriptor()
-        desc.vertexFunction = vertexFn
-        desc.fragmentFunction = fragFn
-        desc.colorAttachments[0].pixelFormat = .bgra8Unorm
-        self.pipeline = try device.makeRenderPipelineState(descriptor: desc)
+        // Shader library + pipeline state come from the process-wide
+        // `MetalPipelineCache`. Compile-once shape: the first caller
+        // pays ~100 ms–2 s on cold launch (file read + Metal source
+        // compile + pipeline-state creation), every subsequent
+        // caller hits a pure dictionary lookup. `TadoApp` pre-warms
+        // the cache on a `.utility` detached task at boot so even
+        // the first tile init hits the fast path on @MainActor.
+        // See `MetalPipelineCache.prewarm()` for the boot wiring and
+        // SKILL.md → D2 → "per-tick polled IO" for the wider rule
+        // (no slow synchronous work on @MainActor — compile / parse /
+        // encode all hop off-main).
+        self.pipeline = try MetalPipelineCache.shared.pipeline(
+            device: device,
+            pixelFormat: .bgra8Unorm,
+            vertexName: "terminal_vertex",
+            fragmentName: "terminal_fragment"
+        )
 
         let sDesc = MTLSamplerDescriptor()
         sDesc.minFilter = .linear

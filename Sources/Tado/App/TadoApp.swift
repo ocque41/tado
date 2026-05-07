@@ -189,6 +189,23 @@ struct TadoApp: App {
             await ExtensionRegistry.runOnAppLaunchHooks()
         }
 
+        // Pre-warm the Metal shader library + render pipeline state
+        // on a background queue so the first tile mount doesn't pay
+        // the 100 ms–2 s shader compile on @MainActor. This is the
+        // load-bearing piece of the "first terminal freezes the
+        // whole app" report — `MetalTerminalRenderer.init` used to
+        // call `device.makeLibrary(source:)` +
+        // `device.makeRenderPipelineState(descriptor:)` synchronously
+        // every time `TerminalMTKView` was created, blocking the UI
+        // thread for the entire compile window. The cache makes that
+        // a dictionary lookup on every call after the first; this
+        // pre-warm makes even the first call cheap. Higher priority
+        // than the extension hooks above (`.userInitiated`) because
+        // the freeze is the user's first impression of the app.
+        Task.detached(priority: .userInitiated) {
+            MetalPipelineCache.prewarm()
+        }
+
         // A7: register the Rust tado-mcp bridge with Claude Code if
         // it's installed. Independent of ExtensionRegistry because
         // tado-mcp isn't a UI extension — it's a stdio tool Claude
