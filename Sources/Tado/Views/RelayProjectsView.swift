@@ -19,12 +19,17 @@ struct RelayProjectsView: View {
     @Query(sort: \TodoItem.createdAt) private var todos: [TodoItem]
 
     var body: some View {
-        // Drill-down: when an active project is selected, fall
-        // through to the legacy detail view so all existing
-        // Project zones (Eternal section, Dispatch section, Add
-        // Todo, Agents, Todos) render unchanged.
-        if appState.activeProjectID != nil {
-            ProjectsView()
+        // Drill-down: when an active project is selected, render
+        // either the Relay-redesigned detail view or the per-
+        // project Kanban board, mirroring the legacy
+        // ProjectsView.body switch.
+        if let id = appState.activeProjectID,
+           let project = projects.first(where: { $0.id == id }) {
+            if appState.projectPageMode == .kanban {
+                ProjectKanbanView(project: project)
+            } else {
+                RelayProjectDetailView(project: project)
+            }
         } else {
             list
         }
