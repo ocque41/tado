@@ -14,5 +14,6 @@ struct RelayBrandDot: View {
         Circle()
             .fill(RelayPalette.terracotta)
             .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }

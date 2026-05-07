@@ -35,6 +35,8 @@ struct RelayInlineLink: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(.isLink)
         .onHover { newValue in
             withAnimation(RelayAnim.standard(reduce: reduce)) {
                 hover = newValue

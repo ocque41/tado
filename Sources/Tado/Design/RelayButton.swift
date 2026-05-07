@@ -49,6 +49,8 @@ struct RelayButton: View {
             .clipShape(RoundedRectangle(cornerRadius: RelayRadius.standard))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(.isButton)
         .onHover { newValue in
             withAnimation(RelayAnim.standard(reduce: reduce)) {
                 hover = newValue
