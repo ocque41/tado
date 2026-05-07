@@ -536,6 +536,14 @@ final class AppState {
     var craftedReviewRunID: UUID? = nil
     var craftedReviewKind: CraftedReviewKind? = nil
 
+    /// Phase 6 — Relay focused-tile modal. Non-nil while the modal is
+    /// presented over the canvas (or any other surface). Set by the
+    /// Sessions table's "Focus →" link, the Explore panel's session
+    /// row, or a future tile-double-click on the canvas. Distinct
+    /// from `focusedTileTodoID` (which controls Metal-tile selection
+    /// ring on the canvas, independent of the modal).
+    var focusedTileModalTodoID: UUID? = nil
+
     /// Which body the Projects detail page renders for the active
     /// project. `detail` is today's behavior; `kanban` swaps the body
     /// for `ProjectKanbanView`. Stored on AppState so the toggle

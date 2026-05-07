@@ -95,6 +95,12 @@ struct ContentView: View {
                         .opacity(appState.currentView == .details ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .details)
 
+                    // Phase 5 — Relay Sessions surface (full-page list
+                    // of every active terminal tile, grouped by status).
+                    RelaySessionsView()
+                        .opacity(appState.currentView == .sessions ? 1 : 0)
+                        .allowsHitTesting(appState.currentView == .sessions)
+
                     // Non-blocking banner overlay. Sits on top of whatever
                     // page is active; hit-testing limited to visible pills
                     // so it doesn't eat clicks on the canvas/todos below.
@@ -199,6 +205,17 @@ struct ContentView: View {
         }
         .onChange(of: appState.currentView) { _, newView in
             releaseTerminalFocusIfNeeded(for: newView)
+        }
+
+        // Phase 6 — Focused-tile modal. Renders centered over the
+        // canvas (or any active surface) when
+        // `appState.focusedTileModalTodoID` is non-nil.
+        if appState.focusedTileModalTodoID != nil {
+            RelayFocusedTileModal(todoID: Binding(
+                get: { appState.focusedTileModalTodoID },
+                set: { appState.focusedTileModalTodoID = $0 }
+            ))
+            .transition(.opacity)
         }
 
         // Phase 4 — Explore left panel overlay. Sits inside the

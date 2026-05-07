@@ -352,8 +352,7 @@ struct RelayExplorePanel: View {
         let isUrgent = todo.status == .needsInput || todo.status == .awaitingResponse
         let isPinned = pinned.contains(todo.id)
         return Button(action: {
-            appState.focusedTileTodoID = todo.id
-            appState.currentView = .canvas
+            appState.focusedTileModalTodoID = todo.id
             dismiss()
         }) {
             HStack(spacing: 10) {
