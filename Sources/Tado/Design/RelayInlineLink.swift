@@ -18,6 +18,7 @@ struct RelayInlineLink: View {
     @Environment(\.relayTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduce
     @State private var hover: Bool = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         Button(action: action) {
@@ -35,6 +36,8 @@ struct RelayInlineLink: View {
             }
         }
         .buttonStyle(.plain)
+        .focused($focused)
+        .relayFocusRing(focused)
         .accessibilityLabel(label)
         .accessibilityAddTraits(.isLink)
         .onHover { newValue in

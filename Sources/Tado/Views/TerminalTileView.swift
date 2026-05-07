@@ -30,7 +30,9 @@ struct TerminalTileView: View {
     @State private var resizeDelta: CGSize = .zero
     @State private var isResizing: Bool = false
 
+    /// Phase 6: head 28px + foot 22px = 50px chrome.
     private let titleBarHeight: CGFloat = 28
+    private let tileFootHeight: CGFloat = 22
     private let handleSize: CGFloat = 6
     private let gripSize: CGFloat = 14
     private let minTileWidth: CGFloat = 300
@@ -74,28 +76,31 @@ struct TerminalTileView: View {
                 isVisible: isVisible,
                 isFocused: isFocused,
                 width: isResizing ? visualWidth : session.tileWidth,
-                height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight
+                height: (isResizing ? visualHeight : session.tileHeight) - titleBarHeight - tileFootHeight
             )
+            tileFoot
         }
         .background(Palette.surface)
         .frame(
             width: isResizing ? visualWidth : session.tileWidth,
             height: isResizing ? visualHeight : session.tileHeight
         )
-        .clipShape(RoundedRectangle(cornerRadius: DK.radius))
+        .clipShape(RoundedRectangle(cornerRadius: RelayRadius.standard))
         .overlay(
-            RoundedRectangle(cornerRadius: DK.radius)
+            RoundedRectangle(cornerRadius: RelayRadius.standard)
                 .stroke(Palette.divider, lineWidth: 1)
         )
         .compositingGroup()
-        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
         .overlay {
+            // Phase 6 — terracotta focus + resize ring per brief.
+            // Drop shadow removed per "no shadows on tiles" rule;
+            // hairline border + focus ring is the affordance.
             if isResizing {
-                RoundedRectangle(cornerRadius: DK.radius)
-                    .stroke(Palette.accent.opacity(0.7), lineWidth: 2)
+                RoundedRectangle(cornerRadius: RelayRadius.standard)
+                    .stroke(RelayPalette.terracotta.opacity(0.7), lineWidth: 2)
             } else if isFocused {
-                RoundedRectangle(cornerRadius: DK.radius)
-                    .stroke(Palette.accent, lineWidth: 2)
+                RoundedRectangle(cornerRadius: RelayRadius.standard)
+                    .stroke(RelayPalette.terracotta, lineWidth: 2)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -119,75 +124,162 @@ struct TerminalTileView: View {
     // MARK: - Title Bar
 
     private var titleBar: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(session.isRunning ? Palette.success : Palette.warning)
-                .frame(width: 8, height: 8)
+        HStack(spacing: 10) {
+            // Phase 6 — Relay live status dot. Three variants per
+            // brief: pulsing terracotta for running, solid terracotta
+            // for needs-input, ink-4 for idle.
+            relayStatusDot
 
             if let agent = session.agentName {
-                Text(agent)
-                    .font(Typography.monoMicroEmph)
-                    .foregroundColor(Palette.accent)
+                Text(agent.uppercased())
+                    .font(Typography.sans(size: 9, weight: .semibold))
+                    .tracking(RelayTracking.caps(9))
+                    .foregroundStyle(RelayPalette.terracotta)
                     .lineLimit(1)
-                Text("|")
-                    .font(Typography.monoMicro)
-                    .foregroundStyle(Palette.textTertiary)
+                Rectangle()
+                    .fill(Palette.divider)
+                    .frame(width: 1, height: 10)
             }
 
             // Run-role tag — disambiguates concurrent eternal/dispatch tiles
             // in the same project zone. "worker", "architect", "interventor",
             // or "phase" — read from TerminalSession.runRole set at spawn time.
             if let role = session.runRole {
-                Text(role)
-                    .font(Typography.monoMicroEmph)
+                Text(role.uppercased())
+                    .font(Typography.sans(size: 9, weight: .semibold))
+                    .tracking(RelayTracking.caps(9))
                     .foregroundStyle(roleColor(role))
                     .lineLimit(1)
-                Text("|")
-                    .font(Typography.monoMicro)
-                    .foregroundStyle(Palette.textTertiary)
+                Rectangle()
+                    .fill(Palette.divider)
+                    .frame(width: 1, height: 10)
             }
 
             Text(session.todoText)
-                .font(Typography.monoCaption)
-                .foregroundStyle(Palette.textSecondary)
+                .font(Typography.sans(size: 11, weight: .regular))
+                .tracking(RelayTracking.meta(11))
+                .foregroundStyle(Palette.textPrimary)
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer()
 
-            Text(CanvasLayout.gridLabel(forIndex: session.gridIndex))
-                .font(Typography.monoMicro)
+            Text("[\(CanvasLayout.gridLabel(forIndex: session.gridIndex))]")
+                .font(Typography.sans(size: 9, weight: .regular))
+                .tracking(RelayTracking.caps(9))
                 .foregroundStyle(Palette.textTertiary)
 
             if session.unreadMessageCount > 0 {
                 Text("\(session.unreadMessageCount)")
-                    .font(Typography.monoBadgeSmall)
-                    .foregroundStyle(Palette.foreground)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Palette.accent))
+                    .font(Typography.sans(size: 9, weight: .semibold))
+                    .tracking(RelayTracking.caps(9))
+                    .foregroundStyle(Palette.background)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: RelayRadius.standard)
+                            .fill(RelayPalette.terracotta)
+                    )
             }
 
             Button(action: { terminalManager.terminateSession(session.id) }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                Text("✕")
+                    .font(Typography.sans(size: 11, weight: .regular))
                     .foregroundStyle(Palette.textSecondary)
             }
             .buttonStyle(.plain)
+            .help("Close tile")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Palette.surfaceElevated)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(height: titleBarHeight)
+        .background(Palette.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Palette.divider)
+                .frame(height: 1)
+        }
         .contentShape(Rectangle())
         .gesture(tileDragGesture)
     }
 
-    /// Small distinct color per run role. Worker = green (long-lived), architect
-    /// = blue (planning), interventor = amber (one-shot directive), phase = gray.
+    /// Relay live status dot — translates SessionStatus into the
+    /// three Relay variants per brief section 5.8.
+    private var relayStatusDot: some View {
+        let kind: RelayStatusKind = {
+            if session.isRunning {
+                return session.status == .needsInput || session.status == .awaitingResponse
+                    ? .needsInput
+                    : .running
+            }
+            return .idle
+        }()
+        return RelayStatusDot(kind: kind, size: 7)
+    }
+
+    // MARK: - Tile foot
+    //
+    // Phase 6 — engine name on the left, elapsed time / "NEEDS INPUT"
+    // on the right. Mono-substitute caps. Hairline above.
+
+    private var tileFoot: some View {
+        HStack(spacing: 8) {
+            Text(engine.rawValue.uppercased())
+                .font(Typography.sans(size: 9, weight: .medium))
+                .tracking(RelayTracking.caps(9))
+                .foregroundStyle(Palette.textTertiary)
+            Spacer()
+            footStatusText
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(height: 22)
+        .background(Palette.surface)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Palette.divider)
+                .frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var footStatusText: some View {
+        let isUrgent = session.status == .needsInput || session.status == .awaitingResponse
+        Text(footStatusLabel.uppercased())
+            .font(Typography.sans(size: 9, weight: .medium))
+            .tracking(RelayTracking.caps(9))
+            .foregroundStyle(isUrgent
+                ? RelayPalette.terracotta
+                : Palette.textTertiary)
+    }
+
+    private var footStatusLabel: String {
+        switch session.status {
+        case .needsInput, .awaitingResponse:
+            return "⚡ Needs Input"
+        case .running:
+            let secs = Int(Date().timeIntervalSince(session.startedAt))
+            if secs < 60 { return "\(secs)s" }
+            if secs < 3600 { return "\(secs / 60)m" }
+            return "\(secs / 3600)h"
+        case .pending:
+            return "Pending"
+        case .completed:
+            return "Done"
+        case .failed:
+            return "Failed"
+        }
+    }
+
+    /// Per-role color. Per the master brand (terracotta-only), the
+    /// worker / architect / interventor variants all flatten to ink
+    /// tiers + terracotta for the live ones; the role text itself is
+    /// what carries the meaning, not the hue.
     private func roleColor(_ role: String) -> Color {
         switch role {
-        case "worker":      return Palette.success
-        case "architect":   return Palette.accent
-        case "interventor": return Palette.warning
+        case "worker":      return RelayPalette.terracotta
+        case "architect":   return RelayPalette.terracotta.opacity(0.7)
+        case "interventor": return Palette.textPrimary
         case "phase":       return Palette.textSecondary
         default:            return Palette.textTertiary
         }

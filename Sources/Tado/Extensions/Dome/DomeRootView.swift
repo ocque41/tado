@@ -57,7 +57,9 @@ struct DomeRootView: View {
             }
         }
         .background(Palette.bgPage)
-        .preferredColorScheme(.dark)
+        // Phase 9 — theme inherited from RelayThemeStore at the
+        // WindowGroup root; the historical hardcoded `.dark` is
+        // dropped so the user's paper/ink choice flows through.
         .environment(domeState)
         .overlay(alignment: .topLeading) {
             DomeHotkeyRegistrar()

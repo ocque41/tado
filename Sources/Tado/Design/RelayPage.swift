@@ -22,28 +22,30 @@ struct RelayPageContainer<Content: View>: View {
     @Environment(\.relayTheme) private var theme
 
     var body: some View {
-        ScrollView {
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                VStack(alignment: .leading, spacing: RelaySpacing.sectionGap) {
-                    content
+        GeometryReader { geo in
+            ScrollView {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: RelaySpacing.sectionGap) {
+                        content
+                    }
+                    .frame(maxWidth: 1100, alignment: .leading)
+                    .padding(.horizontal, horizontalPadding(width: geo.size.width))
+                    .padding(.top, RelaySpacing.pagePadTop)
+                    .padding(.bottom, RelaySpacing.pagePadBottom)
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: 1100, alignment: .leading)
-                .padding(.horizontal, horizontalPadding)
-                .padding(.top, RelaySpacing.pagePadTop)
-                .padding(.bottom, RelaySpacing.pagePadBottom)
-                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(RelayPalette.background(for: theme))
+            .scrollIndicators(.hidden)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(RelayPalette.background(for: theme))
-        .scrollIndicators(.hidden)
     }
 
-    private var horizontalPadding: CGFloat {
-        // Brief: 56px desktop, 24px narrow. Geometry-aware switch
-        // happens in App shell pass; for now use desktop default.
-        RelaySpacing.pagePadX
+    /// Brief section 2.3: 56px desktop, 24px narrow.
+    /// Pivot at <760px (matches the narrow-drawer threshold).
+    private func horizontalPadding(width: CGFloat) -> CGFloat {
+        width < 760 ? RelaySpacing.pagePadXNarrow : RelaySpacing.pagePadX
     }
 }
 

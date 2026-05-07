@@ -296,7 +296,8 @@ struct RelayExplorePanel: View {
                     }
                     softDivider
                 }
-                groupHeader(label: "JUMP TO", count: 3)
+                groupHeader(label: "JUMP TO", count: 4)
+                tadoUseRow
                 jumpRow(label: "Todos",     mode: .todos)
                 jumpRow(label: "Knowledge", mode: .knowledge)
                 jumpRow(label: "Eternal",   mode: .eternal)
@@ -415,6 +416,40 @@ struct RelayExplorePanel: View {
                         .foregroundStyle(RelayPalette.foreground3(for: theme))
                 }
                 Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Tado Use jump-row — opens the legacy chat panel via the
+    /// existing `appState.showTadoUse` toggle. The conversational
+    /// engine + turn-row plumbing stays in TadoUsePanel; Explore
+    /// is the one operational lane that points back at it.
+    private var tadoUseRow: some View {
+        Button(action: {
+            appState.showTadoUse = true
+            dismiss()
+        }) {
+            HStack(spacing: 10) {
+                Text("◐")
+                    .font(Typography.sans(size: 12, weight: .regular))
+                    .foregroundStyle(RelayPalette.terracotta)
+                    .frame(width: 36, alignment: .leading)
+                Text("Tado Use")
+                    .font(Typography.sans(size: 13, weight: .regular))
+                    .foregroundStyle(RelayPalette.foreground(for: theme))
+                Text("· conversational")
+                    .font(Typography.sans(size: 11, weight: .regular))
+                    .tracking(RelayTracking.meta(11))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
+                Spacer()
+                Text("⌘⇧U")
+                    .font(Typography.sans(size: 9, weight: .medium))
+                    .tracking(RelayTracking.kbd(9))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 9)
