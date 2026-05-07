@@ -41,7 +41,7 @@ final class TileVisibilityTests: XCTestCase {
         )
         let tile = TileVisibility.tileWorldRect(
             canvasCenter: CGPoint(x: 330, y: 220),
-            zoneX: 0,
+            zoneOffset: .zero,
             tileWidth: 660,
             tileHeight: 440
         )
@@ -58,7 +58,7 @@ final class TileVisibilityTests: XCTestCase {
         // rect (which ends at 1000 + margin).
         let tile = TileVisibility.tileWorldRect(
             canvasCenter: CGPoint(x: 5000, y: 220),
-            zoneX: 0,
+            zoneOffset: .zero,
             tileWidth: 660,
             tileHeight: 440
         )
@@ -76,7 +76,7 @@ final class TileVisibilityTests: XCTestCase {
         let justPastEdge = CGPoint(x: 1000 + 50, y: 220)
         let tile = TileVisibility.tileWorldRect(
             canvasCenter: justPastEdge,
-            zoneX: 0,
+            zoneOffset: .zero,
             tileWidth: 660,
             tileHeight: 440
         )

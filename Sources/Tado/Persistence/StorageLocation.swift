@@ -209,6 +209,9 @@ enum StorageLocationManager {
 
         let probe = target.appendingPathComponent(".tado-write-test-\(ProcessInfo.processInfo.processIdentifier)")
         do {
+            // Probe: 0-byte create-and-delete to confirm writability.
+            // Atomic-store discipline (rule 2) doesn't apply — there's
+            // no content to commit, only "can we write here at all."
             try Data().write(to: probe)
             try fm.removeItem(at: probe)
         } catch {

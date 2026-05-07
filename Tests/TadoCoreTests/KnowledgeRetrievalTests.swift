@@ -3,70 +3,17 @@ import XCTest
 
 /// P3 acceptance harness — Knowledge → Second Brain Retrieval Surface.
 ///
-/// Three criteria from the brief:
-///   1. **Graph layout converges ≤ 3 s on a 500-node sample.**
-///      We exercise `ForceLayout.run` on a synthetic 500-node graph
-///      with ~750 edges and assert wall-time ≤ 3 s.
-///   2. **Pack resolve/compact round-trip works.**
+/// Two criteria from the brief:
+///   1. **Pack resolve/compact round-trip works.**
 ///      Drives the `ContextPackEngine` protocol with an in-memory
 ///      stub: `resolve` on a missing pack returns `resolved=false`
 ///      with a "compact next" recommendation; `compact` produces a
 ///      new summary; the next `resolve` returns `resolved=true` with
 ///      a populated pack and citation list.
-///   3. **Citations link back to source notes.**
+///   2. **Citations link back to source notes.**
 ///      `ContextPackDeepLink.sourceLink` produces parsable
 ///      `tado://` URLs for each citation.
 final class KnowledgeRetrievalTests: XCTestCase {
-
-    // MARK: - Graph layout convergence
-
-    func testForceLayoutConvergesUnder3sOn500Nodes() {
-        let nodeCount = 500
-        var nodes: [ForceLayout.Node] = []
-        nodes.reserveCapacity(nodeCount)
-        // Seed from a deterministic LCG so the test is reproducible
-        // without depending on system rand.
-        var state: UInt64 = 0x9E3779B97F4A7C15
-        func next() -> Double {
-            state = state &* 6364136223846793005 &+ 1442695040888963407
-            return Double(state >> 11) / Double(UInt64(1) << 53)
-        }
-        for i in 0..<nodeCount {
-            nodes.append(ForceLayout.Node(
-                id: "n-\(i)",
-                position: CGPoint(x: (next() - 0.5) * 600, y: (next() - 0.5) * 600)
-            ))
-        }
-        // ~1.5 edges per node, mostly local but a few long-range — a
-        // realistic Knowledge graph shape.
-        var edges: [ForceLayout.Edge] = []
-        edges.reserveCapacity(nodeCount * 3 / 2)
-        for i in 0..<nodeCount {
-            let neighbour = (i + 1 + Int(next() * 3)) % nodeCount
-            edges.append(ForceLayout.Edge(source: "n-\(i)", target: "n-\(neighbour)"))
-            if i % 2 == 0 {
-                let far = Int(next() * Double(nodeCount)) % nodeCount
-                if far != i {
-                    edges.append(ForceLayout.Edge(source: "n-\(i)", target: "n-\(far)"))
-                }
-            }
-        }
-
-        var config = ForceLayout.Config()
-        // Tighten so the harness runs deterministically; the surface
-        // can pick its own iteration cap based on canvas size.
-        config.maxIterations = 80
-
-        let t0 = DispatchTime.now()
-        let outcome = ForceLayout.run(nodes: nodes, edges: edges, config: config)
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1_000_000.0
-
-        let line = "[ForceLayout] 500 nodes / \(edges.count) edges → \(outcome.iterations) iters, "
-            + "converged=\(outcome.converged), \(String(format: "%.0f", elapsedMs)) ms\n"
-        FileHandle.standardError.write(Data(line.utf8))
-        XCTAssertLessThanOrEqual(elapsedMs, 3_000.0, "500-node layout must finish in ≤ 3 s")
-        XCTAssertEqual(outcome.nodes.count, nodeCount)
-    }
 
     // MARK: - Resolve / compact round-trip
 
@@ -162,33 +109,6 @@ final class KnowledgeRetrievalTests: XCTestCase {
             XCTAssertNotNil(link)
             XCTAssertNotNil(URL(string: link ?? ""))
         }
-    }
-
-    // MARK: - Fallback layout
-
-    func testForceLayoutSeededOnRingProducesUniquePositions() {
-        // Mirror the KnowledgeGraphSurface fallback: ring-seed nodes,
-        // run a short layout, assert positions actually move so the
-        // canvas doesn't pile every node at the centre.
-        let n = 24
-        var nodes: [ForceLayout.Node] = []
-        let radius = 200.0
-        for i in 0..<n {
-            let theta = 2 * .pi * Double(i) / Double(n)
-            nodes.append(ForceLayout.Node(
-                id: "n-\(i)",
-                position: CGPoint(x: radius * cos(theta), y: radius * sin(theta))
-            ))
-        }
-        let edges = (0..<n).map { ForceLayout.Edge(source: "n-\($0)", target: "n-\(($0 + 1) % n)") }
-        var config = ForceLayout.Config()
-        config.maxIterations = 60
-        let outcome = ForceLayout.run(nodes: nodes, edges: edges, config: config)
-        XCTAssertEqual(outcome.nodes.count, n)
-        let xs = Set(outcome.nodes.map { Int($0.position.x.rounded()) })
-        // Ring seeding + force solver should keep most nodes on
-        // distinct x coordinates.
-        XCTAssertGreaterThan(xs.count, n / 2)
     }
 
     // MARK: - Live engine offline path

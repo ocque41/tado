@@ -158,6 +158,9 @@ enum EternalService {
             at: eternalRoot(run),
             withIntermediateDirectories: true
         )
+        // Empty sentinel: file presence IS the data. Atomic-store
+        // discipline (rule 2) targets meaningful writes; a 0-byte
+        // create has nothing to corrupt mid-flight.
         try Data().write(to: activeFlagURL(run))
     }
 
@@ -167,6 +170,7 @@ enum EternalService {
             at: eternalRoot(run),
             withIntermediateDirectories: true
         )
+        // Empty sentinel — see markActive for the rule-2 carveout.
         try? Data().write(to: stopFlagURL(run))
     }
 
@@ -1994,7 +1998,8 @@ enum EternalService {
         try? seed.write(to: progressFileURL(run), atomically: true, encoding: .utf8)
 
         if run.mode == "sprint" {
-            // Empty metrics file so `tail` doesn't error on first read.
+            // Empty sentinel so `tail` doesn't error on first read —
+            // see markActive for the rule-2 carveout.
             try? Data().write(to: metricsFileURL(run))
         }
 

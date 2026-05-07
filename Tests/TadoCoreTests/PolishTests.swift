@@ -156,28 +156,8 @@ final class PolishTests: XCTestCase {
         let diffMs = ms(since: t2)
         XCTAssertLessThanOrEqual(diffMs, 25.0)
 
-        // ForceLayout fallback — brief: 500 nodes ≤ 3 s. We use a
-        // smaller 100-node case here under a 750 ms ceiling so the
-        // umbrella test stays fast but a quadratic regression still
-        // trips it: 500 nodes scale ~25× the work, so a 100-node run
-        // crossing 750 ms means 500 nodes can no longer hit 3 s.
-        var fallbackNodes: [ForceLayout.Node] = []
-        let n = 100
-        let radius = 200.0
-        for i in 0..<n {
-            let theta = 2 * .pi * Double(i) / Double(n)
-            fallbackNodes.append(ForceLayout.Node(
-                id: "n-\(i)",
-                position: CGPoint(x: radius * cos(theta), y: radius * sin(theta))
-            ))
-        }
-        let fallbackEdges = (0..<n).map { ForceLayout.Edge(source: "n-\($0)", target: "n-\(($0 + 1) % n)") }
-        var fallbackConfig = ForceLayout.Config()
-        fallbackConfig.maxIterations = 60
-        let t3 = DispatchTime.now()
-        _ = ForceLayout.run(nodes: fallbackNodes, edges: fallbackEdges, config: fallbackConfig)
-        let layoutMs = ms(since: t3)
-        XCTAssertLessThanOrEqual(layoutMs, 750.0)
+        // (ForceLayout fallback budget removed: the type was deleted
+        // in v1.0.0 along with the deprecated graph-canvas code path.)
 
         // Together lens — there's no brief-quoted ceiling for this
         // helper since it's a pure scope filter, but it runs on every
@@ -204,7 +184,7 @@ final class PolishTests: XCTestCase {
         let togetherMs = ms(since: t4)
         XCTAssertLessThanOrEqual(togetherMs, 25.0)
 
-        let line = "[PolishPerf] search=\(fmt(searchMs)) ms · ledger=\(fmt(ledgerMs)) ms · diff=\(fmt(diffMs)) ms · layout=\(fmt(layoutMs)) ms · together=\(fmt(togetherMs)) ms\n"
+        let line = "[PolishPerf] search=\(fmt(searchMs)) ms · ledger=\(fmt(ledgerMs)) ms · diff=\(fmt(diffMs)) ms · together=\(fmt(togetherMs)) ms\n"
         FileHandle.standardError.write(Data(line.utf8))
     }
 

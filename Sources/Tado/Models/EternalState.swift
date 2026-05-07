@@ -78,6 +78,80 @@ struct EternalState: Codable, Equatable {
     var sprintRegressionDelta: Double?
     var lastSprintReportPath: String?
 
+    // Tolerant decoder: every field uses `decodeIfPresent` and falls
+    // back to the property default. This honors CLAUDE.md rule 3
+    // (additive migrations only) — pre-v0.19 state.json files lack
+    // the perf/sprint counters and must still decode unchanged.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "mega"
+        self.startedAt = try c.decodeIfPresent(TimeInterval.self, forKey: .startedAt) ?? 0
+        self.lastActivityAt = try c.decodeIfPresent(TimeInterval.self, forKey: .lastActivityAt) ?? 0
+        self.iterations = try c.decodeIfPresent(Int.self, forKey: .iterations) ?? 0
+        self.sprints = try c.decodeIfPresent(Int.self, forKey: .sprints) ?? 0
+        self.compactions = try c.decodeIfPresent(Int.self, forKey: .compactions) ?? 0
+        self.phase = try c.decodeIfPresent(String.self, forKey: .phase) ?? "working"
+        self.lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        self.lastProgressNote = try c.decodeIfPresent(String.self, forKey: .lastProgressNote)
+        self.lastMetric = try c.decodeIfPresent(MetricValue.self, forKey: .lastMetric)
+        self.completionMarker = try c.decodeIfPresent(String.self, forKey: .completionMarker) ?? "ETERNAL-DONE"
+        self.sprintMarker = try c.decodeIfPresent(String.self, forKey: .sprintMarker) ?? "[SPRINT-DONE]"
+        self.perfCycles = try c.decodeIfPresent(Int.self, forKey: .perfCycles) ?? 0
+        self.lastPerfScore = try c.decodeIfPresent(Double.self, forKey: .lastPerfScore)
+        self.perfRegressionDelta = try c.decodeIfPresent(Double.self, forKey: .perfRegressionDelta)
+        self.lastPerfReportPath = try c.decodeIfPresent(String.self, forKey: .lastPerfReportPath)
+        self.sprintCycles = try c.decodeIfPresent(Int.self, forKey: .sprintCycles) ?? 0
+        self.lastSprintScore = try c.decodeIfPresent(Double.self, forKey: .lastSprintScore)
+        self.sprintRegressionDelta = try c.decodeIfPresent(Double.self, forKey: .sprintRegressionDelta)
+        self.lastSprintReportPath = try c.decodeIfPresent(String.self, forKey: .lastSprintReportPath)
+    }
+
+    /// Memberwise init preserved so existing call sites that build an
+    /// `EternalState` directly (e.g. `spawnWorker`'s seed) keep working.
+    init(
+        mode: String = "mega",
+        startedAt: TimeInterval = 0,
+        lastActivityAt: TimeInterval = 0,
+        iterations: Int = 0,
+        sprints: Int = 0,
+        compactions: Int = 0,
+        phase: String = "working",
+        lastError: String? = nil,
+        lastProgressNote: String? = nil,
+        lastMetric: MetricValue? = nil,
+        completionMarker: String = "ETERNAL-DONE",
+        sprintMarker: String = "[SPRINT-DONE]",
+        perfCycles: Int = 0,
+        lastPerfScore: Double? = nil,
+        perfRegressionDelta: Double? = nil,
+        lastPerfReportPath: String? = nil,
+        sprintCycles: Int = 0,
+        lastSprintScore: Double? = nil,
+        sprintRegressionDelta: Double? = nil,
+        lastSprintReportPath: String? = nil
+    ) {
+        self.mode = mode
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
+        self.iterations = iterations
+        self.sprints = sprints
+        self.compactions = compactions
+        self.phase = phase
+        self.lastError = lastError
+        self.lastProgressNote = lastProgressNote
+        self.lastMetric = lastMetric
+        self.completionMarker = completionMarker
+        self.sprintMarker = sprintMarker
+        self.perfCycles = perfCycles
+        self.lastPerfScore = lastPerfScore
+        self.perfRegressionDelta = perfRegressionDelta
+        self.lastPerfReportPath = lastPerfReportPath
+        self.sprintCycles = sprintCycles
+        self.lastSprintScore = lastSprintScore
+        self.sprintRegressionDelta = sprintRegressionDelta
+        self.lastSprintReportPath = lastSprintReportPath
+    }
+
     /// Runtime derived from `startedAt`. Zero while the eternal hasn't started.
     var runtime: TimeInterval {
         guard startedAt > 0 else { return 0 }
