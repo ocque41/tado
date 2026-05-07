@@ -298,6 +298,30 @@ struct TadoApp: App {
                     appState.currentView = .projects
                 }
                 .keyboardShortcut("p", modifiers: .command)
+
+                // Phase 13 — Relay nav ⌘1–9 / ⇧⌘0 / ⇧⌘- bindings.
+                // ⌘0 and ⌘- are already taken by zoom (Actual Size /
+                // Zoom Out), so the last two surfaces use the
+                // shifted variants.
+                Divider()
+                ForEach(Array(RelayTopNavBar.navOrder.prefix(9).enumerated()), id: \.element) { idx, mode in
+                    Button("Surface \(idx + 1) — \(mode.label)") {
+                        navigate(mode: mode, appState: appState)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(idx + 1)")), modifiers: .command)
+                }
+                if RelayTopNavBar.navOrder.count >= 10 {
+                    Button("Surface 10 — \(RelayTopNavBar.navOrder[9].label)") {
+                        navigate(mode: RelayTopNavBar.navOrder[9], appState: appState)
+                    }
+                    .keyboardShortcut("0", modifiers: [.command, .shift])
+                }
+                if RelayTopNavBar.navOrder.count >= 11 {
+                    Button("Surface 11 — \(RelayTopNavBar.navOrder[10].label)") {
+                        navigate(mode: RelayTopNavBar.navOrder[10], appState: appState)
+                    }
+                    .keyboardShortcut("-", modifiers: [.command, .shift])
+                }
             }
             CommandMenu("Lists") {
                 Button("Done List") {
@@ -510,6 +534,37 @@ struct DomeWindowRoot: View {
                 .frame(minWidth: 240, minHeight: 180)
         }
         .windowZoom(zoomState)
+    }
+}
+
+/// Phase 13 helper — used by the menu bar's `Navigate` ⌘1–9 entries.
+/// Mirrors RelayTopNavBar's `selectMode` so the menu and the topbar
+/// route to identical destinations (window-routed surfaces open
+/// their dedicated extension windows).
+@MainActor
+private func navigate(mode: ViewMode, appState: AppState) {
+    switch mode {
+    case .knowledge, .pets, .settings:
+        // Window-routed — post a notification the main window's
+        // openWindow environment can consume. Settings opens its
+        // sheet directly.
+        if mode == .settings {
+            appState.showSettings = true
+        } else if mode == .knowledge {
+            NotificationCenter.default.post(
+                name: .openExtensionWindowRequest,
+                object: nil,
+                userInfo: ["id": ExtensionWindowID.string(for: DomeExtension.manifest.id)]
+            )
+        } else {
+            NotificationCenter.default.post(
+                name: .openExtensionWindowRequest,
+                object: nil,
+                userInfo: ["id": ExtensionWindowID.string(for: PetsExtension.manifest.id)]
+            )
+        }
+    default:
+        appState.currentView = mode
     }
 }
 

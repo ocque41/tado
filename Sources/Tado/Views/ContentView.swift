@@ -7,6 +7,10 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var allSettings: [AppSettings]
     @State private var eventMonitor: Any?
+    /// Phase 12 — first-run onboarding gate. Set to true by the
+    /// onboarding flow's `finish()`. Until then, the entire app
+    /// is replaced by the onboarding view.
+    @AppStorage("relay.onboarded") private var onboarded: Bool = false
     /// Phase 3 — ⌘K command palette presentation state. Toggled by
     /// the palette's keyboard shortcut and the Jump button in the
     /// topbar (already wired via `.keyboardShortcut("k", modifiers:
@@ -27,6 +31,15 @@ struct ContentView: View {
     }
 
     var body: some View {
+        if !onboarded {
+            RelayOnboarding()
+        } else {
+            mainBody
+        }
+    }
+
+    @ViewBuilder
+    private var mainBody: some View {
         ZStack(alignment: .bottomTrailing) {
         VStack(spacing: 0) {
             // Hidden zero-sized button carrying Cmd+Shift+U so the
@@ -280,6 +293,13 @@ struct ContentView: View {
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
+
+        // Phase 13 — Relay toast overlay. Bottom-center, listens
+        // on the `.relayToastRequest` NotificationCenter event,
+        // auto-dismisses after 2400ms.
+        RelayToastHost()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
 
         // Relay tweaks panel — bottom-right floating developer panel
         // for switching nav mode + theme at runtime. Visibility

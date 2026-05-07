@@ -16,20 +16,14 @@ struct SettingsView: View {
         return new
     }
 
+    @Environment(\.relayTheme) private var relayTheme
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Settings")
-                    .font(Typography.title)
-                    .foregroundStyle(Palette.textPrimary)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .font(Typography.label)
-                    .foregroundStyle(Palette.accent)
-                    .keyboardShortcut(.escape)
-            }
-            .padding(20)
+            // Phase 12 — Relay page head wrapper. Replaces the
+            // bare "Settings" title with kicker + h1. The Form
+            // body below is preserved verbatim.
+            relayHead
 
             Divider()
 
@@ -444,6 +438,35 @@ struct SettingsView: View {
             Text(label)
             InfoTip(text: tip)
         }
+    }
+
+    /// Phase 12 — Relay page head for the Settings sheet. Replaces
+    /// the bare "Settings" title with kicker + h1 + lead, matching
+    /// every other Relay surface's anatomy. The Form body below is
+    /// preserved verbatim — only the head and a footer line are new.
+    private var relayHead: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 12) {
+                    RelayKicker(text: "SYSTEM — SETTINGS")
+                    Text("Tune Tado.")
+                        .font(RelayType.h2(size: 32))
+                        .foregroundStyle(RelayPalette.foreground(for: relayTheme))
+                    Text("Engine + model + permission mode the canvas spawns. Everything in this sheet writes to ~/Library/Application Support/Tado/settings/global.json via AtomicStore.")
+                        .font(Typography.sans(size: 13, weight: .regular))
+                        .foregroundStyle(RelayPalette.foreground2(for: relayTheme))
+                        .frame(maxWidth: 540, alignment: .leading)
+                        .lineSpacing(2)
+                }
+                Spacer()
+                RelayButton(label: "Done", variant: .ghost) {
+                    dismiss()
+                }
+                .keyboardShortcut(.escape)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 24)
     }
 
     /// Cowork plugin install prompt. Mirrors `confirmReset` shape —
