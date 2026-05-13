@@ -6,6 +6,7 @@ struct CanvasView: View {
     @Environment(AppState.self) private var appState
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
+    @Query private var settingsRows: [AppSettings]
     @Query(sort: \Project.createdAt) private var allProjects: [Project]
     /// Active dispatch runs — used by the kanban-mode overlay to look
     /// up `dispatchMode` for sessions linked via `dispatchRunID`. Cheap
@@ -167,12 +168,13 @@ struct CanvasView: View {
         GeometryReader { geometry in
             ZStack {
                 CanvasGridBackground()
+                let settings = fetchSettings()
 
                 // Project zone headers — each zone owns a horizontal band
                 // at the top of its slot in the vertical stack. The header
                 // sits above the tile lane so a glance from the project
                 // name to its tiles flows top→bottom.
-                let cols = fetchSettings().gridColumns
+                let cols = settings.gridColumns
                 let bandWidth = zoneWidth(gridColumns: cols)
 
                 ForEach(Array(projectZones.enumerated()), id: \.element.name) { index, zone in
@@ -233,7 +235,7 @@ struct CanvasView: View {
                     let zoneIndex = projectZones.firstIndex(where: { $0.name == (session.projectName ?? "General") }) ?? 0
                     let zoneTopY = zoneYOffset(for: zoneIndex)
                     let tileLaneTopY = zoneTopY + zoneHeaderHeight + zoneHeaderToTilesGap
-                    let sessionEngine = session.engine ?? currentEngine
+                    let sessionEngine = session.engine ?? settings.engine
 
                     let tileRect = TileVisibility.tileWorldRect(
                         canvasCenter: session.canvasPosition,
@@ -250,14 +252,14 @@ struct CanvasView: View {
                         session: session,
                         engine: sessionEngine,
                         ipcRoot: terminalManager.ipcBroker?.ipcRoot,
-                        modeFlags: session.modeFlagsOverride ?? modeFlags(for: sessionEngine),
-                        effortFlags: session.effortFlagsOverride ?? effortFlags(for: sessionEngine),
-                        modelFlags: session.modelFlagsOverride ?? modelFlags(for: sessionEngine),
-                        claudeDisplay: claudeDisplayEnv(),
-                        fontSize: CGFloat(fetchSettings().terminalFontSize),
-                        fontFamily: fetchSettings().terminalFontFamily,
-                        cursorBlink: fetchSettings().cursorBlink,
-                        bellMode: fetchSettings().bellMode,
+                        modeFlags: session.modeFlagsOverride ?? modeFlags(for: sessionEngine, settings: settings),
+                        effortFlags: session.effortFlagsOverride ?? effortFlags(for: sessionEngine, settings: settings),
+                        modelFlags: session.modelFlagsOverride ?? modelFlags(for: sessionEngine, settings: settings),
+                        claudeDisplay: claudeDisplayEnv(settings: settings),
+                        fontSize: CGFloat(settings.terminalFontSize),
+                        fontFamily: settings.terminalFontFamily,
+                        cursorBlink: settings.cursorBlink,
+                        bellMode: settings.bellMode,
                         isVisible: visible,
                         scale: scale,
                         isFocused: appState.focusedTileTodoID == session.todoID
@@ -407,8 +409,6 @@ struct CanvasView: View {
     }
 
     /// Empty-state hint shown when an active project has no tiles.
-    /// Replaces the blank canvas with an explicit "create a todo to
-    /// spawn a tile" message keyed to the active project's name.
     @ViewBuilder
     private var emptyProjectHint: some View {
         VStack(spacing: 10) {
@@ -418,10 +418,6 @@ struct CanvasView: View {
             Text(activeProjectName.map { "No tiles in \($0) yet" } ?? "No tiles yet")
                 .font(Typography.bodyEmphasis)
                 .foregroundStyle(Palette.textPrimary)
-            Text("Create a todo on this project to spawn its first terminal tile.")
-                .font(Typography.monoMicro)
-                .foregroundStyle(Palette.textTertiary)
-                .multilineTextAlignment(.center)
         }
         .padding(24)
         .background(Palette.bgElev.opacity(0.6))
@@ -821,14 +817,12 @@ struct CanvasView: View {
     }
 
     private func fetchSettings() -> AppSettings {
-        let descriptor = FetchDescriptor<AppSettings>()
-        if let existing = try? modelContext.fetch(descriptor).first { return existing }
+        if let existing = settingsRows.first { return existing }
         return AppSettings()
     }
 
     private var currentEngine: TerminalEngine {
-        let descriptor = FetchDescriptor<AppSettings>()
-        return (try? modelContext.fetch(descriptor).first?.engine) ?? .claude
+        fetchSettings().engine
     }
 
     private var currentModeFlags: [String] { modeFlags(for: currentEngine) }
@@ -836,8 +830,10 @@ struct CanvasView: View {
     private var currentModelFlags: [String] { modelFlags(for: currentEngine) }
 
     private func modeFlags(for engine: TerminalEngine) -> [String] {
-        let descriptor = FetchDescriptor<AppSettings>()
-        guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
+        modeFlags(for: engine, settings: fetchSettings())
+    }
+
+    private func modeFlags(for engine: TerminalEngine, settings: AppSettings) -> [String] {
         switch engine {
         case .claude:
             return settings.claudeMode.cliFlags
@@ -858,8 +854,10 @@ struct CanvasView: View {
     }
 
     private func effortFlags(for engine: TerminalEngine) -> [String] {
-        let descriptor = FetchDescriptor<AppSettings>()
-        guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
+        effortFlags(for: engine, settings: fetchSettings())
+    }
+
+    private func effortFlags(for engine: TerminalEngine, settings: AppSettings) -> [String] {
         switch engine {
         case .claude: return settings.claudeEffort.cliFlags
         case .codex:  return settings.codexEffort.cliFlags
@@ -868,8 +866,10 @@ struct CanvasView: View {
     }
 
     private func modelFlags(for engine: TerminalEngine) -> [String] {
-        let descriptor = FetchDescriptor<AppSettings>()
-        guard let settings = try? modelContext.fetch(descriptor).first else { return [] }
+        modelFlags(for: engine, settings: fetchSettings())
+    }
+
+    private func modelFlags(for engine: TerminalEngine, settings: AppSettings) -> [String] {
         switch engine {
         case .claude: return settings.claudeModel.cliFlags
         case .codex:  return settings.codexModel.cliFlags
@@ -878,8 +878,10 @@ struct CanvasView: View {
     }
 
     private func claudeDisplayEnv() -> ProcessSpawner.ClaudeDisplayEnv {
-        let descriptor = FetchDescriptor<AppSettings>()
-        guard let settings = try? modelContext.fetch(descriptor).first else { return .defaults }
+        claudeDisplayEnv(settings: fetchSettings())
+    }
+
+    private func claudeDisplayEnv(settings: AppSettings) -> ProcessSpawner.ClaudeDisplayEnv {
         return ProcessSpawner.ClaudeDisplayEnv(
             noFlicker: settings.claudeNoFlicker,
             mouseEnabled: settings.claudeMouseEnabled,

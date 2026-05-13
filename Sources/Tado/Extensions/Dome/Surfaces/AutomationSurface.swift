@@ -96,7 +96,7 @@ struct AutomationSurface: View {
                 variant: .accent,
                 action: { showCreateSheet = true }
             )
-            Text("Automations run inside Tado's in-process scheduler. Pause one to stop new occurrences without losing its history.")
+            Text("Pause an automation to stop new runs without deleting history.")
                 .font(Font.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Palette.ink4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -648,7 +648,7 @@ private struct AutomationEditorSheet: View {
                 }
 
                 Section("Executor config") {
-                    Text("JSON forwarded to the executor as-is. agent_run wants `{ \"agent_name\": \"...\", \"prompt\": \"...\" }`.")
+                    Text("JSON sent to the executor. agent_run needs `agent_name` and `prompt`.")
                         .font(Font.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundStyle(Palette.ink4)
                     TextEditor(text: $executorConfigJSON)

@@ -68,6 +68,16 @@ final class TerminalSession: Identifiable {
     /// here.
     var coreSession: TadoCore.Session?
 
+    /// User-visible spawn diagnostics. Populated while the tile is
+    /// moving from Swift session metadata to a live Rust PTY. Kept on
+    /// the session, not tile-local state, so the phase survives view
+    /// remounts and canvas virtualization.
+    var spawnTraceID: UUID?
+    var spawnPhase: String?
+    var spawnPhaseStartedAt: Date?
+    var spawnLastError: String?
+    @ObservationIgnored var spawnFirstOutputRecorded: Bool = false
+
     /// Not rendered in any view — only consumed by ProcessSpawner/start-dir
     /// logic. Observation would be pure overhead.
     @ObservationIgnored var lastKnownCwd: String?
@@ -427,6 +437,18 @@ final class TerminalSession: Identifiable {
 
     func markActivity() {
         lastActivityDate = Date()
+        if !spawnFirstOutputRecorded,
+           let traceID = spawnTraceID,
+           coreSession != nil {
+            spawnFirstOutputRecorded = true
+            let phase = "terminal.firstOutput"
+            SpawnDiagnosticsStore.shared.beginPhase(traceID: traceID, phase: phase)
+            SpawnDiagnosticsStore.shared.endPhase(traceID: traceID, phase: phase)
+            if spawnPhase == "terminal.coreSessionSet" {
+                spawnPhase = nil
+                spawnPhaseStartedAt = nil
+            }
+        }
         if status == .needsInput || status == .awaitingResponse {
             status = .running
             onStatusChange?(.running)
@@ -650,6 +672,26 @@ final class TerminalSession: Identifiable {
     func markTerminated(exitCode: Int32?) {
         self.isRunning = false
         self.exitCode = exitCode
+        if let traceID = spawnTraceID {
+            let phase = "terminal.exit"
+            let outcome: SpawnDiagnosticRecord.Outcome = (exitCode == 0) ? .success : .failure
+            let message = exitCode.map { "Exit code: \($0)" } ?? "Abnormal terminal exit"
+            SpawnDiagnosticsStore.shared.beginPhase(traceID: traceID, phase: phase)
+            SpawnDiagnosticsStore.shared.endPhase(
+                traceID: traceID,
+                phase: phase,
+                outcome: outcome,
+                message: message
+            )
+            SpawnDiagnosticsStore.shared.finishTrace(
+                traceID: traceID,
+                outcome: outcome,
+                message: outcome == .failure ? message : nil
+            )
+            spawnTraceID = nil
+            spawnPhase = nil
+            spawnPhaseStartedAt = nil
+        }
         if let code = exitCode, code == 0 {
             status = .completed
             EventBus.shared.publish(

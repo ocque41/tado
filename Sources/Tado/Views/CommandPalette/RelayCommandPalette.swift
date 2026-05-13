@@ -238,9 +238,6 @@ struct RelayCommandPalette: View {
             Text(query)
                 .font(Typography.sans(size: 22, weight: .light))
                 .foregroundStyle(RelayPalette.foreground(for: theme))
-            Text("Try a surface name, action label, or keyboard shortcut.")
-                .font(Typography.sans(size: 13, weight: .regular))
-                .foregroundStyle(RelayPalette.foreground2(for: theme))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 24)

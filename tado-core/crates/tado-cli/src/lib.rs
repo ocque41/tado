@@ -20,6 +20,7 @@
 pub mod control_client;
 pub mod disk;
 pub mod output;
+pub mod tui;
 
 pub use control_client::{call, ControlClientError};
 pub use disk::{read_projects_index, ProjectIndexEntry};

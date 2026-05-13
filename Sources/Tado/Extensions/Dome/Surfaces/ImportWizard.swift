@@ -97,7 +97,7 @@ struct ImportWizard: View {
 
     private var pickRootView: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Pick a folder inside your Dome vault. The daemon walks it, lists every importable file, and you confirm which ones become notes (markdown / txt) or attachments.")
+            Text("Pick a folder inside the Dome vault, then choose what to import.")
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .frame(maxWidth: 580, alignment: .leading)
@@ -125,7 +125,7 @@ struct ImportWizard: View {
 
             if let err = error { errorBanner(err) }
 
-            Text("VAULT IMPORT  ·  paths must live inside the Dome vault root  ·  drop external files into <vault>/inbox/ first")
+            Text("VAULT IMPORT  ·  paths must stay inside the vault")
                 .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
                 .foregroundStyle(Palette.ink4)
                 .padding(.top, 12)

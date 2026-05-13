@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-This file is the canonical map of Tado as of v1.3.x (post-v1.0 stream). It
+This file is the canonical map of Tado as of v1.1.0. It
 is grouped so you can navigate by purpose rather than by feature: build
 mechanics first, then the product surface, then the cross-cutting subsystems
 (state, knowledge, A2A), then the operational playbooks (bootstraps,
@@ -32,10 +32,9 @@ exists in part to keep this file honest.
 - [Performance step (Eternal `kind = perf`)](#performance-step-eternal-kind--perf)
 - [Sprint step (Eternal `kind = sprint`)](#sprint-step-eternal-kind--sprint)
 - [Tado Use (drawable agent panel + autonomous control plane)](#tado-use-drawable-agent-panel--autonomous-control-plane)
-- [Pets (canvas companion, hatch, live-agent panel)](#pets-canvas-companion-hatch-live-agent-panel)
 - [Kanban (per-project board mirrored to disk)](#kanban-per-project-board-mirrored-to-disk)
 - [Bootstrapping a project (the four `Bootstrap …` actions)](#bootstrapping-a-project-the-four-bootstrap--actions)
-- [Extensions (Notifications, Dome, Cross-Run Browser, Pets)](#extensions-notifications-dome-cross-run-browser-pets)
+- [Extensions (Notifications, Dome, Cross-Run Browser)](#extensions-notifications-dome-cross-run-browser)
 - [Execution (build matrix, verification, rollback)](#execution-build-matrix-verification-rollback)
 - [Key Files](#key-files)
 - [Releasing ("release next version")](#releasing-release-next-version)
@@ -128,15 +127,16 @@ freeze fix per CLAUDE.md rule 9),
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
-`tado-cli` (the canvas-agent CLI surface — hosts seven binaries: `tado-bootstrap`,
+`tado-cli` (the canvas-agent CLI surface — hosts nine binaries: `tado-bootstrap`,
 `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-projects`, `tado-system`,
-`tado-cowork` — all auto-installed under `~/.local/bin/` on first launch),
+`tado-cowork`, `tado-deploy`, `tado-tui` — all auto-installed under
+`~/.local/bin/` on first launch),
 `dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
 `replay`, `corpus run`, `explain` subcommands; the v0.10.0 Phase 2 CI gate),
 `perf-suite` (Rust [[bin]] + [[lib]] for the v0.19.0 Eternal Performance step
 — auto-detects project stack and measures eight curated performance
 dimensions; invoked from `.tado/eternal/hooks/perf-gate.sh`),
-and `sprint-suite` (the v1.3 Sprint step — same shape as perf-suite but
+and `sprint-suite` (the v1.1 Sprint step — same shape as perf-suite but
 optimizes the SprintSuccessScore over a project's `sprint_rules.txt`;
 invoked from `.tado/eternal/hooks/sprint-gate.sh`).
 
@@ -217,8 +217,7 @@ six-phase shape (DETECT → DIAGNOSE → TRIAGE → REFORM → VERIFY+COMMIT
 Knowledge → System smoke) is already documented and working. The
 deeper `tado-rust-refactor` skill remains the right tool for
 Tado-specific institutional knowledge (FFI parity, atomic-store
-discipline, Pets-companion deadlock pattern, canvas-spawn-freeze
-recipe); `smooth-software` is the right tool for whole-codebase
+discipline, canvas-spawn-freeze recipe); `smooth-software` is the right tool for whole-codebase
 hygiene passes that touch every layer in one auditable commit.
 
 When to run a smooth-software pass on Tado:
@@ -228,7 +227,7 @@ When to run a smooth-software pass on Tado:
   This is the explicit replacement for "audit-and-cleanup
   releases" like v0.11–v0.15.
 - **After landing a major feature surface.** Tado Use, Sprint
-  step, Pets, Kanban — each of these added 1k–8k lines and
+  step, Kanban — each of these added 1k–8k lines and
   deserves a dedicated smooth-software pass within ~10 commits
   of landing so dead test refs, watchdog regressions, schema
   drift, and god-file growth don't accumulate.
@@ -250,7 +249,7 @@ System renders without errors) must still pass. The pass refuses
 to absorb mid-flight WIP — if there's uncommitted work you didn't
 make, capture it as a single labeled WIP commit *first*, then run
 the pass on the clean tree (this is exactly the discipline used
-to land the v1.0 → v1.3 cleanup).
+to land the v1.0 → v1.1 cleanup).
 
 When you ship a new feature that adds a code-path the existing
 DIAGNOSE dimensions wouldn't catch, **extend the skill** — the
@@ -387,7 +386,7 @@ What MUST pass before a release ships. Listed in dependency order.
 |---|---|---|
 | Rust compile | `cargo build --release -p bt-core -p tado-core -p perf-suite -p sprint-suite` | FFI shim drift, missing header sync, perf-suite + sprint-suite drift |
 | Swift build | `cd /Users/miguel/Documents/tado && swift build` | C-header / Swift binding drift |
-| Swift tests | `swift test` (~127 tests across 17 files) | EternalState decoder backward-compat, Pets aggregate, retrieval surfaces, polish budgets, tile visibility |
+| Swift tests | `swift test` (~127 tests across 17 files) | EternalState decoder backward-compat, retrieval surfaces, polish budgets, tile visibility |
 | Rust tests (full) | `cargo test --workspace` (~323 tests) | every Rust crate in dependency order |
 | bt-core unit | `cargo test -p bt-core` | service.rs invariants, migration drift |
 | dome-eval lib | `cargo test -p dome-eval` | retrieval-quality regression (Phase 2 corpus) |
@@ -811,7 +810,7 @@ tado-dome {register,query,...}                    # Scoped Dome knowledge from c
 ```
 
 **`tado-cli` workspace binaries** (built from
-`tado-core/crates/tado-cli/`, six [[bin]] targets — these are
+`tado-core/crates/tado-cli/`, nine [[bin]] targets — these are
 typed-Rust drop-ins that operate on the same on-disk state the
 Swift app reads):
 
@@ -822,6 +821,9 @@ tado-eternal …                                    # Eternal run state read / w
 tado-kanban {list,move,add,read,…}                # Per-project Kanban board mutation
 tado-projects …                                   # Project CRUD across the storage root
 tado-system …                                     # Storage-root introspection / health checks
+tado-cowork …                                     # Cowork URL-scheme launcher
+tado-deploy …                                     # Spawn visible canvas agents from the CLI
+tado-tui …                                        # Terminal UI for active Tado work
 ```
 
 **Target resolution** (same for `tado-read` and `tado-send`, in
@@ -919,7 +921,7 @@ See [IPCBroker.swift](Sources/Tado/Services/IPCBroker.swift) and
 
 ## Sprint step (Eternal `kind = sprint`)
 
-The Sprint step is a v1.3 addition: an opt-in mode for any Eternal
+The Sprint step is a v1.1 addition: an opt-in mode for any Eternal
 run (set `EternalRun.kind = "sprint"` via the New Eternal modal's
 "Kind" picker — third button after General and Performance) that
 treats sprint *methodology* as the optimization target. Each
@@ -1189,9 +1191,11 @@ view) and is backed by:
   — the streaming Claude API turn, off-actor parse, brand + settings
   parity. Split per the v1.x Tado Use perf overhaul.
 - [TadoUseAutonomousHandlers.swift](Sources/Tado/Services/TadoUseAutonomousHandlers.swift)
-  — the 41-tool autonomous control plane (project CRUD, todo CRUD,
+  — the 44-tool autonomous control plane (project CRUD, todo CRUD,
   tile send/read, dispatch, eternal, knowledge writes, kanban,
-  pets, settings, etc.). Each tool is a typed handler invoked by
+  settings, etc.). `todo_create` accepts an optional `engine`
+  (`claude` or `codex`), and `dispatch_intervene` routes follow-up
+  prompts to the active Dispatch tile. Each tool is a typed handler invoked by
   the streaming engine.
 - [TadoUseBridge/main.swift](Sources/TadoUseBridge/main.swift) —
   the standalone CLI executable that backs external agents talking
@@ -1207,7 +1211,7 @@ view) and is backed by:
   — the panel's observable state.
 
 Tado Use was promoted from a v1.0 single-tool surface into a
-**41-tool autonomous control plane** in the post-v1.0 stream
+**44-tool autonomous control plane** in the v1.1 stream
 (commits `ffd15d3` and `1c2e74f`). The v1.x perf overhaul split the
 streaming turn so parse work runs off the main actor, restoring
 smooth typing during long completions.
@@ -1248,17 +1252,17 @@ better when both are in effect.
 ### The bundled `tado-cowork-plugin`
 
 Tado ships a Claude plugin (`tado-cowork-plugin`) that exposes
-its full **71-tool surface** to Cowork:
+its full bundled MCP surface to Cowork:
 
 | Server | Tools | Purpose |
 |---|---|---|
-| `tado` | 16 | Per-session A2A: list/send/read across running tiles, broadcast, notifications, scoped config + memory, Pets sprite ops |
+| `tado` | 12 | Per-session A2A: list/send/read across running tiles, broadcast, notifications, scoped config + memory |
 | `dome` | 18 | Knowledge vault: hybrid + code search, notes, retrieval recipes, lifecycle (supersede/verify/decay), code watch, agent status |
-| `tado-use-bridge` | 41 | Drive Tado itself: navigation, modal/sheet control, todo + project + Eternal + Dispatch lifecycle, Kanban, settings, extensions |
+| `tado-use-bridge` | 44 | Drive Tado itself: navigation, modal/sheet control, todo + project + Eternal + Dispatch lifecycle, Kanban, settings, extensions |
 
 Plus a teaching skill (`cowork-tado-tools`) that orients Cowork
 inside Tado's mental model (canvas, tiles, todos, projects,
-teams, Eternal/Dispatch, Dome, Pets, Kanban) and an agent
+teams, Eternal/Dispatch, Dome, Kanban) and an agent
 persona (`cowork-canvas-coworker`) for the planning + knowledge-
 work-half-of-a-canvas pattern: Cowork reasons about the project
 and delegates executable work to running Claude Code / Codex
@@ -1278,7 +1282,7 @@ agents/
 bin/
   tado-mcp             # bundled MCP server (16 tools)
   dome-mcp             # bundled MCP server (18 tools)
-  tado-use-bridge      # bundled MCP server (41 tools)
+  tado-use-bridge      # bundled MCP server (44 tools)
 ```
 
 `make plugin` populates `bin/` from the release builds of the
@@ -1350,59 +1354,6 @@ engine to Claude for in-bridge tool calling.
 - [tado-core/crates/tado-cli/src/bin/tado-cowork.rs](tado-core/crates/tado-cli/src/bin/tado-cowork.rs) — Rust URL-scheme launcher (`claude://cowork/new`).
 - [tado-core/crates/tado-cowork-plugin/](tado-core/crates/tado-cowork-plugin/) — the Claude plugin tree (manifest, marketplace, skill, agent, bin/).
 
-## Pets (canvas companion, hatch, live-agent panel)
-
-Pets is a **floating-panel companion** that lives on top of the
-Tado canvas and mirrors what the user's agents are doing. It's an
-optional extension (`PetsExtension` registered in
-`ExtensionRegistry.all`) but ships in the default build.
-
-Components:
-
-- [PetsCoordinator.swift](Sources/Tado/Extensions/Pets/PetsCoordinator.swift)
-  — observable hub: aggregates `terminal.*` / `eternal.*` /
-  `dispatch.*` events into a single `PetsAggregate`, drives the
-  floating panel, hosts the live-companion spawn path.
-- [PetsExtension.swift](Sources/Tado/Extensions/Pets/PetsExtension.swift)
-  — `onAppLaunch` bootstrap, conforms to `AppExtension`.
-- [PetsFloatingPanelController.swift](Sources/Tado/Extensions/Pets/PetsFloatingPanelController.swift)
-  — `NSPanel` wrapper that floats above all windows and persists
-  drag-saved positions.
-- [PetsHatchService.swift](Sources/Tado/Extensions/Pets/PetsHatchService.swift)
-  — the **/pet hatch** flow: takes a free-form prompt, generates a
-  stub sprite (drawn directly into an `NSBitmapImageRep` so the
-  same code path works in headless tests), persists the hatched
-  pet into the user's pet library.
-- [PetsHatchSheet.swift](Sources/Tado/Extensions/Pets/PetsHatchSheet.swift)
-  — modal sheet for the hatch flow.
-- [PetSpriteCache.swift](Sources/Tado/Extensions/Pets/PetSpriteCache.swift)
-  + [PetSpriteView.swift](Sources/Tado/Extensions/Pets/PetSpriteView.swift)
-  — sprite-asset cache + the SwiftUI view that renders the
-  cross-fading sprite.
-- [PetsExpandedPopoverView.swift](Sources/Tado/Extensions/Pets/PetsExpandedPopoverView.swift)
-  — the per-project breakdown popover that opens when the user
-  clicks the floating panel.
-- [PetsModels.swift](Sources/Tado/Extensions/Pets/PetsModels.swift)
-  — `PetsAggregate`, `PetsAggregateResolver`, `PetsPreferences`,
-  `PetSessionRow`, `PetRunRow`, `PetProjectStatus`.
-- [PetsWindowRoot.swift](Sources/Tado/Extensions/Pets/PetsWindowRoot.swift)
-  — settings-window root view.
-
-The Pets coordinator hosts a **live-companion** path
-(`spawnLiveCompanionIfNeeded`) that boots a long-running tile via
-`tado-deploy`, running the `tado-pet-companion` agent definition.
-The companion polls every active session every 60 s and accepts
-free-form messages from the user via the floating panel's
-double-click prompt.
-
-Boot-order discipline is critical — the `applySettings(initial:)`
-gate is the explicit fix for the May 2026 Pets-companion deadlock,
-where a persisted `liveAgent: true` flag would shell `tado-deploy`
-during `onAppLaunch` before the IPC broker is wired in
-`MainWindowRoot.onAppear`. Initial settings load **never**
-auto-spawns; the user has to explicitly start it from the Pets
-settings window.
-
 ## Kanban (per-project board mirrored to disk)
 
 Kanban is the **per-project board view** for todos: drag-and-drop
@@ -1432,7 +1383,7 @@ Components:
 `.tado/dispatch/`, and `.tado/memory/notes/` — it's per-project
 runtime state that regenerates on app launch from SwiftData.
 
-## Extensions (Notifications, Dome, Cross-Run Browser, Pets)
+## Extensions (Notifications, Dome, Cross-Run Browser)
 
 Extensions are the home for optional surfaces. They conform to
 `AppExtension` ([AppExtensionProtocol.swift](Sources/Tado/Extensions/AppExtensionProtocol.swift)),
@@ -1457,9 +1408,6 @@ Currently shipped:
   across every project. See
   [CrossRunBrowserExtension.swift](Sources/Tado/Extensions/CrossRunBrowser/CrossRunBrowserExtension.swift)
   and [CrossRunBrowserView.swift](Sources/Tado/Extensions/CrossRunBrowser/CrossRunBrowserView.swift).
-- **Pets** — floating-panel companion + hatch flow + live-agent
-  panel. See the dedicated [Pets section](#pets-canvas-companion-hatch-live-agent-panel)
-  above for the full component list.
 
 ## Execution (build matrix, verification, rollback)
 
@@ -1583,12 +1531,11 @@ The exact procedure (also documented in [Releasing](#releasing-release-next-vers
 - `Extensions/Dome/DomeContextPreamble.swift` — spawn-time markdown block prepended to every prompt
 - `Extensions/Dome/DomeScopeSelection.swift` — global vs project scope (with includeGlobal merge)
 - `Extensions/CrossRunBrowser/CrossRunBrowserExtension.swift` + `CrossRunBrowserView.swift` — global run timeline
-- `Extensions/Pets/PetsExtension.swift` + `PetsCoordinator.swift` + `PetsFloatingPanelController.swift` + `PetsHatchService.swift` + `PetsModels.swift` + `PetsExpandedPopoverView.swift` + `PetSpriteCache.swift` + `PetSpriteView.swift` + `PetsHatchSheet.swift` + `PetsWindowRoot.swift` — Pets extension (canvas companion + hatch + live-agent)
 
 **Tado Use (drawable agent panel + autonomous control plane)**
 - `Views/TadoUsePanel.swift` — the drawable left-edge panel UI
 - `Services/TadoUseEngine.swift` — streaming Claude API turn, off-actor parse
-- `Services/TadoUseAutonomousHandlers.swift` — 41-tool autonomous control plane
+- `Services/TadoUseAutonomousHandlers.swift` — 44-tool autonomous control plane
 - `Services/TadoUseState.swift` — observable panel state
 - `Services/TadoUseBridgeAutoRegister.swift` — boot-time MCP installer
 - `Services/TadoUseBridgeHandlers.swift` — bridge-side autonomous dispatcher
@@ -1680,45 +1627,18 @@ Most recent first. Full notes for each version live in `CHANGELOG.md`;
 this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
-- **post-v1.0 stream** (2026-05-07, unreleased on master) — *Tado
-  Use + Sprint step + Pets + Kanban + Cowork engine + smooth-
-  software contract.* The post-v1.0 work that hasn't been tagged
-  yet: (a) **Tado Use** expanded from a v1.0 single-tool surface
-  into a 41-tool autonomous control plane with its own
-  `tado-use-bridge` Swift product (commits `ffd15d3` `1c2e74f`
-  `26b6d04`); (b) **Sprint step** (`kind=sprint`) shipped as a
-  peer of the Performance step — sprint-suite Rust crate +
-  sprint-gate.sh hook + EternalState sprint-cycle fields +
-  ProcessSpawner sprint addendum + EternalFileModal third button
-  (commits `9c77b53` through `5a1dcc1`); (c) **Pets extension**
-  (canvas companion + hatch flow + live-agent panel) and **Kanban
-  system** (per-project board mirror + tado-kanban CLI) landed as
-  a bundled WIP; (d) **Cowork engine** — third Tado engine
-  alongside Claude Code and Codex; URL-scheme launcher
-  (`tado-cowork` Rust CLI builds `claude://cowork/new?q=…&folder=
-  …` and shells `open(1)`); file-convention round-trip via
-  `<projectRoot>/.tado/cowork/<runID>.md` watched by
-  `CoworkOutputPoller`; bundled `tado-cowork-plugin` exposes
-  Tado's full 71-tool surface (16 `tado_*` + 18 `dome_*` + 41
-  `tado_use_*`) to Cowork via three MCP servers + a
-  `cowork-tado-tools` skill + a `cowork-canvas-coworker` agent
-  persona; "Bootstrap Cowork plugin" surface in Settings → Engine
-  + as a fifth project bootstrap action; `make plugin` populates
-  the plugin payload from release-built MCP binaries; (e) the
-  **smooth-software pass** contract baked into CLAUDE.md as the
-  maintenance contract for every expansion / scaling change
-  going forward; (f) the v1.0 → v1.3 cleanup itself (delete
-  EternalWatchdog rule-1 zombie, gitignore `.tado/kanban/`,
-  document empty-sentinel atomic-store carveout, tolerant
-  EternalState decoder restoring rule-3 promise, dead-test
-  cleanup unblocking the Swift suite, TileVisibility signature
-  migration, headless-safe PetsHatchService stub-sprite).
-  Workspace at twelve Rust crates (sprint-suite added) plus the
-  new `tado-cowork-plugin` plugin tree (not a crate but a
-  bundled-resource sibling). Swift test suite at **128 passing**
-  (one more than the v1.3.x baseline thanks to the Cowork URL-
-  encoding probe); Rust matrix at **335 passing** (up from 323
-  for the same reason).
+- **v1.1.0** (2026-05-14) — *Tado TUI + Agent View.* Adds the
+  npm-distributed `@cumulus_cloud/tado@0.1.0` package, whose
+  installed `tado` command launches the new Rust `tado-tui`
+  terminal interface with prebuilt macOS arm64 and x64 binaries.
+  Promotes the Sessions slot into Agent View, a keyboard-first
+  list + inspector + prompt bar for live tiles, active todos,
+  Eternal runs, and Dispatch runs. Expands the Tado Use bridge to
+  44 tools with `dispatch_intervene` and `todo_create(engine:)`,
+  teaches the new shapes to spawned agents, and carries the
+  post-v1.0 Sprint step, Kanban, Cowork engine, spawn diagnostics,
+  Relay redesign, and build-health cleanup into the first
+  post-1.0 release.
 
 - **v1.0.0** (2026-05-06) — *The unified release.* Consolidates
   ten incremental ships (v0.10 through v0.19) into one official

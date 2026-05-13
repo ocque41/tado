@@ -136,7 +136,7 @@ struct NotificationsWindowView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Palette.ink)
             }
-            Text("Events fan in from `EventBus.shared` — terminal completions, eternal phase transitions, dome daemon updates, and user broadcasts all land here.")
+            Text("Terminal, run, Dome, and broadcast events appear here.")
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .frame(maxWidth: 540, alignment: .leading)

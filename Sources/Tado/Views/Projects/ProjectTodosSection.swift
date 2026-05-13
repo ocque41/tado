@@ -74,7 +74,7 @@ struct ProjectTodosSection: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        Text("No todos yet. Type one into the ADD TODO card above, or use ••• → New team to organize agents first.")
+        Text("No todos")
             .font(Typography.body)
             .foregroundStyle(Palette.textTertiary)
             .padding(.vertical, 12)

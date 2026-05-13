@@ -160,13 +160,13 @@ struct EternalFileModal: View {
                 Image(systemName: "lightbulb.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(Palette.accent)
-                Text("Best results: pick Opus 4.7 + Auto effort in Settings and run \"Bootstrap Claude auto mode\" on the project. Architect and worker both follow your Settings picks — Tado no longer pins Opus 4.7 / max effort behind your back.")
+                Text("For Continuous Claude, use Opus 4.7 + Auto effort and bootstrap auto mode first.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                Text("Accept spawns the Eternal Architect on the canvas using your Settings model + effort. It crafts the worker brief; you then review the plan and click Accept to launch the worker.")
+                Text("Accept starts the architect. Review its plan, then launch the worker.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
                     .lineLimit(2)
@@ -188,7 +188,7 @@ struct EternalFileModal: View {
         HStack(spacing: 8) {
             modeButton(label: "Mega", value: "mega")
             modeButton(label: "Sprint", value: "sprint")
-            InfoTip(text: "Mega: one long plan executed end-to-end, single crafted.md, stops when the plan is complete. Sprint: repeating improvement cycles (implement → evaluate → improve) that run forever until you stop them or the done marker fires.")
+            InfoTip(text: "Mega runs one long task. Sprint repeats improvement cycles until stopped or done.")
             Spacer()
         }
     }
@@ -227,7 +227,7 @@ struct EternalFileModal: View {
                     .font(Typography.microBold)
                     .tracking(0.8)
                     .foregroundStyle(Palette.textTertiary)
-                InfoTip(text: "General runs work as before. Performance runs measure the project's eight curated perf dimensions every iteration and refuse to close the iteration until [PERF-OK] is in the transcript. The worker auto-detects the project's stack (Rust, Swift, Node, Python, Go, polyglot) and uses the universal IMPROVE ladder + EVAL stencils from bench/PERF_KNOBS.md.")
+                InfoTip(text: "Performance runs must pass the perf gate before an iteration can close.")
             }
             HStack(spacing: 8) {
                 kindButton(label: "General", value: "general")
@@ -245,11 +245,11 @@ struct EternalFileModal: View {
     private var kindSubtitle: String {
         switch kind {
         case "perf":
-            return "Performance step active. Each iteration runs perf-suite (algorithmic complexity, alloc count, critical-path ops, IO syscalls, DB query cost, cross-process roundtrips, cold-start ops, steady-state RSS ratio) and scores against the project's all-time-best baseline at .tado/perf-baselines/<project>.json. The worker MUST clear the perf gate ([PERF-OK]) before printing [SPRINT-DONE] or ETERNAL-DONE. Same-turn pay-back required on regression."
+            return "Performance gate active. Each iteration must emit [PERF-OK] before finishing."
         case "sprint":
-            return "Sprint rules optimization active. Each iteration proposes ONE change to sprint_rules.txt (the methodology under optimization), records a measured row in sprint-data.json, and runs sprint-gate.sh. The gate computes SprintSuccessScore = (points_completed/total_points_planned*100) + (code_review_passes*2) - (bugs_found_after_sprint*10) + (developer_satisfaction_score*5) and ratchets the all-time-best baseline at .tado/sprint-baselines/<project>.json. Per-component guards: bugs cannot rise; reviews cannot drop. The worker MUST clear the sprint gate ([SCORE-OK]) before printing [SPRINT-DONE] or ETERNAL-DONE."
+            return "Sprint gate active. Each iteration must emit [SCORE-OK] before finishing."
         default:
-            return "Default Eternal behavior — the architect designs the brief, the worker iterates per the chosen mode, no gate active."
+            return "Default Eternal behavior. No gate active."
         }
     }
 
@@ -273,7 +273,7 @@ struct EternalFileModal: View {
                     .font(Typography.microBold)
                     .tracking(0.8)
                     .foregroundStyle(Palette.textTertiary)
-                InfoTip(text: "Which CLI runs the architect + worker. Claude Code uses --permission-mode auto / bypassPermissions for non-stop runs. Codex uses --ask-for-approval never --sandbox danger-full-access. Both engines work for Normal (per-turn) AND Continuous (one-session) loops.")
+                InfoTip(text: "Choose the CLI for the architect and worker.")
             }
             HStack(spacing: 8) {
                 engineButton(label: "Claude Code", value: "claude")
@@ -289,13 +289,13 @@ struct EternalFileModal: View {
 
     private var engineSubtitle: String {
         if engine == "codex" && loopKind == "internal" {
-            return "Continuous Codex: one interactive `codex` session stays alive for the run. Tado's idle-injection re-fires the continue prompt every time the session goes idle. Codex's `--ask-for-approval never --sandbox danger-full-access` keeps the worker non-stop. There's no `/loop` secondary driver — Codex doesn't have one — so the idle injection is the only driver."
+            return "Continuous Codex keeps one session alive and resumes it when idle."
         } else if engine == "codex" {
-            return "Codex runs through the Tado embed shim plus `--ask-for-approval never --sandbox danger-full-access` so the worker never stalls on an approval prompt. Architect, worker, and interventor all use your Codex model + effort settings."
+            return "Codex uses your Codex model and effort settings."
         } else if loopKind == "internal" {
-            return "Continuous Claude: one interactive `claude --permission-mode auto` session, with Tado's idle injection AND `/loop 30s …` as parallel drivers. Requires Opus 4.7 + Bootstrap Claude auto mode on the project."
+            return "Continuous Claude keeps one auto-mode session alive."
         } else {
-            return "Claude Code runs with `--permission-mode auto` / `bypassPermissions` per-iteration. Architect, worker, and interventor all use your Claude model + effort settings."
+            return "Claude uses your Claude model and effort settings."
         }
     }
 
@@ -327,7 +327,7 @@ struct EternalFileModal: View {
                 .font(Typography.microBold)
                 .tracking(0.8)
                 .foregroundStyle(Palette.textTertiary)
-            Text("Say in plain language what you want. A few sentences is fine — the Eternal Architect (Opus 4.7 max) structures it for you.")
+            Text("Describe the goal in plain language.")
                 .font(Typography.bodySm)
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -369,7 +369,7 @@ struct EternalFileModal: View {
                 .font(Typography.microBold)
                 .tracking(0.8)
                 .foregroundStyle(Palette.textTertiary)
-            Text("Claude outputs this exact string on its own line when the task is fully done. The Stop hook watches for it.")
+            Text("The worker prints this exact line when done.")
                 .font(Typography.bodySm)
                 .foregroundStyle(Palette.textSecondary)
             TextField("ETERNAL-DONE", text: $marker)
@@ -391,7 +391,7 @@ struct EternalFileModal: View {
                     .font(Typography.microBold)
                     .tracking(0.8)
                     .foregroundStyle(Palette.textTertiary)
-                InfoTip(text: "Normal: fresh `claude -p` spawns every turn via the eternal-loop wrapper. Cheap tokens, no mid-turn memory (each iteration re-reads crafted.md + progress.md). Default and reliable. Continuous: one interactive `claude` session stays alive for the whole run. Context grows and auto-compacts; Tado injects a \"continue\" prompt on idle and installs `/loop` as backup. Requires auto mode — Bootstrap the project first.")
+                InfoTip(text: "Normal starts fresh each turn. Continuous keeps one session alive.")
             }
             HStack(spacing: 8) {
                 loopKindButton(label: "Normal (per-turn)", value: "external")
@@ -412,13 +412,13 @@ struct EternalFileModal: View {
 
     private var loopKindSubtitle: String {
         if loopKind == "internal" && engine == "codex" {
-            return "Continuous Codex: one interactive `codex` session stays alive for the run; Tado's idle-injection re-fires the continue prompt on every `.needsInput`. Codex doesn't have an equivalent of Claude's `/loop` secondary driver, so the idle injection is the only driver. Works without any Bootstrap step — `--ask-for-approval never --sandbox danger-full-access` is wired in automatically."
+            return "One Codex session stays alive and resumes when it needs input."
         } else if loopKind == "internal" {
-            return "Uses `--permission-mode auto` — Claude Code's classifier-gated autonomy mode, available for Opus 4.7 on Max/Teams/Enterprise plans. A classifier judges each tool call so the worker runs without babysitting. Run \"Bootstrap Claude auto mode\" from the project ⋯ menu first to install the required settings. Architect and worker both follow your Settings model + effort picks — works best with Opus 4.7 + Auto effort selected; smaller models or non-auto effort can stall on the auto-mode classifier."
+            return "Requires Claude auto mode. Bootstrap the project first."
         } else if engine == "codex" {
-            return "Fresh `codex \"<prompt>\"` per turn via the eternal-loop.sh wrapper. Architect and worker both follow your Codex model + effort settings; `--ask-for-approval never --sandbox danger-full-access` is wired in automatically."
+            return "Starts a fresh Codex turn each iteration."
         } else {
-            return "Fresh `claude -p` per turn via the eternal-loop.sh wrapper. Architect and worker both follow your Settings model + effort picks; the bypass toggle below controls per-turn `--dangerously-skip-permissions`."
+            return "Starts a fresh Claude turn each iteration."
         }
     }
 
@@ -448,7 +448,7 @@ struct EternalFileModal: View {
                     .font(Typography.microBold)
                     .tracking(0.8)
                     .foregroundStyle(skipPermissions ? Palette.success : Palette.warning)
-                InfoTip(text: "Passes --dangerously-skip-permissions to the external-mode `claude -p` wrapper on every turn. On (default): agent runs non-stop without permission prompts. Off: agent pauses on any tool Claude considers dangerous, which will stall an eternal run — you almost certainly don't want this. Has no effect on Continuous mode (that uses --permission-mode auto regardless).")
+                InfoTip(text: "Skips Claude permission prompts in Normal mode. Continuous mode uses auto mode.")
             }
 
             Spacer()

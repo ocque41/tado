@@ -23,7 +23,7 @@ struct RelayEternalView: View {
             RelayPageHead(
                 kicker: "AGENTS — ETERNAL",
                 title: "Performance + sprint, on a schedule.",
-                lead: "The Eternal step measures the SprintSuccessScore + perf composite over your project's `sprint_rules.txt`. Baselines ratchet on improvement. No watchdog, no auto-retry.",
+                lead: "Long-running project loops with perf and sprint gates. No watchdogs or auto-retries.",
                 h1Size: 52
             )
 
@@ -50,7 +50,7 @@ struct RelayEternalView: View {
                 pendingDelete = nil
             }
         } message: { run in
-            Text("Removes the run row, its on-disk state under `.tado/eternal/runs/\(run.shortID)/`, and any active flags. This cannot be undone.")
+            Text("Deletes the run row and `.tado/eternal/runs/\(run.shortID)/`. This cannot be undone.")
         }
     }
 

@@ -17,7 +17,7 @@ struct RelayTeamsView: View {
             RelayPageHead(
                 kicker: "STRUCTURE — TEAMS",
                 title: "\(teams.count) \(teams.count == 1 ? "team" : "teams") of named agents.",
-                lead: "Group agents into named teams for coordinated multi-agent work. Each agent definition lives at `.claude/agents/<name>.md`.",
+                lead: "Group agents into named teams.",
                 h1Size: 52
             )
 

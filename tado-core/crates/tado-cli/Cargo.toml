@@ -1,7 +1,7 @@
 #
 # tado-cli — coordinator-driven Tado CLIs.
 #
-# Seven binaries, one shared library:
+# Nine binaries, one shared library:
 #
 #   tado-projects   — list / resolve project names → root paths
 #   tado-eternal    — propose/status/crafted/accept/reject/list/stop
@@ -13,6 +13,8 @@
 #   tado-cowork     — fire `claude://cowork/new?q=…&folder=…` so
 #                     `ProcessSpawner` can launch a Cowork session
 #                     against the bundled Tado-Cowork plugin
+#   tado-deploy     — enqueue visible canvas agent spawn requests
+#   tado-tui        — terminal UI for active Tado work
 #
 # Read-only operations (list, status, crafted) hit the on-disk
 # index directly: `<storage-root>/projects.json` for projects, and
@@ -71,9 +73,15 @@ path = "src/bin/tado-cowork.rs"
 name = "tado-deploy"
 path = "src/bin/tado-deploy.rs"
 
+[[bin]]
+name = "tado-tui"
+path = "src/bin/tado-tui.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.29.0"
+ratatui = "0.30.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

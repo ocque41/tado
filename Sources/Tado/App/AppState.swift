@@ -15,20 +15,13 @@ enum ViewMode: String, CaseIterable, Equatable {
     case todos
     case extensions
 
-    // Relay-redesign nav cases — added so the top-bar / rail can
-    // surface the eleven slots the brief enumerates (Todos / Canvas /
-    // Kanban / Projects / Teams / Sessions / Dispatch / Knowledge /
-    // Eternal / Pets / Settings). The new cases either open the
-    // existing extension window (Knowledge → Dome window, Pets →
-    // Pets window) or fall back to a related core surface until a
-    // dedicated page lands in subsequent redesign phases.
+    // Relay nav cases.
     case kanban
     case teams
     case sessions
     case dispatch
     case knowledge
     case eternal
-    case pets
     case settings
 
     var label: String {
@@ -44,7 +37,6 @@ enum ViewMode: String, CaseIterable, Equatable {
         case .dispatch:   "Dispatch"
         case .knowledge:  "Knowledge"
         case .eternal:    "Eternal"
-        case .pets:       "Pets"
         case .settings:   "Settings"
         }
     }
@@ -62,7 +54,6 @@ enum ViewMode: String, CaseIterable, Equatable {
         case .dispatch:   "arrow.triangle.branch"
         case .knowledge:  "books.vertical"
         case .eternal:    "infinity"
-        case .pets:       "pawprint"
         case .settings:   "gearshape"
         }
     }

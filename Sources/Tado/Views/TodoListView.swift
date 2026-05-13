@@ -80,7 +80,7 @@ struct TodoListView: View {
 
             SectionRail(
                 label: "Compose",
-                count: isForwarding ? "forward mode · ⌘⏎ to send" : "scoped · global"
+                count: isForwarding ? "Forwarding" : "Global"
             ) {
                 composer
                     .padding(.horizontal, 24)
@@ -136,6 +136,14 @@ struct TodoListView: View {
         if activeTodos.isEmpty { return "Nothing open" }
         let inflight = activeTodos.filter { $0.status == .running }.count
         return "\(activeTodos.count) total · \(inflight) in-flight · \(awaitingCount) awaiting"
+    }
+
+    private var projectFooterLabel: String {
+        if let id = appState.activeProjectID,
+           let project = projects.first(where: { $0.id == id }) {
+            return "PROJECT · \(project.name)"
+        }
+        return "GLOBAL"
     }
 
     // MARK: - Forward banner
@@ -225,7 +233,7 @@ struct TodoListView: View {
 
             // Footer
             HStack(spacing: 8) {
-                Text("Type a todo, ⌘⏎ to submit · ⇧⏎ for newline")
+                Text(projectFooterLabel)
                     .font(Font.system(size: 11, weight: .regular, design: .monospaced))
                     .foregroundStyle(Palette.ink4)
                 Spacer()
@@ -270,7 +278,7 @@ struct TodoListView: View {
     private var editorBody: some View {
         ZStack(alignment: .topLeading) {
             if inputText.isEmpty {
-                Text(isForwarding ? "Type message to forward…" : "What needs to be done?")
+                Text(isForwarding ? "Message" : "New todo")
                     .font(Font.system(size: 12.5, weight: .regular, design: .monospaced))
                     .foregroundStyle(Palette.ink4)
                     .padding(.leading, 14)
@@ -351,11 +359,6 @@ struct TodoListView: View {
             Text("No todos yet")
                 .font(Font.system(size: 14, weight: .semibold))
                 .foregroundStyle(Palette.ink)
-            Text("Type a task above and press ⌘⏎ to spawn its terminal on the canvas. Each todo becomes one tile.")
-                .font(Font.system(size: 12.5, weight: .regular))
-                .foregroundStyle(Palette.ink3)
-                .frame(maxWidth: 540, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
             Text("INBOX  ·  unassigned by default  ·  drag onto a team via the project page to scope it")
                 .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
                 .foregroundStyle(Palette.ink4)
@@ -403,12 +406,6 @@ struct TodoListView: View {
         switch TodoCommand.detect(text) {
         case .coordinator(let brief):
             submitCoordinatorTodo(originalText: text, brief: brief)
-        case .togglePet:
-            PetsCoordinator.shared.toggleVisible()
-            inputText = ""
-        case .hatchPet(let prompt):
-            PetsCoordinator.shared.openHatchSheet(prefilled: prompt)
-            inputText = ""
         case .standardPrompt:
             submitNewTodo(text)
         }

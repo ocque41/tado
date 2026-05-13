@@ -67,7 +67,7 @@ struct DispatchFileModal: View {
             // Markdown editor body
             ZStack(alignment: .topLeading) {
                 if draft.isEmpty {
-                    Text("Describe WHAT you want built and WHY — the goal, constraints, and any known context. You don't need to plan the phases or pick tools.\n\nWhen you hit Accept, a Dispatch Architect agent spawns on the canvas. It will: research the project, break the work into phases, create a dedicated skill per phase via /skill-creator, assign agents, and write the full execution plan to .tado/dispatch/. The run then flips to REVIEW so you can read crafted.md in the Plan Review modal and click Accept to dispatch phase 1.\n\nThe more context you give here (users, stack, priorities, done criteria), the better the plan it builds.")
+                    Text("Describe the goal, constraints, and done criteria. The architect will plan phases for review.")
                         .font(Typography.body)
                         .foregroundStyle(Palette.textTertiary)
                         .padding(.horizontal, 16)
@@ -149,7 +149,7 @@ struct DispatchFileModal: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will remove this run's plan.json and phase files, then spawn a new architect terminal on the canvas.")
+            Text("Deletes this run's plan files and starts a new architect tile.")
         }
     }
 

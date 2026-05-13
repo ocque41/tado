@@ -79,7 +79,7 @@ struct ProjectDispatchSection: View {
         )) {
             Button("OK", role: .cancel) { showPlanNotReadyRunID = nil }
         } message: {
-            Text("The Dispatch Architect has not finished writing this run's plan yet. Watch its terminal on the canvas — once plan.json is on disk, try Start again.")
+            Text("The dispatch plan is not ready yet. Try Start after plan.json is written.")
         }
         .alert("Delete \(runPendingDelete?.label ?? "dispatch")?", isPresented: Binding(
             get: { runPendingDelete != nil },
@@ -97,7 +97,7 @@ struct ProjectDispatchSection: View {
                 runPendingDelete = nil
             }
         } message: { run in
-            Text("Any live architect or phase tiles for this dispatch will be killed and the run's on-disk directory will be removed. Per-phase skill/agent files under `.claude/` stay — they're namespaced by run short-id and don't collide with new dispatches.")
+            Text("Kills live dispatch tiles and removes the run directory. Generated `.claude/` files stay.")
         }
     }
 
@@ -140,7 +140,7 @@ struct ProjectDispatchSection: View {
                 .foregroundStyle(Palette.ink)
                 .padding(.bottom, 4)
 
-            Text("Describe a multi-phase super-project. Tado's Dispatch Architect will design the plan and launch the phases on your canvas.")
+            Text("Describe the multi-phase goal.")
                 .font(Font.system(size: 12.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .frame(maxWidth: 520, alignment: .leading)

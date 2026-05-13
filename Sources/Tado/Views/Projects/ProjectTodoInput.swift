@@ -9,8 +9,7 @@ import SwiftData
 ///   - Pickers row (team + agent) — appears only when the project has
 ///     teams or discovered agents.
 ///   - Multi-line text editor, grows to 8 lines max before scrolling.
-///   - Bottom row — Cmd+Return hint on the right when the buffer is
-///     non-empty.
+///   - Bottom row with project context and actions.
 ///
 /// Submission (Cmd+Return or onKeyPress) resolves the terminal engine
 /// from the agent's location (.claude/agents → claude, .codex/agents
@@ -68,7 +67,7 @@ struct ProjectTodoInput: View {
         // Composer chrome follows the design's `.composer` block:
         // a header strip with tabs + encoding label, a tall textarea
         // body (or library pane on the Templates / Snippets tab),
-        // and a footer with kbd hints + Cancel/Submit.
+        // and a footer with project context + Cancel/Submit.
         VStack(alignment: .leading, spacing: 0) {
             composerHeader
             pickerRowIfAvailable
@@ -186,7 +185,7 @@ struct ProjectTodoInput: View {
 
     private var composerFooter: some View {
         HStack(spacing: 8) {
-            Text("Type a todo, ⌘⏎ to submit · ⇧⏎ for newline")
+            Text("PROJECT · \(project.name)")
                 .font(Font.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundStyle(Palette.ink4)
                 .lineLimit(1)
@@ -307,15 +306,9 @@ struct ProjectTodoInput: View {
     private var footerRow: some View {
         HStack {
             Spacer()
-            if inputText.isEmpty {
-                Text("Type a todo, ⌘↩ to submit")
-                    .font(Typography.monoMicro)
-                    .foregroundStyle(Palette.textTertiary)
-            } else {
-                Text("⌘↩ to submit")
-                    .font(Typography.monoMicro)
-                    .foregroundStyle(Palette.textSecondary)
-            }
+            Text("PROJECT · \(project.name)")
+                .font(Typography.monoMicro)
+                .foregroundStyle(Palette.textTertiary)
         }
     }
 

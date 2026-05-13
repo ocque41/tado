@@ -11,7 +11,7 @@ import SwiftUI
 
 struct RelayTitlebarAccessory: View {
     /// Surface name to display center-stage. Pass `nil` for windows
-    /// that don't track a primary surface (Pets, etc.) — the title
+    /// that don't track a primary surface — the title
     /// then renders just "TADO".
     let surfaceName: String?
 

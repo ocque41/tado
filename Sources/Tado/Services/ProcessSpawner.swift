@@ -151,24 +151,28 @@ enum ProcessSpawner {
     }
 
     /// Engine-aware sanitizer. Runs the universal `"auto"` filter, then
-    /// consults `CLICapabilities` to drop any `(--flag, value)` pair
-    /// whose value is documented to be invalid by the installed CLI's
-    /// own `--help` text.
+    /// consults cached `CLICapabilities` data to drop any `(--flag,
+    /// value)` pair whose value is documented to be invalid by the
+    /// installed CLI's own `--help` text.
     ///
     /// Why a second arity instead of a single helper: the engine-
     /// agnostic call sites (e.g. `codexExecCommand` after the embed
     /// shim is composed, mixed-engine tests) are content with the
     /// universal filter. The engine-aware call sites (every spawn that
     /// has already chosen a CLI) get the additional safety net.
-    /// `CLICapabilities.shouldRejectValue` returns `false` whenever the
-    /// cache hasn't probed yet — this method NEVER drops a flag because
-    /// the cache is empty, only when the CLI explicitly told us the
-    /// value would be rejected.
-    @MainActor
-    static func sanitizeFlags(_ flags: [String], engine: TerminalEngine) -> [String] {
+    /// The spawn path must never block on `claude --help` or
+    /// `codex --help`. If the cache is cold, this method kicks off a
+    /// background probe and proceeds with the original flags.
+    static func sanitizeFlags(
+        _ flags: [String],
+        engine: TerminalEngine,
+        startProbeIfMissing: Bool = true
+    ) -> [String] {
         let universal = sanitizeFlags(flags)
         let caps = CLICapabilities.shared
-        caps.probe(engine)
+        if startProbeIfMissing {
+            caps.prewarm(engine)
+        }
         var out: [String] = []
         var i = 0
         while i < universal.count {
@@ -176,16 +180,18 @@ enum ProcessSpawner {
             if token.hasPrefix("--"), i + 1 < universal.count {
                 let value = universal[i + 1]
                 if caps.shouldRejectValue(engine: engine, flag: token, value: value) {
-                    EventBus.shared.publish(
-                        .spawnFlagDropped(
-                            sessionID: nil,
-                            title: "pre-spawn sanitize",
-                            flag: token,
-                            value: value,
-                            engine: engine.rawValue,
-                            projectName: nil
+                    Task { @MainActor in
+                        EventBus.shared.publish(
+                            .spawnFlagDropped(
+                                sessionID: nil,
+                                title: "pre-spawn sanitize",
+                                flag: token,
+                                value: value,
+                                engine: engine.rawValue,
+                                projectName: nil
+                            )
                         )
-                    )
+                    }
                     i += 2
                     continue
                 }
@@ -570,6 +576,7 @@ enum ProcessSpawner {
                                                     \u{2014} scoped Dome knowledge from canvas agents
           tado-kanban {list, move <todo-id> <column-key>, add-column --title <text>}
                                                     \u{2014} per-project Kanban board (cards + columns)
+          tado-tui                                  \u{2014} interactive terminal work queue for the human operator
 
         **Target resolution** (priority order, same for `tado-read` and `tado-send`):
           1. Exact UUID
@@ -1045,7 +1052,7 @@ enum ProcessSpawner {
         """
         You are bootstrapping the bundled `tado-cowork-plugin` into the user's Claude \
         install. After this runs, Claude Cowork (and any Claude Code session) will see \
-        Tado's full 71-tool MCP surface (16 `tado_*` + 18 `dome_*` + 41 `tado_use_*`) \
+        Tado's full MCP surface (`tado_*`, `dome_*`, and 44 `tado_use_*` tools) \
         plus a teaching skill (`cowork-tado-tools`) and an agent persona \
         (`cowork-canvas-coworker`). Project: "\(projectName)" at \(projectRoot).
 

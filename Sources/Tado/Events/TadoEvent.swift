@@ -79,6 +79,16 @@ struct TadoEvent: Identifiable, Codable, Equatable {
 /// Typed factories so call sites stay concise and can't typo an event
 /// `type` string. Group per subsystem; keep signatures boring.
 extension TadoEvent {
+    static func terminalSpawnRequested(sessionID: UUID, title: String, engine: String, projectName: String?) -> TadoEvent {
+        TadoEvent(
+            type: "terminal.spawnRequested",
+            severity: .info,
+            source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
+            title: "Spawn requested: \(title)",
+            body: "Engine: \(engine)"
+        )
+    }
+
     static func terminalSpawned(sessionID: UUID, title: String, projectName: String?) -> TadoEvent {
         TadoEvent(
             type: "terminal.spawned",
@@ -96,6 +106,38 @@ extension TadoEvent {
             source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
             title: "Spawn failed: \(title)",
             body: reason
+        )
+    }
+
+    static func terminalSpawnPreflightFailed(
+        sessionID: UUID,
+        title: String,
+        phase: String,
+        reason: String,
+        projectName: String?
+    ) -> TadoEvent {
+        TadoEvent(
+            type: "terminal.spawnPreflightFailed",
+            severity: .error,
+            source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
+            title: "Spawn preflight failed: \(phase)",
+            body: "\(title): \(reason)"
+        )
+    }
+
+    static func terminalSpawnPhaseSlow(
+        sessionID: UUID,
+        title: String,
+        phase: String,
+        elapsedSeconds: Double,
+        projectName: String?
+    ) -> TadoEvent {
+        TadoEvent(
+            type: "terminal.spawnPhaseSlow",
+            severity: .warning,
+            source: Source(kind: "terminal", sessionID: sessionID, projectName: projectName),
+            title: "Slow spawn phase: \(phase)",
+            body: "\(title) has spent \(String(format: "%.1f", elapsedSeconds))s in \(phase)."
         )
     }
 

@@ -411,7 +411,7 @@ struct CalendarSurface: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Palette.ink)
             }
-            Text("Spawn a terminal or run an automation. Events fan in from `EventBus.shared` and land here grouped by day.")
+            Text("Terminal and automation events appear here by day.")
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .frame(maxWidth: 540, alignment: .leading)

@@ -7,80 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-14
+
+Tado v1.1.0 ships the operator-facing work layer: a native Agent View in
+the macOS app, a terminal-first `tado` command distributed through npm,
+and a wider Tado Use control plane for following up on live tiles,
+Eternal runs, and Dispatch runs without leaving the current flow.
+
 ### Added
 
-- **Sprint Step (`EternalRun.kind = "sprint"`)** — a third kind of
-  Eternal run alongside `general` and `perf`. Mirrors the perf gate's
-  same-turn pay-back contract but optimizes a project's *sprint
-  methodology* instead of its code. Inspired by an external "sprint
-  rules optimizer" prompt: turn the standard-issue retrospective
-  ("we sort of had a good sprint") into an engineering discipline
-  ("we hit SprintSuccessScore = 124.3 vs 117.0 last week, ratchet
-  locked").
-  - Adds [`tado-core/crates/sprint-suite/`](tado-core/crates/sprint-suite/)
-    — a new Rust workspace member modeled on perf-suite. Six
-    subcommands (`detect / measure / score / propose / baseline
-    init|update / explain`) with the same single-line stdout
-    contract the bash gate parses:
-        `SCORE: PASS composite=<n>`
-        `SCORE: BASELINE-INIT composite=<n>`
-        `SCORE: REGRESSION delta=<d> hot=<sub> composite=<n>`
-        `SCORE: NO-DATA-DETECTED`
-    The `[SCORE-OK] composite=<n>` marker is printed by the bash
-    hook only on PASS / BASELINE-INIT / NO-DATA, never on regression.
-  - Implements the **SprintSuccessScore formula** verbatim from the
-    user's original prompt:
-        `score = (points_completed / total_points_planned * 100)
-              + (code_review_passes * 2)
-              - (bugs_found_after_sprint * 10)
-              + (developer_satisfaction_score * 5)`
-    Weights are overridable per-row via an optional `weights` field
-    in `sprint-data.json`. Per-sprint scores cap at `[-200, 500]`
-    so a junk row can't poison the running ratchet.
-  - **Per-component minimum guard**: `bugs_found_after_sprint`
-    cannot rise above baseline; `code_review_passes` cannot drop
-    below baseline. Even a higher composite that breaks either
-    guard still REGRESSES, identical-shape to perf-suite's
-    PER_COMPONENT_MIN_GUARD.
-  - **Ratcheting per-project baseline** at
-    `<project>/.tado/sprint-baselines/<safe-name>.json`. Updated
-    only on PASS via `tado_settings::write_json` (atomic store:
-    temp + fsync + rename). History bounded at 50 entries. Machine-
-    class drift detection (apple-silicon-macos / intel-macos /
-    linux / windows) — protects shared-team baselines from silent
-    drift across machines; override via `TADO_SPRINT_ALLOW_DRIFT=1`.
-  - **Bash gate** at `.tado/eternal/hooks/sprint-gate.sh` (mirrored
-    canonical in `EternalService.swift::sprintGateScript`) — fail-
-    safe, no `set -e`, three sub-cases (PASS/BASELINE-INIT,
-    REGRESSION, NO-DATA). On regression auto-generates
-    `sprint-proposals.md` with up to 8 candidate rule refinements
-    chosen by which sub-metric regressed (bug spike → reviewer rule;
-    velocity drop → task-splitting; review drop → async-review
-    window; satisfaction drop → meeting-discipline rules).
-  - **Worker skill** at
-    [`.claude/skills/eternal-sprint-step/SKILL.md`](.claude/skills/eternal-sprint-step/SKILL.md)
-    — same shape as the v0.19 perf step skill. Tells the worker
-    when to read `sprint_rules.txt` + `sprint-data.json`, the
-    formula, the per-iteration protocol (propose ONE rule change →
-    edit rules → record measured row → run gate → branch on
-    result), and the hard rules (never edit `prepare.py` / formula
-    in the same iteration as it scores; never inflate data rows to
-    game the gate; never print `[SPRINT-DONE]` / `ETERNAL-DONE`
-    without `[SCORE-OK]` already in this turn's transcript).
-  - **Architect addendum** generates a `## SPRINT RULES OPTIMIZATION`
-    section in `crafted.md` with the active formula, baseline
-    composite, per-component guards, and a five-rung *rules-impact
-    stratum* for IMPROVE recommendations: Hygiene → Refinement →
-    Coverage → Reduction → Process → Structural. Architect also
-    seeds `sprint_rules.txt`, `sprint-data.json`, and a reference
-    `prepare.py` scorer in the project root on first run.
-  - **State surface**: `EternalState` gains four sprint fields
-    (`sprintCycles`, `lastSprintScore`, `sprintRegressionDelta`,
-    `lastSprintReportPath`) plus two new `PhaseKind` cases
-    (`sprintPending`, `sprintRegressed`) — all optional / default-
-    zero so old `state.json` files decode unchanged.
-  - 12/12 sprint-suite unit tests pass. `cargo build --release -p
-    sprint-suite` lands a 4.6 MB single-binary suite.
+- **Tado Agent View** — replaces the Sessions slot with one keyboard-
+  driven view of active tiles, live todos, Eternal runs, and Dispatch
+  runs. Rows sort by urgency, the right inspector shows details without
+  opening a modal, and the bottom prompt bar sends follow-ups to the
+  selected live target.
+- **Terminal `tado` command** — adds a Rust `tado-tui` binary and the
+  public npm package `@cumulus_cloud/tado@0.1.0`. Installing the package
+  gives users the `tado` command, with prebuilt macOS arm64 and x64
+  binaries bundled in the package.
+- **Tado Use interventions** — adds `tado_use.dispatch_intervene`,
+  reuses `tado_use.eternal_intervene`, and teaches `todo_create` an
+  optional `engine: "claude" | "codex"` field so agents can create the
+  right kind of work from the control plane.
+- **Sprint Step (`EternalRun.kind = "sprint"`)** — adds the sprint-suite
+  Rust crate, sprint gate, SprintSuccessScore formula, ratcheting
+  project baselines, Sprint state fields, and worker instructions for
+  optimizing sprint methodology with the same visible gate discipline as
+  the Eternal performance step.
+- **Cowork engine** — adds Claude Cowork as a third engine path with a
+  URL-scheme launcher, file-based output polling, and a bundled Cowork
+  plugin that exposes Tado's MCP and Tado Use tools to Claude Desktop.
+- **Kanban system** — adds per-project Kanban state, inbox mirroring,
+  board UI, and the typed Rust `tado-kanban` CLI so Dispatch and project
+  planning can share one local board format.
+- **Spawn diagnostics** — adds signposts and diagnostic storage around
+  the tile spawn path so slow or frozen launches can be diagnosed from
+  real timing data instead of guesswork.
+- **Relay redesign work** — carries forward the app-shell, command
+  palette, Explore panel, project detail, Sessions, Settings, onboarding,
+  titlebar, and focus-ring redesign work from the post-1.0 stream.
+
+### Changed
+
+- **Tado Use bridge contract** — documents and exposes 44 `tado_use_*`
+  tools across the Swift bridge, bootstrap prompts, Cowork plugin docs,
+  and app architecture docs.
+- **CLI installation** — installs `tado-tui` beside the existing local
+  Tado helper CLIs so app-launched agents and shell users see the same
+  command surface.
+- **Agent bootstrap text** — teaches spawned agents about `tado-tui`,
+  dispatch intervention, and the expanded Tado Use tool shapes.
+- **Release package metadata** — makes the npm package public, MIT
+  licensed, macOS-only, and explicit about token-based publishing through
+  environment variables.
+
+### Fixed
+
+- **Agent follow-up targeting** — routes live tile rows through
+  `TerminalManager.forwardInput`, Eternal rows through the run inbox,
+  Dispatch rows through the active phase tile, and plain todos to
+  spawn/focus actions instead of pretending every row is promptable.
+- **Dispatch intervention failures** — returns a visible `no_active_tile`
+  error when a Dispatch run no longer has a live target instead of
+  silently dropping the prompt.
+- **Spawn-time preamble latency** — bounds the Dome preamble fetch with a
+  short soft deadline so tile launch is not held hostage by slow context
+  generation.
+- **Canvas tile lifecycle** — keeps active PTYs decoupled from tile
+  virtualization so navigation and filtering do not kill running work.
+
+### Removed
+
+- **Legacy Pets extension sources** — finishes the earlier Pets removal
+  by taking stale unregistered source and tests out of the SwiftPM build,
+  which removes duplicate/stale symbols and restores a clean Swift suite.
 
 ## [1.0.0] - 2026-05-06
 

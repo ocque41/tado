@@ -812,7 +812,17 @@ final class IPCBroker {
     /// or file at the destination first so a stale build never
     /// shadows a fresh one.
     nonisolated private func installRustCLIs(to localBin: URL) {
-        let names = ["tado-projects", "tado-eternal", "tado-dispatch", "tado-bootstrap", "tado-system", "tado-kanban", "tado-cowork", "tado-deploy"]
+        let names = [
+            "tado-projects",
+            "tado-eternal",
+            "tado-dispatch",
+            "tado-bootstrap",
+            "tado-system",
+            "tado-kanban",
+            "tado-cowork",
+            "tado-deploy",
+            "tado-tui",
+        ]
 
         // Prefer release build (the Makefile's `make dev` produces
         // it); fall back to debug for everyday `swift run` cycles

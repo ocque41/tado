@@ -5,7 +5,7 @@
 //
 // - Top section (60px tall): brand-mark dot only, centered, with
 //   bottom hairline. Click → Explore (Phase 4) or Details for now.
-// - Middle section: 11 numeral cells, mono 11px, hover → tooltip
+// - Middle section: numeral cells, mono 11px, hover → tooltip
 //   pill, active → 2px×18px terracotta bar at left edge.
 // - Bottom section (60px tall): ⌘K hint, top hairline. Click →
 //   palette (Phase 3 binding).
@@ -134,8 +134,6 @@ struct RelayRailNav: View {
         switch mode {
         case .knowledge:
             openWindow(id: ExtensionWindowID.string(for: DomeExtension.manifest.id))
-        case .pets:
-            openWindow(id: ExtensionWindowID.string(for: PetsExtension.manifest.id))
         case .settings:
             appState.showSettings = true
         default:

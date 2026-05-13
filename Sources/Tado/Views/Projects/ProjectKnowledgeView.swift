@@ -310,7 +310,7 @@ struct ProjectKnowledgeView: View {
                 )
                 .disabled(purgeBusy || (codebaseCount == 0 && projectNoteCount == 0))
             }
-            Text("Each reset takes a backup snapshot first (Settings → Storage → Backups can restore). Project files on disk are untouched.")
+            Text("Each reset creates a backup first. Project files are untouched.")
                 .font(Typography.monoMicro)
                 .foregroundStyle(Palette.ink4)
         }

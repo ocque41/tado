@@ -357,7 +357,7 @@ struct AgentNotesSurface: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Palette.ink)
                 }
-                Text("Agent writes land via the dome-mcp `dome_note` tool. The write barrier blocks UI edits to `agent.md`, so this surface is read-only by design.")
+                Text("Agent notes are read-only in the UI.")
                     .font(.system(size: 12.5, weight: .regular))
                     .foregroundStyle(Palette.ink3)
                     .frame(maxWidth: 540, alignment: .leading)
@@ -404,7 +404,7 @@ struct AgentNotesSurface: View {
                         variant: .ghost,
                         action: { snapshotAgentBody = current }
                     )
-                    .help("Reset the diff baseline to the current agent body — useful as a 'I've read what the agent wrote' bookmark.")
+                    .help("Reset the diff baseline to the current agent note.")
                     .accessibilityLabel("Mark current agent body as read")
                 }
             }

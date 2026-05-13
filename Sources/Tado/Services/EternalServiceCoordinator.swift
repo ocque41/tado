@@ -67,7 +67,7 @@ extension EternalService {
     ) -> EternalRun {
         // Brackets the SwiftData insert + save + spawnArchitect handoff.
         // The save() is the @Query-invalidation moment — every observer
-        // (Projects detail, Cross-Run Browser, Pets popover) re-evaluates
+        // (Projects detail, Cross-Run Browser) re-evaluates
         // its body. If any of them does sync IO inside body, that work
         // shows up as a child interval inside this one.
         SpawnSignposts.event("coordinator.propose.entry")

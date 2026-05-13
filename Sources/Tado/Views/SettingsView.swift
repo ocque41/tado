@@ -45,7 +45,7 @@ struct SettingsView: View {
                     } label: {
                         labelWithTip(
                             "When you press Enter, run:",
-                            "Which CLI spawns when you press Enter on a new todo. Claude and Codex share the same tile plumbing but have different flags, models, and agent formats."
+                            "CLI used for new todo tiles."
                         )
                     }
                     .pickerStyle(.radioGroup)
@@ -63,7 +63,7 @@ struct SettingsView: View {
                         } label: {
                             labelWithTip(
                                 "Permission mode:",
-                                "How Claude handles tool-permission prompts. Ask pauses the tile for each tool; Delegate lets the agent auto-approve within its sandbox; Skip disables prompts entirely (use only with Full Auto enabled upstream)."
+                                "How Claude handles tool prompts."
                             )
                         }
                         .pickerStyle(.menu)
@@ -94,7 +94,7 @@ struct SettingsView: View {
                         } label: {
                             labelWithTip(
                                 "Cowork mode:",
-                                "Async task: the tile waits for Cowork to write its result file (`<project>/.tado/cowork/<run-id>.md`) and renders it back. Interactive: Tado opens the Desktop app's Cowork tab and the tile shows a one-shot status line — you continue inside the app."
+                                "Async waits for a result file. Interactive opens Cowork."
                             )
                         }
                         .pickerStyle(.menu)
@@ -144,7 +144,7 @@ struct SettingsView: View {
                         } label: {
                             labelWithTip(
                                 "Cowork model (hint):",
-                                "Cowork picks the model from its own Desktop app settings — Tado's selection is a hint the bundled plugin's preamble passes to Cowork. It does NOT override the Desktop app's configured model. Pick `Auto` to let the Desktop app decide."
+                                "Hint only. Claude Desktop still chooses the model."
                             )
                         }
                         .pickerStyle(.menu)
@@ -194,7 +194,7 @@ struct SettingsView: View {
                         } label: {
                             labelWithTip(
                                 "Cowork effort (hint):",
-                                "Cowork has no `--effort` flag — it picks depth from its own internal heuristics + your Desktop app account tier. Tado's pick is a hint the bundled plugin's preamble surfaces to Cowork."
+                                "Hint only. Cowork has no effort flag."
                             )
                         }
                         .pickerStyle(.menu)
@@ -209,7 +209,7 @@ struct SettingsView: View {
                         )) {
                             labelWithTip(
                                 "Fullscreen Claude UI",
-                                "Switches Claude Code into its fullscreen (alt-screen) UI. Tile-level scrollback is replaced by Claude's own scrollable message history — use the wheel with Mouse enabled to scroll through it. Restart the session to apply."
+                                "Uses Claude's fullscreen terminal UI. Restart to apply."
                             )
                         }
                         Toggle(isOn: Binding(
@@ -218,7 +218,7 @@ struct SettingsView: View {
                         )) {
                             labelWithTip(
                                 "Mouse + clickable UI",
-                                "Forwards mouse events to Claude Code so its fullscreen UI receives clicks and wheel scrolls. Required for the CLI's own scrollback to respond to the wheel."
+                                "Forwards clicks and wheel events to Claude."
                             )
                         }
                         .disabled(!settings.claudeNoFlicker)
@@ -242,7 +242,7 @@ struct SettingsView: View {
                         )) {
                             labelWithTip(
                                 "Allow alternate-screen buffer",
-                                "Codex's alt-screen toggle. Off keeps --no-alt-screen on, which is required for Codex to render correctly in embedded tiles today. Turn on only when testing a Codex build that handles alt-screen."
+                                "Enable only when testing Codex alt-screen support."
                             )
                         }
                     } else {
@@ -251,7 +251,7 @@ struct SettingsView: View {
                         // The actual Cowork-specific surface is the
                         // Bootstrap Cowork plugin button (added below
                         // in its own dedicated section).
-                        Text("Cowork runs inside the Claude Desktop app — no Tado-side display knobs apply. Use Settings → Engine → Bootstrap Cowork plugin to install the Tado tool surface into Cowork.")
+                        Text("Cowork runs in Claude Desktop. Tado display settings do not apply.")
                             .font(.system(size: 11))
                             .foregroundStyle(Palette.textSecondary)
                     }
@@ -264,7 +264,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Cowork-Tado bridge")
                                 .font(.system(size: 12, weight: .semibold))
-                            Text("Tado ships a Claude plugin that exposes its full 71-tool surface (16 `tado_*` + 18 `dome_*` + 41 `tado_use_*`) plus a teaching skill (`cowork-tado-tools`) and an agent persona (`cowork-canvas-coworker`). When installed, Cowork can read/write Dome notes, list/send/read Tado tiles, drive the autonomous control plane — exactly the same surface Claude Code already has via the auto-registered MCP servers.")
+                            Text("Installs the Cowork plugin with 67 tools: Tado, Dome, and Tado Use.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(Palette.textSecondary)
                             HStack(spacing: 8) {
@@ -309,7 +309,7 @@ struct SettingsView: View {
                     } label: {
                         labelWithTip(
                             "Default theme:",
-                            "Theme used for new tiles when random colors is off. Applies background, foreground, and (when the theme supplies one) the ANSI palette."
+                            "Theme for new tiles when random colors are off."
                         )
                     }
                     .pickerStyle(.menu)
@@ -331,7 +331,7 @@ struct SettingsView: View {
                     } label: {
                         labelWithTip(
                             "Terminal font:",
-                            "Only fixed-pitch fonts are listed — proportional faces break cell alignment. Picking a missing font falls back to SF Mono silently."
+                            "Only fixed-pitch fonts are listed."
                         )
                     }
                     .pickerStyle(.menu)
@@ -386,7 +386,7 @@ struct SettingsView: View {
                     ) {
                         labelWithTip(
                             "Grid columns: \(settings.gridColumns)",
-                            "How many tiles fit per canvas row before wrapping. Tile size is fixed (820×540) — this only moves the wrap point. Existing tiles keep their positions; the new column count applies to tiles spawned from now on."
+                            "How many new tiles fit per row before wrapping."
                         )
                     }
                 }
@@ -452,7 +452,7 @@ struct SettingsView: View {
                     Text("Tune Tado.")
                         .font(RelayType.h2(size: 32))
                         .foregroundStyle(RelayPalette.foreground(for: relayTheme))
-                    Text("Engine + model + permission mode the canvas spawns. Everything in this sheet writes to ~/Library/Application Support/Tado/settings/global.json via AtomicStore.")
+                    Text("Default engine, model, permissions, storage, and tools.")
                         .font(Typography.sans(size: 13, weight: .regular))
                         .foregroundStyle(RelayPalette.foreground2(for: relayTheme))
                         .frame(maxWidth: 540, alignment: .leading)
@@ -747,7 +747,7 @@ private struct CodeIndexingSection: View {
                 )) {
                     labelWithTip(
                         "Code indexing & file watching",
-                        "Master switch. OFF stops every active file watcher and prevents new ones from starting; existing chunks stay queryable. ON reattaches watchers for every previously-enabled project."
+                        "Turns project code watchers on or off."
                     )
                 }
                 if !lastResume.isEmpty {
@@ -1111,7 +1111,7 @@ private struct ToolsInspectorSection: View {
     var body: some View {
         Section("MCP tools (developer)") {
             HStack {
-                Text("Every MCP tool exposed by Tado's two stdio bridges. Reference only — invocation happens through the agent client (Claude Desktop, claude-code, etc.).")
+                Text("Read-only list of tools exposed by Tado's MCP bridges.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textTertiary)
                 Spacer()
@@ -1168,12 +1168,12 @@ private struct DangerZoneSection: View {
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
-                Text("This deletes every Tado-owned artifact in the storage root: the Dome vault, settings JSON, user memory, events log, SwiftData cache, and backup tarballs. Files inside your project trees (including each project's `.tado/` folder) are NOT touched.")
+                Text("Deletes Tado storage. Project folders are not touched.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Looking for a per-project reset? Open Project → Knowledge → Danger zone — it can wipe one project's codebase or notes without touching the other projects in this vault.")
+                Text("For one project only, use Project → Knowledge → Danger zone.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1345,7 +1345,7 @@ private struct ProcessHygieneSection: View {
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Tado spawns agent CLIs and MCP bridges in tiles. When a tile is force-quit, when a build crashes mid-spawn, or when the macOS Claude desktop auto-resumes agent-mode sessions, those subprocesses can survive as invisible orphans — accumulating CPU time and holding API connections in the background. The buttons below clean them up safely without touching this running Tado app or your `make dev` shell.")
+                Text("Clean up stale Tado agent and MCP processes.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

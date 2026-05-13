@@ -23,36 +23,68 @@ import Foundation
 /// query and the sanitizer falls through to its existing `"auto"`-only
 /// guard. We never reject a flag because the cache is empty — only
 /// when the CLI explicitly told us it wouldn't accept it.
-@MainActor
 final class CLICapabilities {
     static let shared = CLICapabilities()
+
+    enum CacheStatus: String, Equatable {
+        case notStarted
+        case probing
+        case ready
+    }
 
     /// Documented enum values keyed by `(engine, flag)`. `nil` means
     /// "we couldn't determine the set" — sanitizer treats this as
     /// "don't drop" so we never reject a flag we're uncertain about.
+    private let lock = NSLock()
     private var enumValues: [String: Set<String>] = [:]
     private var probedEngines: Set<TerminalEngine> = []
+    private var probingEngines: Set<TerminalEngine> = []
+    private var generation: UInt64 = 0
+    private var helpRunner: (TerminalEngine) -> String? = CLICapabilities.runHelp
 
     private init() {}
 
-    /// Refresh the cache for `engine`. Idempotent — safe to call
-    /// repeatedly. Runs `<cli> --help` synchronously off the main
-    /// thread; the help text is small (<10 KB) and the parse is
-    /// linear, so a single probe completes in <30 ms even on cold I/O.
-    func probe(_ engine: TerminalEngine) {
-        guard !probedEngines.contains(engine) else { return }
-        probedEngines.insert(engine)
-        let help = runHelp(engine: engine) ?? ""
-        guard !help.isEmpty else { return }
-        ingestHelpText(help, engine: engine)
+    /// Refresh the cache for `engine` without blocking the caller.
+    ///
+    /// Spawn uses cached capability data only. If the cache is cold, this
+    /// starts the probe in the background and the current spawn proceeds
+    /// unfiltered. That keeps CLI help discovery from freezing the app.
+    func prewarm(_ engine: TerminalEngine) {
+        lock.lock()
+        if probedEngines.contains(engine) || probingEngines.contains(engine) {
+            lock.unlock()
+            return
+        }
+        probingEngines.insert(engine)
+        let runner = helpRunner
+        let probeGeneration = generation
+        lock.unlock()
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let help = runner(engine) ?? ""
+            let parsed = help.isEmpty
+                ? [:]
+                : Self.parseHelpText(help, engine: engine)
+            self?.finishProbe(engine: engine, values: parsed, generation: probeGeneration)
+        }
+    }
+
+    func prewarmAll() {
+        for engine in TerminalEngine.allCases where engine != .cowork {
+            prewarm(engine)
+        }
     }
 
     /// Force a re-probe (e.g. after the user upgrades the CLI).
     /// Currently unused but exposed for future "Reload CLI capabilities"
     /// settings affordances.
     func invalidate() {
+        lock.lock()
+        defer { lock.unlock() }
         enumValues.removeAll()
         probedEngines.removeAll()
+        probingEngines.removeAll()
+        generation &+= 1
     }
 
     /// `nil` means "unknown — don't filter."  An empty set means "we
@@ -60,6 +92,8 @@ final class CLICapabilities {
     /// effectively the same as nil for sanitization purposes). A
     /// non-empty set means the flag is enum-restricted to those values.
     func validValues(engine: TerminalEngine, flag: String) -> Set<String>? {
+        lock.lock()
+        defer { lock.unlock() }
         return enumValues[cacheKey(engine: engine, flag: flag)]
     }
 
@@ -74,13 +108,67 @@ final class CLICapabilities {
         return !valid.contains(value)
     }
 
+    func cacheStatus(for engine: TerminalEngine) -> CacheStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        if probingEngines.contains(engine) { return .probing }
+        if probedEngines.contains(engine) { return .ready }
+        return .notStarted
+    }
+
+    func hasAnyValues(for engine: TerminalEngine) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let prefix = "\(engine.rawValue)::"
+        return enumValues.keys.contains { $0.hasPrefix(prefix) }
+    }
+
+    func setValidValuesForTesting(engine: TerminalEngine, flag: String, values: Set<String>) {
+        lock.lock()
+        enumValues[cacheKey(engine: engine, flag: flag)] = values
+        probedEngines.insert(engine)
+        probingEngines.remove(engine)
+        lock.unlock()
+    }
+
+    func setHelpRunnerForTesting(_ runner: @escaping (TerminalEngine) -> String?) {
+        lock.lock()
+        helpRunner = runner
+        lock.unlock()
+    }
+
+    func resetHelpRunnerForTesting() {
+        lock.lock()
+        helpRunner = CLICapabilities.runHelp
+        lock.unlock()
+    }
+
     // MARK: - Internal
 
     private func cacheKey(engine: TerminalEngine, flag: String) -> String {
+        Self.cacheKey(engine: engine, flag: flag)
+    }
+
+    private static func cacheKey(engine: TerminalEngine, flag: String) -> String {
         "\(engine.rawValue)::\(flag)"
     }
 
-    private func runHelp(engine: TerminalEngine) -> String? {
+    private func finishProbe(engine: TerminalEngine, values: [String: Set<String>], generation: UInt64) {
+        lock.lock()
+        guard generation == self.generation else {
+            probingEngines.remove(engine)
+            lock.unlock()
+            return
+        }
+        for (key, value) in values {
+            enumValues[key] = value
+        }
+        probingEngines.remove(engine)
+        probedEngines.insert(engine)
+        lock.unlock()
+    }
+
+    private static func runHelp(engine: TerminalEngine) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", "\(engine.rawValue) --help 2>&1"]
@@ -99,6 +187,15 @@ final class CLICapabilities {
         return String(data: data, encoding: .utf8)
     }
 
+    private static func parseHelpText(_ text: String, engine: TerminalEngine) -> [String: Set<String>] {
+        let parser = CLICapabilities()
+        parser.ingestHelpText(text, engine: engine)
+        parser.lock.lock()
+        let values = parser.enumValues
+        parser.lock.unlock()
+        return values
+    }
+
     /// Parse the `--help` output for enum-restricted flag values.
     /// Recognizes both shapes the user's installed CLIs emit:
     ///
@@ -114,6 +211,7 @@ final class CLICapabilities {
     /// it). Better to miss a filtering opportunity than to drop a flag
     /// that's actually valid.
     func ingestHelpText(_ text: String, engine: TerminalEngine) {
+        var parsed: [String: Set<String>] = [:]
         let lines = text.components(separatedBy: "\n")
         var i = 0
         while i < lines.count {
@@ -122,7 +220,7 @@ final class CLICapabilities {
             // or paren-list `(low, medium, high)`.
             if let flag = extractFlagName(line),
                let values = extractInlineEnumValues(from: line) {
-                enumValues[cacheKey(engine: engine, flag: flag)] = values
+                parsed[cacheKey(engine: engine, flag: flag)] = values
             }
             // Shape 2 (Codex): `Possible values:` block follows the flag
             // line a few lines down.
@@ -135,7 +233,7 @@ final class CLICapabilities {
                         // Some Codex flags inline the list:
                         //   [possible values: read-only, workspace-write, ...]
                         if let values = extractInlineCodexPossibleValues(from: lines[j]) {
-                            enumValues[cacheKey(engine: engine, flag: flag)] = values
+                            parsed[cacheKey(engine: engine, flag: flag)] = values
                             break
                         }
                         // Otherwise the list comes as `- value:  description`
@@ -155,7 +253,7 @@ final class CLICapabilities {
                             k += 1
                         }
                         if !bullets.isEmpty {
-                            enumValues[cacheKey(engine: engine, flag: flag)] = bullets
+                            parsed[cacheKey(engine: engine, flag: flag)] = bullets
                         }
                         break
                     }
@@ -167,6 +265,13 @@ final class CLICapabilities {
             }
             i += 1
         }
+        lock.lock()
+        for (key, values) in parsed {
+            enumValues[key] = values
+        }
+        probedEngines.insert(engine)
+        probingEngines.remove(engine)
+        lock.unlock()
     }
 
     private func extractFlagName(_ line: String) -> String? {

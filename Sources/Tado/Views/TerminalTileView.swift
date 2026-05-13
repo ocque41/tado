@@ -254,6 +254,9 @@ struct TerminalTileView: View {
     }
 
     private var footStatusLabel: String {
+        if session.coreSession == nil, let phase = session.spawnPhase {
+            return phase
+        }
         switch session.status {
         case .needsInput, .awaitingResponse:
             return "⚡ Needs Input"

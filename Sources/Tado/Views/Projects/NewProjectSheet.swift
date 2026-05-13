@@ -42,7 +42,7 @@ struct NewProjectSheet: View {
                 Text("Add a project.")
                     .font(RelayType.h2(size: 32))
                     .foregroundStyle(RelayPalette.foreground(for: relayTheme))
-                Text("A project links a directory on disk to Tado. Agents are auto-discovered from `.claude/agents/` and `.codex/agents/`.")
+                Text("A project links a directory to Tado.")
                     .font(Typography.sans(size: 13, weight: .regular))
                     .foregroundStyle(RelayPalette.foreground2(for: relayTheme))
                     .frame(maxWidth: 480, alignment: .leading)

@@ -63,7 +63,7 @@ struct RelayKanbanView: View {
             RelayPageHead(
                 kicker: "WORK — KANBAN",
                 title: "Per-project board, mirrored to disk.",
-                lead: "One board per project, mirrored to `.tado/kanban/state.json` so any agent can read or move cards via the `tado-kanban` CLI. Drop a markdown file in `inbox/` to add a card from outside.",
+                lead: "One board per project, mirrored to `.tado/kanban/state.json`.",
                 h1Size: 52
             )
             if projects.isEmpty {

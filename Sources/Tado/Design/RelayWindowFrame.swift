@@ -3,7 +3,7 @@
 // Used to put a Relay page-head (kicker + h1 + lead) above an
 // existing complex body whose internals don't need rewriting.
 // Phase 9 / 11 / 13 use this to land the page-anatomy contract on
-// the Dome / Pets / Cross-Run Browser / Notifications windows
+// the Dome / Cross-Run Browser / Notifications windows
 // without rewriting their working surface bodies.
 //
 // The wrapper:

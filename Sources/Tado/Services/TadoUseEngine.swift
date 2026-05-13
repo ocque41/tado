@@ -338,13 +338,14 @@ final class TadoUseEngine {
         Hybrid search, write notes, query the graph, run retrieval recipes,
         watch sessions, scheduling.
 
-        ### tado_use_* (43) — Drive Tado itself
+        ### tado_use_* (44) — Drive Tado itself
         SwiftUI navigation:
           - tado_use_navigate / focus_tile / open_modal / close_modal /
             list_tiles / app_state
 
         Todo + project lifecycle:
-          - tado_use_todo_create (optionally spawn_tile=true)
+          - tado_use_todo_create (optionally spawn_tile=true,
+            engine: "claude" | "codex")
           - tado_use_todo_list / move / delete
           - tado_use_project_list / create / resolve / delete
 
@@ -369,7 +370,7 @@ final class TadoUseEngine {
 
         Dispatch — same propose/poll/accept pattern:
           dispatch_start → dispatch_status (poll) → dispatch_accept
-          dispatch_list / dispatch_reject available too.
+          dispatch_list / dispatch_reject / dispatch_intervene available too.
 
         Bootstraps:
           - tado_use_bootstrap (kind: a2a | team | auto-mode | knowledge)

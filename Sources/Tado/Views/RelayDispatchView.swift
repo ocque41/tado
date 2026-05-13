@@ -23,7 +23,7 @@ struct RelayDispatchView: View {
                 title: runs.isEmpty
                     ? "No dispatch runs yet."
                     : "\(runs.count) dispatch \(runs.count == 1 ? "run" : "runs") · \(running) running.",
-                lead: "The architect designs N phases, writes per-phase agents, and auto-chains execution. Phase agents wake the next via tado-deploy.",
+                lead: "Plan and run multi-phase work.",
                 h1Size: 52
             )
 

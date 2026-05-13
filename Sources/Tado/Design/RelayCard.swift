@@ -37,7 +37,7 @@ struct RelayCard<Content: View>: View {
 }
 
 /// Convenience initializer with no padding — for tight cards
-/// (e.g. Pets popover, focused-tile head).
+/// (e.g. focused-tile head).
 extension RelayCard {
     init(noPadding: Bool = false, @ViewBuilder content: () -> Content) {
         self.padding = noPadding

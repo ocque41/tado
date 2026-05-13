@@ -540,7 +540,7 @@ struct UserNotesSurface: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Palette.ink)
             }
-            Text("The left rail lists every note in the active topic, sorted by last update. The + button starts a new note in any topic you type.")
+            Text("The left rail lists notes in the active topic. Use + to add one.")
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .frame(maxWidth: 540, alignment: .leading)

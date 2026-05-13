@@ -141,8 +141,6 @@ struct CommandRegistry {
         switch mode {
         case .knowledge:
             openWindow(id: ExtensionWindowID.string(for: DomeExtension.manifest.id))
-        case .pets:
-            openWindow(id: ExtensionWindowID.string(for: PetsExtension.manifest.id))
         case .settings:
             appState.showSettings = true
         default:

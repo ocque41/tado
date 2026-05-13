@@ -332,7 +332,7 @@ struct TadoUsePanel: View {
             Text("Drive Tado from here")
                 .font(Typography.titleSm)
                 .foregroundStyle(Palette.ink)
-            Text("Ask the agent to navigate the app, search Dome, or kick off an Eternal/Dispatch run. The agent has 43 in-process bridge tools plus the existing tado-mcp + dome-mcp servers.")
+            Text("Ask the agent to navigate Tado, search Dome, or start a run.")
                 .font(Typography.bodySm)
                 .foregroundStyle(Palette.ink2)
                 .lineLimit(nil)

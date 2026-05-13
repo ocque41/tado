@@ -221,7 +221,7 @@ struct TadoApp: App {
         // boot, etc.) never stall the first-frame paint. Extensions are
         // expected to run their own MainActor hops for UI work.
         SpawnSignposts.event("boot.extensions.dispatch")
-        Task.detached(priority: .utility) {
+        Task<Void, Never>.detached(priority: .utility) {
             await SpawnSignposts.intervalAsync("boot.extensions.onAppLaunch") {
                 await ExtensionRegistry.runOnAppLaunchHooks()
             }
@@ -240,8 +240,16 @@ struct TadoApp: App {
         // pre-warm makes even the first call cheap. Higher priority
         // than the extension hooks above (`.userInitiated`) because
         // the freeze is the user's first impression of the app.
-        Task.detached(priority: .userInitiated) {
+        Task<Void, Never>.detached(priority: .userInitiated) {
             MetalPipelineCache.prewarm()
+        }
+
+        // CLI capability discovery must never run on the spawn path.
+        // Warm it in the background so first tile launch can use cached
+        // data when available, while still proceeding if help probing is
+        // slow or a CLI is missing.
+        Task<Void, Never>.detached(priority: .utility) {
+            CLICapabilities.shared.prewarmAll()
         }
 
         // A7: register the Rust tado-mcp bridge with Claude Code if
@@ -350,12 +358,6 @@ struct TadoApp: App {
                     }
                     .keyboardShortcut("0", modifiers: [.command, .shift])
                 }
-                if RelayTopNavBar.navOrder.count >= 11 {
-                    Button("Surface 11 — \(RelayTopNavBar.navOrder[10].label)") {
-                        navigate(mode: RelayTopNavBar.navOrder[10], appState: appState)
-                    }
-                    .keyboardShortcut("-", modifiers: [.command, .shift])
-                }
             }
             CommandMenu("Lists") {
                 Button("Done List") {
@@ -421,25 +423,6 @@ struct TadoApp: App {
         .modelContainer(modelContainer)
         .windowResizability(CrossRunBrowserExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
 
-        WindowGroup(id: ExtensionWindowID.string(for: PetsExtension.manifest.id)) {
-            // Pets keeps only the Relay titlebar accessory — its
-            // window body is already a structured editor with its
-            // own header + sections. Wrapping it in
-            // RelayWindowFrame consumed enough vertical space that
-            // the per-state-pet Save button slid below the fold on
-            // the default 460×640 window.
-            VStack(spacing: 0) {
-                RelayTitlebarAccessory(surfaceName: "Pets")
-                PetsExtension.makeView()
-                    .environment(appState)
-                    .environment(terminalManager)
-                    .frame(minWidth: 360, minHeight: 480)
-            }
-            .relayTheme(themeStore.theme)
-            .environment(themeStore)
-        }
-        .modelContainer(modelContainer)
-        .windowResizability(PetsExtension.manifest.windowResizable ? .contentMinSize : .contentSize)
     }
 }
 
@@ -462,8 +445,6 @@ struct MainWindowRoot: View {
     let zoomState: WindowZoomState
     @Binding var ipcBrokerInitialized: Bool
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.modelContext) private var modelContext
-    @State private var petsCoordinator = PetsCoordinator.shared
 
     var body: some View {
         ContentView()
@@ -471,19 +452,6 @@ struct MainWindowRoot: View {
             .environment(terminalManager)
             .environment(tadoUseState)
             .environment(tadoUseEngineHolder)
-            // Pets hatch sheet — driven by the coordinator's
-            // `pendingHatch` property which the /hatch slash
-            // command and the popover's "Hatch" button both set.
-            .sheet(item: Binding(
-                get: { petsCoordinator.pendingHatch },
-                set: { petsCoordinator.pendingHatch = $0 }
-            )) { request in
-                PetsHatchSheet(
-                    request: request,
-                    onCompleted: { _ in },
-                    onDismiss: { petsCoordinator.dismissHatchSheet() }
-                )
-            }
             // Pin the whole window tree to dark mode. Without this
             // SwiftUI's adaptive system colors (sidebar, form bg,
             // sheet chrome) sample the host's appearance — if macOS
@@ -526,29 +494,12 @@ struct MainWindowRoot: View {
                         window.orderFrontRegardless()
                     }
                 }
-                // Hand the live TerminalManager + ModelContainer to
-                // the Pets coordinator so the floating panel + the
-                // expanded popover can enumerate sessions and runs
-                // when computing the aggregate state. Bootstrap is
-                // idempotent.
-                PetsCoordinator.shared.bootstrap()
-                PetsCoordinator.shared.bind(
-                    terminalManager: terminalManager,
-                    modelContainer: modelContext.container
-                )
             }
             .onReceive(
                 NotificationCenter.default.publisher(for: .openExtensionWindowRequest)
             ) { note in
                 guard let id = note.userInfo?["id"] as? String else { return }
                 openWindow(id: id)
-            }
-            .onReceive(
-                NotificationCenter.default.publisher(for: .petsDeepLinkRequest)
-            ) { note in
-                guard let todoID = note.userInfo?["todoID"] as? UUID else { return }
-                appState.focusedTileTodoID = todoID
-                appState.currentView = .canvas
             }
     }
 }
@@ -593,7 +544,7 @@ struct DomeWindowRoot: View {
 @MainActor
 private func navigate(mode: ViewMode, appState: AppState) {
     switch mode {
-    case .knowledge, .pets, .settings:
+    case .knowledge, .settings:
         // Window-routed — post a notification the main window's
         // openWindow environment can consume. Settings opens its
         // sheet directly.
@@ -604,12 +555,6 @@ private func navigate(mode: ViewMode, appState: AppState) {
                 name: .openExtensionWindowRequest,
                 object: nil,
                 userInfo: ["id": ExtensionWindowID.string(for: DomeExtension.manifest.id)]
-            )
-        } else {
-            NotificationCenter.default.post(
-                name: .openExtensionWindowRequest,
-                object: nil,
-                userInfo: ["id": ExtensionWindowID.string(for: PetsExtension.manifest.id)]
             )
         }
     default:

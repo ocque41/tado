@@ -3,7 +3,7 @@
 //
 // Layout (left → right):
 //
-//   [brand-mark + TADO + BY CUMULUS]    [hairline]    [workspace pill]    [11 nav items]    [⌘K Jump]
+//   [brand-mark + TADO + BY CUMULUS]    [hairline]    [workspace pill]    [10 nav items]    [⌘K Jump]
 //
 // Responsive collapse (brief, exact px):
 //
@@ -36,12 +36,10 @@ struct RelayTopNavBar: View {
     /// render. Re-evaluated via `GeometryReader` in `body`.
     @State private var width: CGFloat = 1440
 
-    /// 11 nav items, in the brief's order.
-    /// (Todos / Canvas / Kanban / Projects / Teams / Sessions /
-    /// Dispatch / Knowledge / Eternal / Pets / Settings.)
+    /// Main nav items.
     static let navOrder: [ViewMode] = [
         .todos, .canvas, .kanban, .projects, .teams,
-        .sessions, .dispatch, .knowledge, .eternal, .pets, .settings,
+        .sessions, .dispatch, .knowledge, .eternal, .settings,
     ]
 
     var body: some View {
@@ -198,7 +196,7 @@ struct RelayTopNavBar: View {
 
     // MARK: - Nav strip
 
-    /// 11 nav items + a fade mask on the right edge. Brief mandates
+    /// Nav items + a fade mask on the right edge. Brief mandates
     /// no scrollbar — the mask-image gradient (24px linear-gradient
     /// to transparent) is the affordance for "more is offscreen".
     private var navStrip: some View {
@@ -292,8 +290,6 @@ struct RelayTopNavBar: View {
         switch mode {
         case .knowledge:
             openWindow(id: ExtensionWindowID.string(for: DomeExtension.manifest.id))
-        case .pets:
-            openWindow(id: ExtensionWindowID.string(for: PetsExtension.manifest.id))
         case .settings:
             appState.showSettings = true
         default:

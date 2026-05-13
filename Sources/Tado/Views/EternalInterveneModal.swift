@@ -97,7 +97,7 @@ struct EternalInterveneModal: View {
 
     private var footerHint: some View {
         HStack {
-            Text("Accept spawns a Haiku 4.5 Interventor on the canvas. It distills your note and drops it in the worker's inbox.")
+            Text("Accept sends this note to the worker's inbox.")
                 .font(Typography.caption)
                 .foregroundStyle(Palette.textSecondary)
                 .lineLimit(2)
@@ -120,7 +120,7 @@ struct EternalInterveneModal: View {
                 .font(Typography.microBold)
                 .tracking(0.8)
                 .foregroundStyle(Palette.textTertiary)
-            Text("Say whatever you want the worker to hear — in plain language. A short agent reads your note, grounds it in the current sprint's state, and drops a structured directive in the worker's inbox. The worker processes it at the start of its next iteration (usually within 1-3 minutes).")
+            Text("Write what the worker should know. It reads the note next iteration.")
                 .font(Typography.bodySm)
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -130,7 +130,7 @@ struct EternalInterveneModal: View {
     private var messageEditor: some View {
         ZStack(alignment: .topLeading) {
             if message.isEmpty {
-                Text("Examples:\n  pivot to the dialogue system (M3) — terrain is good enough\n  stop adding new features, polish M2 lighting instead\n  why are you still on sprint 1? what's blocking?")
+                Text("Examples:\n  pivot to M3 dialogue\n  polish M2 lighting\n  what's blocking sprint 1?")
                     .font(Typography.monoCaption)
                     .foregroundStyle(Palette.textTertiary)
                     .padding(.horizontal, 14)
@@ -150,10 +150,8 @@ struct EternalInterveneModal: View {
 
     private var examplesBlurb: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.textTertiary)
-            Text("Your message won't interrupt the current iteration. The worker reads it at the TOP of the next one. If you need to stop everything, use Stop instead.")
+            InfoTip(text: "The worker reads this at the start of the next iteration. Use Stop to end the run.")
+            Text("This does not interrupt the current iteration. Use Stop to end the run.")
                 .font(Typography.caption)
                 .foregroundStyle(Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

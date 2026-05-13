@@ -9,8 +9,8 @@
 //    in parallel.", BEGIN button.
 // 2. Pick engines — toggleable list of detected engines.
 // 3. Bootstrap a project — file picker + checkbox.
-// 4. Done — kicker `04 — READY`, h1 "Type a task. Press ⌘↩.",
-//    auto-redirects to Todos in 3s.
+// 4. Done — kicker `04 — READY`, h1 "Todos", auto-redirects
+//    to Todos in 3s.
 
 import SwiftUI
 import SwiftData
@@ -84,11 +84,6 @@ struct RelayOnboarding: View {
                 .foregroundStyle(RelayPalette.foreground(for: theme))
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: 800, alignment: .leading)
-            Text("Type a todo, press ⌘↩, and an agent gets to work in its own terminal tile. Forty agents at once is the unit of work.")
-                .font(RelayType.lead())
-                .foregroundStyle(RelayPalette.foreground2(for: theme))
-                .frame(maxWidth: 720, alignment: .leading)
-                .lineSpacing(4)
             RelayButton(label: "Begin →", variant: .primary) {
                 advance()
             }
@@ -153,7 +148,7 @@ struct RelayOnboarding: View {
                 .font(RelayType.h1(size: 52))
                 .tracking(RelayTracking.h1(52))
                 .foregroundStyle(RelayPalette.foreground(for: theme))
-            Text("A project links a directory on disk to Tado. You can do this any time from the Projects tab — but starting with one makes the canvas more useful immediately.")
+            Text("Link a directory now, or add one later from Projects.")
                 .font(RelayType.lead())
                 .foregroundStyle(RelayPalette.foreground2(for: theme))
                 .frame(maxWidth: 720, alignment: .leading)
@@ -183,13 +178,10 @@ struct RelayOnboarding: View {
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: 32) {
             RelayKicker(text: "04 — READY")
-            Text("Type a task. Press ⌘↩.")
+            Text("Todos")
                 .font(RelayType.h1(size: 60))
                 .tracking(RelayTracking.h1(60))
                 .foregroundStyle(RelayPalette.foreground(for: theme))
-            Text("That's the whole flow.")
-                .font(RelayType.lead())
-                .foregroundStyle(RelayPalette.foreground2(for: theme))
             RelayButton(label: "Open Todos", variant: .primary) {
                 finish()
             }

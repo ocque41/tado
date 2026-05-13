@@ -40,7 +40,7 @@ struct RelayProjectsView: View {
             RelayPageHead(
                 kicker: "STRUCTURE — PROJECTS",
                 title: "\(projects.count) \(projects.count == 1 ? "project" : "projects") · \(teamsCount) \(teamsCount == 1 ? "agent" : "agents").",
-                lead: "A project organizes todos under a directory. Agents are auto-discovered from `.claude/agents/` and `.codex/agents/`. Bootstrap a project to inject the A2A docs.",
+                lead: "Projects group todos under a directory.",
                 h1Size: 52
             )
 
@@ -63,7 +63,7 @@ struct RelayProjectsView: View {
                 Text("Add a project to get started.")
                     .font(RelayType.h2(size: 24))
                     .foregroundStyle(RelayPalette.foreground(for: theme))
-                Text("A project links a directory on disk to a working namespace inside Tado. Agents are discovered automatically from `.claude/agents/` and `.codex/agents/`.")
+                Text("A project links a directory to Tado.")
                     .font(Typography.sans(size: 14, weight: .regular))
                     .foregroundStyle(RelayPalette.foreground2(for: theme))
                     .frame(maxWidth: 600, alignment: .leading)

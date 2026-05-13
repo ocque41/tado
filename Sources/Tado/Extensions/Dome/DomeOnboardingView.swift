@@ -73,7 +73,7 @@ struct DomeOnboardingView: View {
                     .font(.system(size: 22, weight: .bold))
                     .tracking(-0.3)
                     .foregroundStyle(Palette.ink)
-                Text("Qwen3-Embedding-0.6B (~1.2 GB, F16) runs locally on your Mac. It's downloaded once and cached under your Dome vault. Until it's loaded, search returns lexical matches only.")
+                Text("Qwen3-Embedding-0.6B runs locally. Until it loads, search uses lexical matches.")
                     .font(.system(size: 12.5, weight: .regular))
                     .foregroundStyle(Palette.ink3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -185,7 +185,7 @@ struct DomeOnboardingView: View {
                     .tracking(0.6)
                     .foregroundStyle(Palette.ink4)
             }
-            Text("Point Dome at any directory containing config.json, tokenizer.json, and model.safetensors. The path is persisted as TADO_DOME_EMBEDDING_MODEL_PATH for the rest of this session.")
+            Text("Choose a local model directory with config, tokenizer, and weights files.")
                 .font(.system(size: 11.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .fixedSize(horizontal: false, vertical: true)

@@ -151,9 +151,17 @@ struct MetalTerminalTileView: View {
                                 .truncationMode(.tail)
                                 .textSelection(.enabled)
                         } else {
-                            Text("tado-core spawn pending…")
-                                .font(Typography.monoCaption)
-                                .foregroundStyle(Palette.textSecondary)
+                            TimelineView(.periodic(from: .now, by: 0.5)) { timeline in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("tado-core spawn pending")
+                                        .font(Typography.monoCaption)
+                                        .foregroundStyle(Palette.textSecondary)
+                                    Text(spawnPendingDetail(now: timeline.date))
+                                        .font(Typography.monoMicro)
+                                        .foregroundStyle(Palette.textTertiary)
+                                        .lineLimit(3)
+                                }
+                            }
                         }
                     }
                     .padding(8),
@@ -184,6 +192,15 @@ struct MetalTerminalTileView: View {
     }
 
     // MARK: - Spawn wiring
+
+    private func spawnPendingDetail(now: Date) -> String {
+        let phase = session.spawnPhase ?? "waiting for tile mount"
+        if let started = session.spawnPhaseStartedAt {
+            let elapsed = max(0, now.timeIntervalSince(started))
+            return "\(phase) - \(String(format: "%.1fs", elapsed))"
+        }
+        return phase
+    }
 
     private func spawnIfNeeded() {
         guard session.coreSession == nil else { return }
@@ -263,88 +280,208 @@ struct MetalTerminalTileView: View {
         let foregroundRGBA = theme.foregroundRGBA
         let backgroundRGBA = theme.backgroundRGBA
 
-        // Pre-validate the eternal-worker invariant on the main actor:
-        // a fatalError inside the detached Task surfaces in Console.app
-        // but is much harder to debug than a synchronous crash here.
-        if isEternalWorker, eternalRunIDOpt == nil {
-            fatalError(
-                "TerminalSession \(sessionID) has isEternalWorker=true but eternalRunID=nil — spawn path bug"
+        let traceID = UUID()
+        let diagnostics = SpawnDiagnosticsStore.shared
+        session.spawnTraceID = traceID
+        session.spawnLastError = nil
+        session.spawnFirstOutputRecorded = false
+        session.spawnPhase = "spawn.requested"
+        session.spawnPhaseStartedAt = Date()
+        diagnostics.startTrace(
+            traceID: traceID,
+            sessionID: sessionID,
+            todoID: session.todoID,
+            engine: engineSnapshot.rawValue,
+            title: sessionTitle,
+            projectName: projectName,
+            projectRoot: envProjectRoot
+        )
+        EventBus.shared.publish(
+            .terminalSpawnRequested(
+                sessionID: sessionID,
+                title: sessionTitle,
+                engine: engineSnapshot.rawValue,
+                projectName: projectName
+            )
+        )
+
+        func beginPhase(_ phase: String, message: String? = nil) {
+            let startedAt = Date()
+            session.spawnPhase = phase
+            session.spawnPhaseStartedAt = startedAt
+            diagnostics.beginPhase(traceID: traceID, phase: phase, message: message)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard session.spawnTraceID == traceID,
+                      session.spawnPhase == phase,
+                      session.spawnPhaseStartedAt == startedAt else { return }
+                EventBus.shared.publish(
+                    .terminalSpawnPhaseSlow(
+                        sessionID: sessionID,
+                        title: sessionTitle,
+                        phase: phase,
+                        elapsedSeconds: Date().timeIntervalSince(startedAt),
+                        projectName: projectName
+                    )
+                )
+            }
+        }
+
+        func endPhase(
+            _ phase: String,
+            outcome: SpawnDiagnosticRecord.Outcome = .success,
+            message: String? = nil,
+            commandSummary: String? = nil
+        ) {
+            diagnostics.endPhase(
+                traceID: traceID,
+                phase: phase,
+                outcome: outcome,
+                message: message,
+                commandSummary: commandSummary
+            )
+        }
+
+        func failSpawn(phase: String, reason: String, preflight: Bool, commandSummary: String? = nil) {
+            endPhase(phase, outcome: .failure, message: reason, commandSummary: commandSummary)
+            diagnostics.finishTrace(
+                traceID: traceID,
+                outcome: .failure,
+                message: reason,
+                commandSummary: commandSummary
+            )
+            session.spawnPhase = "spawn.failed.\(phase)"
+            session.spawnPhaseStartedAt = Date()
+            session.spawnLastError = reason
+            spawnError = "\(phase): \(reason)"
+            NSLog("tado: TadoCore.Session spawn failed for \(sessionTodoText): \(phase): \(reason)")
+            if preflight {
+                EventBus.shared.publish(
+                    .terminalSpawnPreflightFailed(
+                        sessionID: sessionID,
+                        title: sessionTitle,
+                        phase: phase,
+                        reason: reason,
+                        projectName: projectName
+                    )
+                )
+            }
+            EventBus.shared.publish(
+                .terminalSpawnFailed(
+                    sessionID: sessionID,
+                    title: sessionTitle,
+                    reason: "\(phase): \(reason)",
+                    projectName: projectName
+                )
             )
         }
 
         Task {
-            // === Off-main command + env build =======================
-            //
-            // From here on we run on a Task inheriting @MainActor only
-            // for state writes; the heavy work (preamble fetch,
-            // sanitizeFlags, command build, environment build) hops
-            // through `Task.detached`/`await` boundaries so the UI
-            // thread stays free. ProcessSpawner's `command`,
-            // `environment`, `sanitizeFlags`, and `eternalWorkerEnv`
-            // are pure functions — safe to call from any actor.
+            if isEternalWorker, eternalRunIDOpt == nil {
+                let phase = "preflight.validate"
+                beginPhase(phase)
+                failSpawn(
+                    phase: phase,
+                    reason: "isEternalWorker=true but eternalRunID is nil",
+                    preflight: true
+                )
+                return
+            }
 
-            // Resolve executable + args. Eternal workers don't get a
-            // Dome preamble; only the agent branch does.
+            // Resolve executable + args. Each heavy phase runs in a
+            // detached task, then returns to the main actor only to update
+            // visible phase state.
             let executable: String
             let args: [String]
+
             if isEternalWorker, let projectRoot {
-                let cmd: (executable: String, args: [String])
-                if eternalLoopKind == "internal" {
-                    if engineSnapshot == .codex {
-                        cmd = ProcessSpawner.internalCodexEternalCommand(
-                            projectRoot: projectRoot,
-                            codexPreFlags: eternalCodexPreFlags,
-                            codexPostFlags: eternalCodexPostFlags
-                        )
-                    } else {
-                        cmd = ProcessSpawner.internalEternalCommand(
+                let phase = "command.build"
+                beginPhase(phase, message: "eternal worker")
+                let cmd = await Task.detached(priority: .userInitiated) {
+                    if eternalLoopKind == "internal" {
+                        if engineSnapshot == .codex {
+                            return ProcessSpawner.internalCodexEternalCommand(
+                                projectRoot: projectRoot,
+                                codexPreFlags: eternalCodexPreFlags,
+                                codexPostFlags: eternalCodexPostFlags
+                            )
+                        }
+                        return ProcessSpawner.internalEternalCommand(
                             projectRoot: projectRoot,
                             modelID: eternalModelID,
                             effortLevel: eternalEffortLevel
                         )
                     }
-                } else {
-                    cmd = ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
-                }
+                    return ProcessSpawner.eternalWorkerCommand(projectRoot: projectRoot)
+                }.value
                 executable = cmd.executable
                 args = cmd.args
+                endPhase(
+                    phase,
+                    commandSummary: SpawnDiagnosticsStore.commandSummary(
+                        executable: executable,
+                        args: args
+                    )
+                )
             } else {
-                // The async preamble fetch hops onto a background queue
-                // for the FFI/SQLite hit. Returns byte-identical output
-                // to the sync sibling; `spawn_pack_byte_equiv` pins the
-                // contract.
-                //
-                // Soft 2s deadline: the preamble is an *enrichment*
-                // dependency on PTY spawn, not the dispatch chain
-                // itself, so CLAUDE.md rule 1 doesn't apply here.
-                // Pre-fix, an unbounded `await` here meant a cold
-                // bt-core (rusqlite per-FFI connection-open running
-                // schema-init pragmas) wedged spawn forever — caught
-                // live at MetalTerminalTileView.swift:322 via
-                // `sample(<pid>)` on 2026-05-08. On timeout, we fall
-                // through to the raw user prompt so the PTY launches
-                // immediately; subsequent spawns get the full
-                // preamble once bt-core has warmed up.
+                let preamblePhase = "preamble.fetch"
+                beginPhase(preamblePhase)
                 let enrichedPrompt = await SpawnSignposts.intervalAsync("preamble.fetch") {
-                    await preambleWithSoftDeadline(
+                    await Self.preambleWithSoftDeadline(
                         ctx: preambleCtx,
                         userPrompt: userPrompt,
                         seconds: 2
                     )
                 }
-                let modeFlagsClean = ProcessSpawner.sanitizeFlags(modeFlagsRaw, engine: engineSnapshot)
-                let effortFlagsClean = ProcessSpawner.sanitizeFlags(effortFlagsRaw, engine: engineSnapshot)
-                let modelFlagsClean = ProcessSpawner.sanitizeFlags(modelFlagsRaw, engine: engineSnapshot)
-                let cmd: (executable: String, args: [String])
-                if engineSnapshot == .codex && eternalUseCodexExec {
-                    let flags = modeFlagsClean + effortFlagsClean + modelFlagsClean
-                    cmd = ProcessSpawner.codexExecCommand(for: enrichedPrompt, flags: flags)
-                } else {
-                    // Pass projectRoot + sessionID through so the .cowork
-                    // branch of `command()` can build the
-                    // `tado-cowork --folder … --run-id …` invocation.
-                    // Other engines ignore both params.
-                    cmd = ProcessSpawner.command(
+                let preambleMessage = enrichedPrompt == userPrompt
+                    ? "preamble unavailable or missed soft deadline; raw prompt used"
+                    : nil
+                endPhase(preamblePhase, message: preambleMessage)
+
+                if engineSnapshot != .cowork {
+                    let capsPhase = "cliCapabilities.cache"
+                    let status = CLICapabilities.shared.cacheStatus(for: engineSnapshot)
+                    beginPhase(capsPhase, message: status.rawValue)
+                    if status == .notStarted {
+                        CLICapabilities.shared.prewarm(engineSnapshot)
+                    }
+                    let message: String
+                    switch status {
+                    case .ready:
+                        message = CLICapabilities.shared.hasAnyValues(for: engineSnapshot)
+                            ? "cache ready; engine flags filtered by CLI help data"
+                            : "cache ready; no enum values found in CLI help"
+                    case .probing:
+                        message = "cache still probing; spawn proceeds without CLI help filtering"
+                    case .notStarted:
+                        message = "cache missing; background probe started and spawn proceeds unfiltered"
+                    }
+                    endPhase(capsPhase, message: message)
+                }
+
+                let commandPhase = "command.build"
+                beginPhase(commandPhase)
+                let cmd = await Task.detached(priority: .userInitiated) {
+                    let modeFlagsClean = ProcessSpawner.sanitizeFlags(
+                        modeFlagsRaw,
+                        engine: engineSnapshot,
+                        startProbeIfMissing: false
+                    )
+                    let effortFlagsClean = ProcessSpawner.sanitizeFlags(
+                        effortFlagsRaw,
+                        engine: engineSnapshot,
+                        startProbeIfMissing: false
+                    )
+                    let modelFlagsClean = ProcessSpawner.sanitizeFlags(
+                        modelFlagsRaw,
+                        engine: engineSnapshot,
+                        startProbeIfMissing: false
+                    )
+                    if engineSnapshot == .codex && eternalUseCodexExec {
+                        let flags = modeFlagsClean + effortFlagsClean + modelFlagsClean
+                        return ProcessSpawner.codexExecCommand(for: enrichedPrompt, flags: flags)
+                    }
+                    return ProcessSpawner.command(
                         for: enrichedPrompt,
                         engine: engineSnapshot,
                         modeFlags: modeFlagsClean,
@@ -354,74 +491,77 @@ struct MetalTerminalTileView: View {
                         projectRoot: projectRoot,
                         runID: sessionID
                     )
-                }
+                }.value
                 executable = cmd.executable
                 args = cmd.args
+                endPhase(
+                    commandPhase,
+                    commandSummary: SpawnDiagnosticsStore.commandSummary(
+                        executable: executable,
+                        args: args
+                    )
+                )
             }
 
-            // Resolve env. ProcessSpawner.environment is pure; the
-            // ipc-root branch is identical to the pre-fix code, just
-            // off-main now.
-            let envArray: [String]
-            if let ipcRoot = ipcRootSnapshot {
-                envArray = ProcessSpawner.environment(
-                    sessionID: sessionID,
-                    sessionName: sessionTodoText,
-                    engine: engineSnapshot,
-                    ipcRoot: ipcRoot,
-                    projectName: envProjectName,
-                    projectID: envProjectID,
-                    projectRoot: envProjectRoot,
-                    teamName: envTeamName,
-                    teamID: envTeamID,
-                    agentName: envAgentName,
-                    teamAgents: envTeamAgents,
-                    claudeDisplay: claudeDisplaySnapshot
-                )
-            } else {
-                envArray = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
-            }
-            var envDict: [String: String] = [:]
-            envDict.reserveCapacity(envArray.count)
-            for entry in envArray {
-                if let eq = entry.firstIndex(of: "=") {
-                    let key = String(entry[entry.startIndex..<eq])
-                    let value = String(entry[entry.index(after: eq)...])
-                    envDict[key] = value
+            let commandSummary = SpawnDiagnosticsStore.commandSummary(executable: executable, args: args)
+
+            let envPhase = "environment.build"
+            beginPhase(envPhase)
+            let spawnedEnv = await Task.detached(priority: .userInitiated) {
+                let envArray: [String]
+                if let ipcRoot = ipcRootSnapshot {
+                    envArray = ProcessSpawner.environment(
+                        sessionID: sessionID,
+                        sessionName: sessionTodoText,
+                        engine: engineSnapshot,
+                        ipcRoot: ipcRoot,
+                        projectName: envProjectName,
+                        projectID: envProjectID,
+                        projectRoot: envProjectRoot,
+                        teamName: envTeamName,
+                        teamID: envTeamID,
+                        agentName: envAgentName,
+                        teamAgents: envTeamAgents,
+                        claudeDisplay: claudeDisplaySnapshot
+                    )
+                } else {
+                    envArray = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
                 }
-            }
-            // Eternal-worker env merge — `eternalRunIDOpt` is guaranteed
-            // non-nil by the @MainActor pre-check above.
-            if isEternalWorker, let runID = eternalRunIDOpt {
-                let eternalEnv = ProcessSpawner.eternalWorkerEnv(
-                    runID: runID,
-                    mode: eternalMode,
-                    doneMarker: eternalDoneMarker,
-                    modelID: eternalModelID,
-                    effortLevel: eternalEffortLevel,
-                    skipPermissions: eternalSkipPermissionsFlag,
-                    codexPreFlags: eternalCodexPreFlagsForEnv,
-                    codexPostFlags: eternalCodexPostFlagsForEnv,
-                    perfMode: (eternalKind == "perf"),
-                    sprintMode: (eternalKind == "sprint")
-                )
-                for (k, v) in eternalEnv { envDict[k] = v }
-            }
+                var envDict: [String: String] = [:]
+                envDict.reserveCapacity(envArray.count)
+                for entry in envArray {
+                    if let eq = entry.firstIndex(of: "=") {
+                        let key = String(entry[entry.startIndex..<eq])
+                        let value = String(entry[entry.index(after: eq)...])
+                        envDict[key] = value
+                    }
+                }
+                if isEternalWorker, let runID = eternalRunIDOpt {
+                    let eternalEnv = ProcessSpawner.eternalWorkerEnv(
+                        runID: runID,
+                        mode: eternalMode,
+                        doneMarker: eternalDoneMarker,
+                        modelID: eternalModelID,
+                        effortLevel: eternalEffortLevel,
+                        skipPermissions: eternalSkipPermissionsFlag,
+                        codexPreFlags: eternalCodexPreFlagsForEnv,
+                        codexPostFlags: eternalCodexPostFlagsForEnv,
+                        perfMode: (eternalKind == "perf"),
+                        sprintMode: (eternalKind == "sprint")
+                    )
+                    for (k, v) in eternalEnv { envDict[k] = v }
+                }
+                return envDict
+            }.value
+            endPhase(envPhase)
 
-            let spawnedCommand = executable
-            let spawnedArgs = args
-            let spawnedEnv = envDict
-
-            // === Off-main Rust spawn ================================
-            //
-            // tado_last_spawn_error() reads a thread_local, so the
-            // failure-reason capture MUST stay on the spawn thread —
-            // hence the tuple return.
+            let ptyPhase = "pty.spawn"
+            beginPhase(ptyPhase, message: commandSummary)
             let outcome: (TadoCore.Session?, String?) = await SpawnSignposts.intervalAsync("ptySpawn") {
                 await Task.detached(priority: .userInitiated) {
                     let s = TadoCore.Session(
-                        command: spawnedCommand,
-                        args: spawnedArgs,
+                        command: executable,
+                        args: args,
                         cwd: spawnedCwd,
                         environment: spawnedEnv,
                         cols: cols,
@@ -435,35 +575,31 @@ struct MetalTerminalTileView: View {
                 }.value
             }
 
-            // Back on the main actor — `Task` from a SwiftUI view body
-            // inherits the @MainActor isolation of the surrounding view.
             guard let spawned = outcome.0 else {
                 let reason = outcome.1
                     ?? "tado_session_spawn returned null with no error detail"
-                spawnError = reason
-                NSLog("tado: TadoCore.Session spawn failed for \(sessionTodoText)")
-                EventBus.shared.publish(
-                    .terminalSpawnFailed(
-                        sessionID: sessionID,
-                        title: sessionTitle,
-                        reason: reason,
-                        projectName: projectName
-                    )
+                failSpawn(
+                    phase: ptyPhase,
+                    reason: reason,
+                    preflight: false,
+                    commandSummary: commandSummary
                 )
                 return
             }
+            endPhase(ptyPhase, commandSummary: commandSummary)
+
+            let corePhase = "terminal.coreSessionSet"
+            beginPhase(corePhase)
             spawned.setDefaultColors(fg: foregroundRGBA, bg: backgroundRGBA)
             if let palette {
                 spawned.setAnsiPalette(palette)
             }
             session.coreSession = spawned
             session.processID = spawned.processID
-            // The placeholder swap happens on the next SwiftUI body
-            // evaluation triggered by `session.coreSession = spawned`.
-            // This event marks the @MainActor-visible end of the
-            // spawn pipeline; the duration from `spawnIfNeeded.entry`
-            // is the user-perceived freeze window.
             SpawnSignposts.event("spawnIfNeeded.coreSessionSet")
+            endPhase(corePhase, commandSummary: commandSummary)
+            session.spawnPhase = corePhase
+            session.spawnPhaseStartedAt = Date()
             EventBus.shared.publish(
                 .terminalSpawned(
                     sessionID: sessionID,
@@ -508,7 +644,7 @@ struct MetalTerminalTileView: View {
     /// `spawn_pack_byte_equiv` test still pins the *content*
     /// equivalence between Swift and Rust composers when the
     /// preamble does fire.
-    nonisolated private func preambleWithSoftDeadline(
+    nonisolated private static func preambleWithSoftDeadline(
         ctx: DomeContextPreamble.Context,
         userPrompt: String,
         seconds: TimeInterval

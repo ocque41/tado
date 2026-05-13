@@ -326,6 +326,7 @@ let toolList: [[String: Any]] = [
                 "project": ["type": "string", "description": "Project name (substring match)."],
                 "project_id": ["type": "string", "description": "Project UUID."],
                 "spawn_tile": ["type": "boolean", "description": "If true, spawn a tile immediately. Default false."],
+                "engine": ["type": "string", "enum": ["claude", "codex"], "description": "Optional engine override for the spawned tile."],
                 "agent": ["type": "string", "description": "Optional .claude/agents/<name> subagent to run."],
                 "team": ["type": "string", "description": "Optional team name within the project."],
             ],
@@ -561,6 +562,18 @@ let toolList: [[String: Any]] = [
             "required": ["run_id"],
         ],
     ],
+    [
+        "name": "tado_use_dispatch_intervene",
+        "description": "Send a directive to a Dispatch run's active phase tile. Falls back to the architect tile if no phase tile is recorded.",
+        "inputSchema": [
+            "type": "object",
+            "properties": [
+                "run_id": ["type": "string"],
+                "directive": ["type": "string", "description": "Follow-up prompt to queue into the active dispatch tile."],
+            ],
+            "required": ["run_id", "directive"],
+        ],
+    ],
 
     // ─── Bootstraps ──────────────────────────────────────────────
     [
@@ -792,6 +805,7 @@ let toolKindMap: [String: String] = [
     "tado_use_dispatch_reject": "tado_use.dispatch_reject",
     "tado_use_dispatch_list": "tado_use.dispatch_list",
     "tado_use_dispatch_status": "tado_use.dispatch_status",
+    "tado_use_dispatch_intervene": "tado_use.dispatch_intervene",
 
     "tado_use_bootstrap": "tado_use.bootstrap",
 

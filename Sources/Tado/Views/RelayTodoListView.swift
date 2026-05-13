@@ -3,8 +3,7 @@
 //
 // Anatomy (top to bottom):
 //
-// - Page head: kicker `01 — TODOS`, h1 "Type a task, press ⌘↩, an
-//   agent gets to work.", lead.
+// - Page head: kicker `01 — TODOS`, h1 "Todos".
 // - Section A — Compose card: editorial card with multi-line
 //   textarea, footer meta + Spawn button.
 // - Section B — Recent todos: section head + list of rows.
@@ -61,8 +60,8 @@ struct RelayTodoListView: View {
         RelayPageContainer {
             RelayPageHead(
                 kicker: "01 — TODOS",
-                title: "Type a task, press ⌘↩, an agent gets to work.",
-                lead: "Each todo spawns a terminal tile on the canvas running the AI agent of your choice. Right-click a row to rename, mark done, or move to trash."
+                title: "Todos",
+                lead: nil,
             )
 
             if isForwarding, let targetText = forwardTargetText {
@@ -113,8 +112,8 @@ struct RelayTodoListView: View {
                 ZStack(alignment: .topLeading) {
                     if inputText.isEmpty {
                         Text(isForwarding
-                            ? "Type message to forward…"
-                            : "implement OAuth callback and write a test for it…")
+                            ? "Message"
+                            : "New todo")
                             .font(Typography.sans(size: 18, weight: .light))
                             .foregroundStyle(RelayPalette.foreground3(for: theme))
                             .padding(.leading, 5)
@@ -165,14 +164,6 @@ struct RelayTodoListView: View {
                 .tracking(RelayTracking.caps(10))
                 .foregroundStyle(RelayPalette.foreground3(for: theme))
             Spacer()
-            HStack(spacing: 4) {
-                RelayKbdPill(text: "⌘")
-                RelayKbdPill(text: "↩")
-            }
-            Text("TO SPAWN")
-                .font(Typography.sans(size: 9, weight: .medium))
-                .tracking(RelayTracking.caps(9))
-                .foregroundStyle(RelayPalette.foreground3(for: theme))
             RelayButton(
                 label: isForwarding ? "Send" : "Spawn",
                 variant: .primary,
@@ -218,15 +209,10 @@ struct RelayTodoListView: View {
     private var emptyState: some View {
         RelayCard {
             VStack(alignment: .leading, spacing: 16) {
-                RelayKicker(text: "NO TODOS YET")
-                Text("Press ⌘↩ to spawn the first agent.")
+                RelayKicker(text: "EMPTY")
+                Text("No todos")
                     .font(RelayType.h2(size: 24))
                     .foregroundStyle(RelayPalette.foreground(for: theme))
-                Text("Each todo becomes one tile on the canvas. The agent runs the prompt against the active project's working directory.")
-                    .font(Typography.sans(size: 14, weight: .regular))
-                    .foregroundStyle(RelayPalette.foreground2(for: theme))
-                    .frame(maxWidth: 540, alignment: .leading)
-                    .lineSpacing(2)
             }
         }
     }
@@ -255,12 +241,6 @@ struct RelayTodoListView: View {
         switch TodoCommand.detect(text) {
         case .coordinator(let brief):
             submitCoordinatorTodo(originalText: text, brief: brief)
-        case .togglePet:
-            PetsCoordinator.shared.toggleVisible()
-            inputText = ""
-        case .hatchPet(let prompt):
-            PetsCoordinator.shared.openHatchSheet(prefilled: prompt)
-            inputText = ""
         case .standardPrompt:
             submitNewTodo(text)
         }

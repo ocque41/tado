@@ -214,7 +214,7 @@ final class TerminalManager {
         // canvas-driven). The interval brackets the @MainActor work
         // between session insert and the model-context `save()` below,
         // so a slow SwiftData save (which would invalidate the @Query
-        // observers and re-render Projects/Cross-Run/Pets) shows up
+        // observers and re-render Projects/Cross-Run) shows up
         // here. See `Sources/Tado/Core/SpawnSignposts.swift`.
         SpawnSignposts.event("terminalManager.spawnAndWire.entry")
         let session = spawnSession(

@@ -318,7 +318,7 @@ private struct KnowledgePacksSurface: View {
                         }
                         .buttonStyle(.borderless)
                         .disabled(deletingID == detail.contextPack.id)
-                        .help("Delete this cached context pack — DB rows + manifest + summary file. Leaves the source notes intact.")
+                        .help("Delete this cached context pack. Source notes stay.")
                     }
                     if let lastAction {
                         HStack(spacing: 6) {
@@ -1063,7 +1063,7 @@ private struct KnowledgeSystemSurface: View {
             if let s = automationStatus {
                 schedulerCard(s)
                 if s.staleLeases > 0 {
-                    Text("\(s.staleLeases) occurrences have lease_expires_at in the past — likely a worker crash. Check the audit log on Activity → Audit.")
+                    Text("\(s.staleLeases) stale leases. Check Activity → Audit.")
                         .font(Font.system(size: 11, weight: .regular))
                         .foregroundStyle(Palette.danger)
                 }

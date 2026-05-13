@@ -19,7 +19,6 @@ public enum ExtensionRegistry {
         NotificationsExtension.self,
         DomeExtension.self,
         CrossRunBrowserExtension.self,
-        PetsExtension.self,
     ]
 
     public static func type(for id: String) -> (any AppExtension.Type)? {

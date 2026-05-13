@@ -176,7 +176,7 @@ struct ProjectEternalSection: View {
             Text("No eternal runs yet")
                 .font(Typography.body)
                 .foregroundStyle(Palette.textSecondary)
-            Text("A single agent that runs non-stop for hours or days. Pick a mode above — the Architect crafts the brief, then the worker runs the loop.")
+            Text("Start a long-running worker loop for this project.")
                 .font(Typography.caption)
                 .foregroundStyle(Palette.textTertiary)
                 .multilineTextAlignment(.center)

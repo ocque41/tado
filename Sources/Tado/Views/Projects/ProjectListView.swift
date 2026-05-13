@@ -47,7 +47,7 @@ struct ProjectListView: View {
         .alert("Architect still planning", isPresented: $showPlanNotReadyAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("The Dispatch Architect has not finished writing the plan yet. Watch its terminal on the canvas — once plan.json is on disk, try Start again.")
+            Text("The dispatch plan is not ready yet. Try Start after plan.json is written.")
         }
     }
 
@@ -111,7 +111,7 @@ struct ProjectListView: View {
             OutlineButton("New Project", icon: "plus", size: .small, variant: .accent) {
                 appState.showNewProjectSheet = true
             }
-            Text("PROJECT REGISTRY  ·  one rootPath per project  ·  agents auto-discovered from .claude/agents and .codex/agents")
+            Text("PROJECT REGISTRY  ·  one root per project")
                 .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
                 .foregroundStyle(Palette.ink4)
                 .padding(.top, 6)

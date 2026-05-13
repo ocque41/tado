@@ -60,6 +60,7 @@ enum TadoUseAutonomousHandlers {
         "tado_use.dispatch_reject",
         "tado_use.dispatch_list",
         "tado_use.dispatch_status",
+        "tado_use.dispatch_intervene",
         // Bootstraps
         "tado_use.bootstrap",
         // Settings
@@ -140,6 +141,8 @@ enum TadoUseAutonomousHandlers {
             return dispatchList(requestID: requestID, payload: payload, modelContext: modelContext)
         case "tado_use.dispatch_status":
             return dispatchStatus(requestID: requestID, payload: payload, modelContext: modelContext)
+        case "tado_use.dispatch_intervene":
+            return dispatchIntervene(requestID: requestID, payload: payload, terminalManager: terminalManager, modelContext: modelContext)
 
         // Bootstraps
         case "tado_use.bootstrap":
@@ -219,6 +222,23 @@ enum TadoUseAutonomousHandlers {
         let spawnTile = payload.bool("spawn_tile") ?? false
         let agentName = payload.string("agent")
         let teamName = payload.string("team")
+        let requestedEngine: TerminalEngine?
+        if let rawEngine = payload.string("engine"), !rawEngine.isEmpty {
+            switch rawEngine {
+            case TerminalEngine.claude.rawValue:
+                requestedEngine = .claude
+            case TerminalEngine.codex.rawValue:
+                requestedEngine = .codex
+            default:
+                return ControlRequestRouter.error(
+                    requestID,
+                    code: "invalid_engine",
+                    message: "engine must be 'claude' or 'codex'"
+                )
+            }
+        } else {
+            requestedEngine = nil
+        }
 
         let gridIndex = nextGridIndex(modelContext: modelContext)
         let gridColumns = (try? modelContext.fetch(FetchDescriptor<AppSettings>()).first?.gridColumns) ?? 3
@@ -229,25 +249,36 @@ enum TadoUseAutonomousHandlers {
             todo.projectID = project.id
         }
         if let agentName { todo.agentName = agentName }
+        var selectedTeam: Team?
         if let teamName, let project {
             let teamFetch = FetchDescriptor<Team>()
             let teams = (try? modelContext.fetch(teamFetch)) ?? []
             if let team = teams.first(where: { $0.projectID == project.id && $0.name == teamName }) {
+                selectedTeam = team
                 todo.teamID = team.id
             }
         }
         modelContext.insert(todo)
 
+        let resolvedEngine: TerminalEngine = {
+            if let requestedEngine { return requestedEngine }
+            if let agentName, let projectRoot = project?.rootPath,
+               let agentEngine = AgentDiscoveryService.resolveEngine(agentName: agentName, projectRoot: projectRoot) {
+                return agentEngine
+            }
+            return TerminalEngine(rawValue: project?.defaultEngineForCoordinator() ?? "claude") ?? .claude
+        }()
+
         if spawnTile {
-            // Default to the project's coordinator engine, which falls
-            // back to Claude when nothing else is set. Canvas tiles use
-            // the same default everywhere else.
-            let engine: TerminalEngine = TerminalEngine(rawValue: project?.defaultEngineForCoordinator() ?? "claude") ?? .claude
             terminalManager.spawnAndWire(
                 todo: todo,
-                engine: engine,
+                engine: resolvedEngine,
                 cwd: project?.rootPath,
-                projectName: project?.name
+                agentName: agentName,
+                projectName: project?.name,
+                teamName: selectedTeam?.name ?? teamName,
+                teamID: selectedTeam?.id,
+                teamAgents: selectedTeam?.agentNames
             )
         }
         try? modelContext.save()
@@ -257,6 +288,7 @@ enum TadoUseAutonomousHandlers {
             "grid_index": AnyCodable(gridIndex),
             "grid_label": AnyCodable(CanvasLayout.gridLabel(forIndex: gridIndex, gridColumns: gridColumns)),
             "spawned_tile": AnyCodable(spawnTile),
+            "engine": AnyCodable(resolvedEngine.rawValue),
             "project_id": AnyCodable(project?.id.uuidString ?? ""),
         ]))
     }
@@ -600,6 +632,7 @@ enum TadoUseAutonomousHandlers {
                 "state": AnyCodable(run.state),
                 "mode": AnyCodable(run.mode),
                 "engine": AnyCodable(run.engine),
+                "created_at": AnyCodable(ISO8601DateFormatter().string(from: run.createdAt)),
                 "is_active": AnyCodable(EternalService.isActive(run)),
             ]
             if let p = run.project {
@@ -673,22 +706,20 @@ enum TadoUseAutonomousHandlers {
         guard let run = lookupEternalRun(payload: payload, modelContext: modelContext) else {
             return ControlRequestRouter.error(requestID, code: "not_found", message: "eternal run not found")
         }
-        guard let directive = payload.string("directive"), !directive.isEmpty else {
+        guard let directive = payload.string("directive") else {
             return ControlRequestRouter.error(requestID, code: "missing_param", message: "directive required (the message to drop into the worker's inbox)")
         }
-        let inbox = EternalService.inboxDirURL(run)
-        try? FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
-        let filename = "tado-use-\(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")).md"
-        let url = inbox.appendingPathComponent(filename)
         do {
-            try directive.write(to: url, atomically: true, encoding: .utf8)
+            let delivery = try RunInterventionWriter.writeEternal(run: run, directive: directive)
+            return ControlRequestRouter.ok(requestID, data: AnyCodable([
+                "run_id": AnyCodable(run.id.uuidString),
+                "inbox_file": AnyCodable(delivery.path ?? ""),
+            ]))
+        } catch RunInterventionWriter.InterventionError.emptyDirective {
+            return ControlRequestRouter.error(requestID, code: "missing_param", message: "directive required (the message to drop into the worker's inbox)")
         } catch {
             return ControlRequestRouter.error(requestID, code: "write_failed", message: "could not write inbox file: \(error.localizedDescription)")
         }
-        return ControlRequestRouter.ok(requestID, data: AnyCodable([
-            "run_id": AnyCodable(run.id.uuidString),
-            "inbox_file": AnyCodable(url.path),
-        ]))
     }
 
     // MARK: - Dispatch — propose / accept / reject
@@ -835,6 +866,7 @@ enum TadoUseAutonomousHandlers {
                 "run_id": AnyCodable(run.id.uuidString),
                 "label": AnyCodable(run.label),
                 "state": AnyCodable(run.state),
+                "created_at": AnyCodable(ISO8601DateFormatter().string(from: run.createdAt)),
             ]
             if let p = run.project {
                 d["project_id"] = AnyCodable(p.id.uuidString)
@@ -870,6 +902,46 @@ enum TadoUseAutonomousHandlers {
             dict["project_name"] = AnyCodable(p.name)
         }
         return ControlRequestRouter.ok(requestID, data: AnyCodable(dict))
+    }
+
+    private static func dispatchIntervene(
+        requestID: String,
+        payload: ControlPayload,
+        terminalManager: TerminalManager,
+        modelContext: ModelContext
+    ) -> ControlResponseEnvelope {
+        guard let run = lookupDispatchRun(payload: payload, modelContext: modelContext) else {
+            return ControlRequestRouter.error(requestID, code: "not_found", message: "dispatch run not found")
+        }
+        guard let directive = payload.string("directive") else {
+            return ControlRequestRouter.error(requestID, code: "missing_param", message: "directive required")
+        }
+        do {
+            let delivery = try RunInterventionWriter.sendDispatch(
+                run: run,
+                directive: directive,
+                terminalManager: terminalManager
+            )
+            return ControlRequestRouter.ok(requestID, data: AnyCodable([
+                "run_id": AnyCodable(run.id.uuidString),
+                "delivered": AnyCodable(true),
+                "target_todo_id": AnyCodable(delivery.todoID?.uuidString ?? ""),
+                "target_session_id": AnyCodable(delivery.sessionID?.uuidString ?? ""),
+            ]))
+        } catch RunInterventionWriter.InterventionError.emptyDirective {
+            return ControlRequestRouter.error(requestID, code: "missing_param", message: "directive required")
+        } catch RunInterventionWriter.InterventionError.noDispatchTarget {
+            return ControlRequestRouter.error(requestID, code: "no_active_tile", message: "dispatch run has no current phase or architect tile")
+        } catch RunInterventionWriter.InterventionError.noLiveSession(let todoID) {
+            return ControlRequestRouter.error(
+                requestID,
+                code: "no_active_tile",
+                message: "dispatch target tile is not live",
+                extra: ["target_todo_id": AnyCodable(todoID.uuidString)]
+            )
+        } catch {
+            return ControlRequestRouter.error(requestID, code: "send_failed", message: "could not deliver dispatch intervention: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Bootstraps
@@ -1322,14 +1394,49 @@ enum TadoUseAutonomousHandlers {
             return ControlRequestRouter.error(requestID, code: "not_found", message: "no live session matched '\(target)'")
         }
         let log = session.logBuffer
-        let lines = log.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let logLines = log.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let logHasContent = logLines.contains {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let screenLines = logHasContent ? [] : terminalScreenLines(for: session)
+        let lines = logHasContent ? logLines : screenLines
+        let source = logHasContent ? "log_buffer" : "screen_snapshot"
         let tailed = Array(lines.suffix(max(0, tail)))
         return ControlRequestRouter.ok(requestID, data: AnyCodable([
             "session_id": AnyCodable(session.id.uuidString),
             "todo_id": AnyCodable(session.todoID.uuidString),
+            "source": AnyCodable(source),
+            "status": AnyCodable(session.status.rawValue),
+            "turn_count": AnyCodable(session.turnCount),
             "lines": AnyCodable(tailed.map(AnyCodable.init)),
             "line_count": AnyCodable(tailed.count),
         ]))
+    }
+
+    private static func terminalScreenLines(for session: TerminalSession) -> [String] {
+        guard let snapshot = session.coreSession?.snapshotFull() else { return [] }
+        let cols = Int(snapshot.cols)
+        let rows = Int(snapshot.rows)
+        guard cols > 0, rows > 0, snapshot.cells.count >= cols * rows else { return [] }
+
+        return (0..<rows).map { row in
+            var line = ""
+            line.reserveCapacity(cols)
+            for col in 0..<cols {
+                let cell = snapshot.cells[row * cols + col]
+                if cell.ch == 0 {
+                    line.append(" ")
+                } else if let scalar = Unicode.Scalar(cell.ch) {
+                    line.unicodeScalars.append(scalar)
+                } else {
+                    line.append(" ")
+                }
+            }
+            while line.last == " " {
+                line.removeLast()
+            }
+            return line
+        }
     }
 
     private static func tileTerminate(

@@ -77,7 +77,7 @@ struct RecipesSurface: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Palette.ink)
             }
-            Text("Recipes are governed-answer templates the app and agents share. Click Seed defaults to install architecture-review, completion-claim, and team-handoff.")
+            Text("Recipes are answer templates shared by the app and agents.")
                 .font(.system(size: 12.5, weight: .regular))
                 .foregroundStyle(Palette.ink3)
                 .frame(maxWidth: 540, alignment: .leading)
@@ -91,7 +91,7 @@ struct RecipesSurface: View {
             )
             .disabled(seedBusy)
             seedFeedbackBanner
-            Text("RETRIEVAL RECIPES  ·  intent-keyed policy + template  ·  three baked defaults: architecture-review, completion-claim, team-handoff")
+            Text("RETRIEVAL RECIPES")
                 .font(Font.system(size: 10.5, weight: .regular, design: .monospaced))
                 .foregroundStyle(Palette.ink4)
                 .padding(.top, 6)
