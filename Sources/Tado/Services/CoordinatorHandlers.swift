@@ -293,12 +293,16 @@ enum CoordinatorDispatch {
         let feature = payload.string("feature") ?? "coordinator-task"
         let label = payload.string("label") ?? "Coordinator: \(feature)"
         let brief = payload.string("brief") ?? task
+        let executionType = payload.string("execution_type") ?? payload.string("type") ?? "sequential"
+        let dispatchMode = payload.string("dispatch_mode") ?? payload.string("layout") ?? "grid"
 
         let run = DispatchPlanService.proposeViaCoordinator(
             project: project,
             label: label,
             brief: brief,
             coordinatorTodoID: coordTodoID,
+            executionType: executionType,
+            dispatchMode: dispatchMode,
             modelContext: modelContext,
             terminalManager: terminalManager,
             appState: appState
@@ -309,7 +313,9 @@ enum CoordinatorDispatch {
             "project_id": AnyCodable(project.id.uuidString),
             "project_name": AnyCodable(project.name),
             "label": AnyCodable(run.label),
-            "state": AnyCodable(run.state)
+            "state": AnyCodable(run.state),
+            "execution_type": AnyCodable(run.normalizedExecutionType),
+            "dispatch_mode": AnyCodable(run.dispatchMode)
         ]))
     }
 
@@ -332,6 +338,8 @@ enum CoordinatorDispatch {
             "has_crafted": AnyCodable(craftedExists),
             "has_plan": AnyCodable(planExists),
             "phase_count": AnyCodable(phaseCount),
+            "execution_type": AnyCodable(run.normalizedExecutionType),
+            "dispatch_mode": AnyCodable(run.dispatchMode),
             "spawned_by_coordinator": AnyCodable(run.spawnedByCoordinatorTodoID != nil)
         ]
         if let project = run.project {
@@ -465,6 +473,8 @@ enum CoordinatorDispatch {
                     "run_id": AnyCodable(run.id.uuidString),
                     "label": AnyCodable(run.label),
                     "state": AnyCodable(run.state),
+                    "execution_type": AnyCodable(run.normalizedExecutionType),
+                    "dispatch_mode": AnyCodable(run.dispatchMode),
                     "project_name": AnyCodable(run.project?.name ?? ""),
                     "project_root": AnyCodable(run.project?.rootPath ?? ""),
                     "spawned_by_coordinator": AnyCodable(run.spawnedByCoordinatorTodoID != nil),

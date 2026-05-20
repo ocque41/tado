@@ -1,9 +1,10 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import AppKit
 
-/// Per-project Kanban board. Sibling of `ProjectDetailView`; routed by
-/// `ProjectsView` when `appState.projectPageMode == .kanban`.
+/// Per-project Kanban board. Sibling of `RelayProjectDetailView`;
+/// routed by `RelayProjectsView` when `appState.projectPageMode == .kanban`.
 ///
 /// The board is a **single picture of everything happening on a
 /// project** — todos, dispatch runs, and eternal runs all surface as
@@ -22,6 +23,7 @@ struct ProjectKanbanView: View {
     @Environment(AppState.self) private var appState
     @Environment(TerminalManager.self) private var terminalManager
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.relayTheme) private var theme
 
     @Query(sort: \KanbanColumn.orderIndex) private var allColumns: [KanbanColumn]
     @Query(sort: \TodoItem.kanbanOrderIndex) private var allTodos: [TodoItem]
@@ -73,16 +75,9 @@ struct ProjectKanbanView: View {
     }
 
     var body: some View {
-        @Bindable var appStateBindable = appState
-
-        return PageContainer {
-            PageHeader(
-                title: project.name,
-                path: project.rootPath,
-                pathOnCopy: { pathCopiedAt = .now }
-            ) {
-                metaStrip()
-            }
+        RelayPageContainer {
+            relayHead
+            metaStats
 
             // Detail | Kanban view-mode toggle.
             pageModePicker
@@ -96,20 +91,19 @@ struct ProjectKanbanView: View {
             groupingTabs
                 .padding(.bottom, 12)
 
-            SectionRail(
-                label: "Board",
-                count: boardCountText(),
-                actions: {
+            RelaySection(
+                kicker: "BOARD",
+                title: boardCountText(),
+                content: {
+                    boardScroller
+                        .padding(.vertical, 4)
+                },
+                trailing: {
                     if appState.kanbanGrouping == .column {
-                        OutlineButton("New column", icon: "plus", size: .small, variant: .accent) {
+                        RelayButton(label: "New column", variant: .primary, icon: "plus") {
                             beginNewColumn()
                         }
                     }
-                },
-                content: {
-                    boardScroller
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 16)
                 }
             )
         }
@@ -123,6 +117,72 @@ struct ProjectKanbanView: View {
         }
     }
 
+    // MARK: - Relay head
+
+    private var relayHead: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                RelayButton(label: "Projects", variant: .ghost, icon: "chevron.left") {
+                    appState.activeProjectID = nil
+                    appState.projectPageMode = .detail
+                }
+                RelayKicker(text: "PROJECTS - KANBAN")
+            }
+
+            Text(project.name)
+                .font(RelayType.h1(size: 56))
+                .tracking(RelayTracking.h1(56))
+                .foregroundStyle(RelayPalette.foreground(for: theme))
+                .accessibilityAddTraits(.isHeader)
+
+            HStack(spacing: 8) {
+                Text(project.rootPath)
+                    .font(Typography.sans(size: 11, weight: .regular))
+                    .tracking(RelayTracking.meta(11))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button(action: copyPath) {
+                    Text("COPY")
+                        .font(Typography.sans(size: 9, weight: .medium))
+                        .tracking(RelayTracking.caps(9))
+                        .foregroundStyle(RelayPalette.foreground2(for: theme))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: RelayRadius.standard)
+                                .stroke(RelayPalette.hair(for: theme), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                if let pathCopiedAt, Date().timeIntervalSince(pathCopiedAt) < 2 {
+                    Text("COPIED")
+                        .font(Typography.sans(size: 9, weight: .medium))
+                        .tracking(RelayTracking.caps(9))
+                        .foregroundStyle(RelayPalette.terracotta)
+                }
+            }
+        }
+    }
+
+    private var metaStats: some View {
+        let inFlight = projectTodos.filter {
+            $0.status == .running || $0.status == .needsInput || $0.status == .awaitingResponse
+        }.count
+        return RelayStatStrip(stats: [
+            RelayStat("TODOS", "\(projectTodos.count)"),
+            RelayStat("DISPATCH", "\(projectDispatchRuns.count)"),
+            RelayStat("ETERNAL", "\(projectEternalRuns.count)"),
+            RelayStat("IN FLIGHT", "\(inFlight)", meta: appState.kanbanGrouping.label, metaTint: inFlight > 0 ? RelayPalette.terracotta : nil),
+        ])
+    }
+
+    private func copyPath() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(project.rootPath, forType: .string)
+        pathCopiedAt = .now
+    }
+
     // MARK: - Composer
 
     private var composer: some View {
@@ -130,14 +190,14 @@ struct ProjectKanbanView: View {
             HStack(spacing: 8) {
                 Image(systemName: "plus.circle.fill")
                     .font(.system(size: 13))
-                    .foregroundStyle(Palette.accent)
+                    .foregroundStyle(RelayPalette.terracotta)
                 Text("PROMPT")
-                    .font(Font.system(size: 9.5, weight: .semibold, design: .monospaced))
-                    .tracking(0.8)
-                    .foregroundStyle(Palette.ink3)
+                    .font(Typography.sans(size: 9.5, weight: .semibold))
+                    .tracking(RelayTracking.caps(9.5))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
                 Text("create todo / dispatch / eternal from the board")
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textTertiary)
+                    .font(Typography.sans(size: 12, weight: .regular))
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
                 Spacer(minLength: 0)
             }
 
@@ -146,7 +206,7 @@ struct ProjectKanbanView: View {
                     if composeText.isEmpty {
                         Text(composePlaceholder)
                             .font(Typography.monoBody)
-                            .foregroundStyle(Palette.textTertiary)
+                            .foregroundStyle(RelayPalette.foreground3(for: theme))
                             .padding(.horizontal, 6)
                             .padding(.top, 6)
                             .allowsHitTesting(false)
@@ -166,44 +226,40 @@ struct ProjectKanbanView: View {
                 .padding(8)
                 .background(
                     RoundedRectangle(cornerRadius: DK.radius)
-                        .fill(Palette.bgElev)
+                        .fill(RelayPalette.wash(for: theme))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: DK.radius)
                         .stroke(
                             composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                ? Palette.divider
-                                : Palette.accentSoft,
-                            lineWidth: DK.ruleW
+                                ? RelayPalette.hair(for: theme)
+                                : RelayPalette.terracotta.opacity(0.55),
+                            lineWidth: 1
                         )
                 )
 
                 VStack(alignment: .trailing, spacing: 8) {
                     composeKindMenu
-                    OutlineButton(
-                        composeKind.submitLabel,
-                        icon: composeKind.submitIcon,
-                        size: .small,
-                        variant: .accent,
-                        action: { submitCompose() }
-                    )
+                    RelayButton(label: composeKind.submitLabel, variant: .primary, icon: composeKind.submitIcon) {
+                        submitCompose()
+                    }
                     .disabled(composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .opacity(composeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
                     Text("⌘↩ to submit")
                         .font(Typography.monoCaption)
-                        .foregroundStyle(Palette.textTertiary)
+                        .foregroundStyle(RelayPalette.foreground3(for: theme))
                 }
                 .frame(width: 200, alignment: .trailing)
             }
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: DK.radius)
-                .fill(Palette.surfaceElevated)
+            RoundedRectangle(cornerRadius: RelayRadius.standard)
+                .fill(RelayPalette.background(for: theme))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DK.radius)
-                .stroke(Palette.divider, lineWidth: DK.ruleW)
+            RoundedRectangle(cornerRadius: RelayRadius.standard)
+                .stroke(RelayPalette.hair(for: theme), lineWidth: 1)
         )
     }
 
@@ -216,10 +272,16 @@ struct ProjectKanbanView: View {
             }
             Section("Dispatch") {
                 Button(action: { composeKind = .dispatchGrid }) {
-                    Label("Dispatch · Grid", systemImage: "square.grid.3x3")
+                    Label("Sequential · Grid", systemImage: "arrow.right")
                 }
                 Button(action: { composeKind = .dispatchKanban }) {
-                    Label("Dispatch · Kanban", systemImage: "rectangle.split.3x1")
+                    Label("Sequential · Kanban", systemImage: "rectangle.split.3x1")
+                }
+                Button(action: { composeKind = .dispatchWaveGrid }) {
+                    Label("Wave · Grid", systemImage: "waveform")
+                }
+                Button(action: { composeKind = .dispatchWaveKanban }) {
+                    Label("Wave · Kanban", systemImage: "waveform.path")
                 }
             }
             Section("Eternal Mega") {
@@ -253,18 +315,18 @@ struct ProjectKanbanView: View {
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Palette.ink3)
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
             }
-            .foregroundStyle(Palette.ink)
+            .foregroundStyle(RelayPalette.foreground(for: theme))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: DK.radius - 1, style: .continuous)
-                    .fill(Palette.bgElev)
+                RoundedRectangle(cornerRadius: RelayRadius.standard, style: .continuous)
+                    .fill(RelayPalette.wash(for: theme))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DK.radius - 1, style: .continuous)
-                    .stroke(Palette.rule, lineWidth: DK.ruleW)
+                RoundedRectangle(cornerRadius: RelayRadius.standard, style: .continuous)
+                    .stroke(RelayPalette.hair(for: theme), lineWidth: 1)
             )
             .frame(width: 200, alignment: .leading)
         }
@@ -276,7 +338,7 @@ struct ProjectKanbanView: View {
     private var composePlaceholder: String {
         switch composeKind {
         case .todo: return "What's the next thing? One-line todo, or paste a richer prompt."
-        case .dispatchGrid, .dispatchKanban:
+        case .dispatchGrid, .dispatchKanban, .dispatchWaveGrid, .dispatchWaveKanban:
             return "Describe WHAT you want built and WHY. The Dispatch Architect plans phases from this brief."
         case .eternalMegaNormal, .eternalMegaContinuous, .eternalMegaPerf:
             return "Describe the long-running goal for this Eternal Mega. The architect derives plan / eval / improve from your brief."
@@ -288,8 +350,7 @@ struct ProjectKanbanView: View {
     // MARK: - Grouping tabs
 
     private var groupingTabs: some View {
-        @Bindable var appStateBindable = appState
-        return ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 ForEach(KanbanGroupingMode.allCases, id: \.self) { mode in
                     let count = laneCount(for: mode)
@@ -299,12 +360,12 @@ struct ProjectKanbanView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: DK.radius)
-                .fill(Palette.bgPage)
+            RoundedRectangle(cornerRadius: RelayRadius.standard)
+                .fill(RelayPalette.background(for: theme))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DK.radius)
-                .stroke(Palette.rule, lineWidth: DK.ruleW)
+            RoundedRectangle(cornerRadius: RelayRadius.standard)
+                .stroke(RelayPalette.hair(for: theme), lineWidth: 1)
         )
     }
 
@@ -321,15 +382,15 @@ struct ProjectKanbanView: View {
                 Text(mode.label)
                     .font(Font.system(size: 12, weight: active ? .semibold : .medium))
                 Text("\(count)")
-                    .font(Font.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(active ? Palette.accent : Palette.ink4)
+                    .font(Typography.sans(size: 10, weight: .semibold))
+                    .foregroundStyle(active ? RelayPalette.terracotta : RelayPalette.foreground4(for: theme))
             }
-            .foregroundStyle(active ? Palette.ink : Palette.ink3)
+            .foregroundStyle(active ? RelayPalette.foreground(for: theme) : RelayPalette.foreground3(for: theme))
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(active ? Palette.accent : Color.clear)
+                    .fill(active ? RelayPalette.terracotta : Color.clear)
                     .frame(height: 2)
             }
             .contentShape(Rectangle())
@@ -691,6 +752,8 @@ struct ProjectKanbanView: View {
                 pill(text: dispatchStateLabel(run.state),
                      tint: dispatchStateTint(run.state),
                      foreground: dispatchStateInk(run.state))
+                pill(text: run.normalizedExecutionType == "wave" ? "wave" : "sequential",
+                     tint: Palette.bgRowHi, foreground: Palette.ink2)
                 pill(text: run.dispatchMode == "kanban" ? "kanban" : "grid",
                      tint: Palette.bgRowHi, foreground: Palette.ink2)
                 if phaseCount > 0 {
@@ -877,25 +940,25 @@ struct ProjectKanbanView: View {
             TextField("Column title", text: $newColumnTitle, onCommit: commitNewColumn)
                 .textFieldStyle(.plain)
                 .font(Typography.heading)
-                .foregroundStyle(Palette.textPrimary)
+                .foregroundStyle(RelayPalette.foreground(for: theme))
                 .padding(10)
                 .background(
-                    RoundedRectangle(cornerRadius: DK.radius)
-                        .fill(Palette.surfaceElevated)
+                    RoundedRectangle(cornerRadius: RelayRadius.standard)
+                        .fill(RelayPalette.wash(for: theme))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: DK.radius)
-                        .stroke(Palette.accentSoft, lineWidth: DK.ruleW)
+                    RoundedRectangle(cornerRadius: RelayRadius.standard)
+                        .stroke(RelayPalette.terracotta.opacity(0.55), lineWidth: 1)
                 )
                 .onExitCommand {
                     showNewColumnField = false
                     newColumnTitle = ""
                 }
             HStack(spacing: 6) {
-                OutlineButton("Add", icon: "checkmark", size: .small, variant: .accent) {
+                RelayButton(label: "Add", variant: .primary, icon: "checkmark") {
                     commitNewColumn()
                 }
-                OutlineButton("Cancel", icon: "xmark", size: .small) {
+                RelayButton(label: "Cancel", variant: .standard, icon: "xmark") {
                     showNewColumnField = false
                     newColumnTitle = ""
                 }
@@ -909,15 +972,15 @@ struct ProjectKanbanView: View {
 
     private var pageModePicker: some View {
         @Bindable var appStateBindable = appState
-        return HStack(spacing: 10) {
-            ModeTab(
-                eyebrow: "VIEW",
+        return HStack(spacing: 0) {
+            RelaySegmented(
                 options: [
-                    .init(id: ProjectPageMode.detail, label: "Detail", icon: "list.bullet.rectangle"),
-                    .init(id: ProjectPageMode.kanban, label: "Kanban", icon: "rectangle.split.3x1"),
+                    RelaySegmentedOption(label: "Detail", value: ProjectPageMode.detail),
+                    RelaySegmentedOption(label: "Kanban", value: ProjectPageMode.kanban),
                 ],
                 selection: $appStateBindable.projectPageMode
             )
+            .frame(width: 220)
             Spacer()
         }
     }
@@ -931,9 +994,13 @@ struct ProjectKanbanView: View {
         case .todo:
             createPlainTodo(brief: trimmed)
         case .dispatchGrid:
-            createDispatch(brief: trimmed, mode: "grid")
+            createDispatch(brief: trimmed, executionType: "sequential", mode: "grid")
         case .dispatchKanban:
-            createDispatch(brief: trimmed, mode: "kanban")
+            createDispatch(brief: trimmed, executionType: "sequential", mode: "kanban")
+        case .dispatchWaveGrid:
+            createDispatch(brief: trimmed, executionType: "wave", mode: "grid")
+        case .dispatchWaveKanban:
+            createDispatch(brief: trimmed, executionType: "wave", mode: "kanban")
         case .eternalMegaNormal:
             createEternal(brief: trimmed, mode: "mega", loopKind: "external", kind: "general")
         case .eternalMegaContinuous:
@@ -971,13 +1038,14 @@ struct ProjectKanbanView: View {
         try? modelContext.save()
     }
 
-    private func createDispatch(brief: String, mode: String) {
+    private func createDispatch(brief: String, executionType: String, mode: String) {
         let run = DispatchRun(
             project: project,
             label: DispatchRun.defaultLabel(),
             state: "drafted",
             brief: brief,
-            dispatchMode: mode
+            dispatchMode: mode,
+            executionType: executionType
         )
         modelContext.insert(run)
         try? modelContext.save()
@@ -1052,25 +1120,6 @@ struct ProjectKanbanView: View {
         }
         modelContext.delete(column)
         try? modelContext.save()
-    }
-
-    // MARK: - Header / counts
-
-    private func metaStrip() -> some View {
-        let inFlight = projectTodos.filter {
-            $0.status == .running || $0.status == .needsInput || $0.status == .awaitingResponse
-        }.count
-        return MetaStrip {
-            MetaCell(key: "Todos", value: "\(projectTodos.count)")
-            MetaCell(key: "Dispatch", value: "\(projectDispatchRuns.count)")
-            MetaCell(key: "Eternal", value: "\(projectEternalRuns.count)")
-            MetaCell(
-                key: "In-flight",
-                value: "\(inFlight)",
-                tint: inFlight > 0 ? Palette.green : Palette.ink3
-            )
-            MetaCell(key: "Mode", value: appState.kanbanGrouping.label, trailingDivider: false)
-        }
     }
 
     private func boardCountText() -> String {
@@ -1217,6 +1266,8 @@ private enum ComposeKind: String, CaseIterable, Equatable {
     case todo
     case dispatchGrid
     case dispatchKanban
+    case dispatchWaveGrid
+    case dispatchWaveKanban
     case eternalMegaNormal
     case eternalMegaContinuous
     case eternalMegaPerf
@@ -1227,8 +1278,10 @@ private enum ComposeKind: String, CaseIterable, Equatable {
     var label: String {
         switch self {
         case .todo: "Todo"
-        case .dispatchGrid: "Dispatch · Grid"
-        case .dispatchKanban: "Dispatch · Kanban"
+        case .dispatchGrid: "Dispatch · Sequential Grid"
+        case .dispatchKanban: "Dispatch · Sequential Kanban"
+        case .dispatchWaveGrid: "Dispatch · Wave Grid"
+        case .dispatchWaveKanban: "Dispatch · Wave Kanban"
         case .eternalMegaNormal: "Mega · Normal"
         case .eternalMegaContinuous: "Mega · Continuous"
         case .eternalMegaPerf: "Mega · Performance"
@@ -1241,8 +1294,10 @@ private enum ComposeKind: String, CaseIterable, Equatable {
     var icon: String {
         switch self {
         case .todo: "checklist"
-        case .dispatchGrid: "square.grid.3x3"
+        case .dispatchGrid: "arrow.right"
         case .dispatchKanban: "rectangle.split.3x1"
+        case .dispatchWaveGrid: "waveform"
+        case .dispatchWaveKanban: "waveform.path"
         case .eternalMegaNormal: "infinity"
         case .eternalMegaContinuous: "infinity.circle"
         case .eternalMegaPerf: "speedometer"

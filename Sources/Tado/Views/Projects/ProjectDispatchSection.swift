@@ -41,8 +41,8 @@ struct ProjectDispatchSection: View {
 
     var body: some View {
         // Section header (DISPATCH label + count + "New plan" button)
-        // is now drawn by the parent `SectionRail` in
-        // `ProjectDetailView`, so the body renders only the runs list
+        // is now drawn by the parent Relay section in
+        // `RelayProjectDetailView`, so the body renders only the runs list
         // + the empty-state block. Keeping the outer VStack so the
         // archived disclosure can sit below the active runs without
         // bleeding into the sibling section.
@@ -184,6 +184,9 @@ struct ProjectDispatchSection: View {
                         .font(Font.system(size: 11, weight: .regular, design: .monospaced))
                         .foregroundStyle(Palette.ink4)
                 }
+                Text("·  \(run.normalizedExecutionType.uppercased())")
+                    .font(Font.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(run.normalizedExecutionType == "wave" ? Palette.accent : Palette.ink4)
                 Spacer()
                 actionButtons(run: run, state: displayState)
             }
@@ -201,7 +204,7 @@ struct ProjectDispatchSection: View {
         .background(Palette.bgElev)
         .overlay(alignment: .leading) {
             // Per-state leading accent stripe — same affordance the
-            // ProjectCard uses; a subtle "this run is the one
+            // the project grid uses; a subtle "this run is the one
             // demanding attention" cue.
             Rectangle()
                 .fill(borderColor(for: displayState))

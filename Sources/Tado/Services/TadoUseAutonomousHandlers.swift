@@ -747,11 +747,15 @@ enum TadoUseAutonomousHandlers {
         try? modelContext.save()
 
         let label = payload.string("label") ?? "Tado Use: \(goal.prefix(40))"
+        let executionType = payload.string("execution_type") ?? payload.string("type") ?? "sequential"
+        let dispatchMode = payload.string("dispatch_mode") ?? payload.string("layout") ?? "grid"
         let run = DispatchPlanService.proposeViaCoordinator(
             project: project,
             label: label,
             brief: goal,
             coordinatorTodoID: coordTodo.id,
+            executionType: executionType,
+            dispatchMode: dispatchMode,
             modelContext: modelContext,
             terminalManager: terminalManager,
             appState: appState
@@ -767,6 +771,8 @@ enum TadoUseAutonomousHandlers {
             "project_name": AnyCodable(project.name),
             "label": AnyCodable(run.label),
             "state": AnyCodable(run.state),
+            "execution_type": AnyCodable(run.normalizedExecutionType),
+            "dispatch_mode": AnyCodable(run.dispatchMode),
             "coordinator_todo_id": AnyCodable(coordTodo.id.uuidString),
             "next_step": AnyCodable("Poll tado_use_dispatch_status until state == 'awaitingReview', then call tado_use_dispatch_accept with this run_id."),
         ]))
@@ -866,6 +872,8 @@ enum TadoUseAutonomousHandlers {
                 "run_id": AnyCodable(run.id.uuidString),
                 "label": AnyCodable(run.label),
                 "state": AnyCodable(run.state),
+                "execution_type": AnyCodable(run.normalizedExecutionType),
+                "dispatch_mode": AnyCodable(run.dispatchMode),
                 "created_at": AnyCodable(ISO8601DateFormatter().string(from: run.createdAt)),
             ]
             if let p = run.project {
@@ -894,6 +902,8 @@ enum TadoUseAutonomousHandlers {
             "label": AnyCodable(run.label),
             "state": AnyCodable(run.state),
             "phase_count": AnyCodable(phaseCount),
+            "execution_type": AnyCodable(run.normalizedExecutionType),
+            "dispatch_mode": AnyCodable(run.dispatchMode),
             "has_crafted": AnyCodable(DispatchPlanService.craftedExistsOnDisk(run)),
             "has_plan": AnyCodable(DispatchPlanService.planExistsOnDisk(run)),
         ]

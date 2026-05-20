@@ -63,7 +63,7 @@ struct ContentView: View {
                         .frame(width: 360)
                         .transition(.move(edge: .leading))
                 }
-                // Sidebar takes real layout space — TodoListView / ProjectsView
+                // Sidebar takes real layout space — RelayTodoListView / RelayProjectsView
                 // reflow into the remaining width instead of being covered.
                 // Canvas still fills the remaining width via `maxWidth:
                 // .infinity` below; its pan/zoom math works in canvas-space,
@@ -89,9 +89,8 @@ struct ContentView: View {
                         .opacity(appState.currentView == .todos ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .todos)
 
-                    // Phase 7 — Relay Projects landing surface.
-                    // Drills into the legacy ProjectsView chain
-                    // when an active project is selected.
+                    // Relay Projects is the only project review route:
+                    // grid, detail, and per-project Kanban all live there.
                     RelayProjectsView()
                         .opacity(appState.currentView == .projects ? 1 : 0)
                         .allowsHitTesting(appState.currentView == .projects)
@@ -449,11 +448,12 @@ struct ContentView: View {
         // this override the tile would inherit whatever the user picked in
         // Settings (usually Opus), defeating the point of per-phase routing.
         if let agentName = request.agentName, let root = projectRoot,
-           engine == .claude,
+           engine == .claude || engine == .codex,
            let session = terminalManager.session(forTodoID: todo.id) {
             let override = AgentDiscoveryService.phaseOverride(
                 agentName: agentName,
-                projectRoot: root
+                projectRoot: root,
+                engine: engine
             )
             session.modelFlagsOverride = override.modelFlags
             session.effortFlagsOverride = override.effortFlags

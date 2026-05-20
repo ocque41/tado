@@ -41,6 +41,8 @@ extension DispatchPlanService {
         label: String,
         brief: String,
         coordinatorTodoID: UUID,
+        executionType: String = "sequential",
+        dispatchMode: String = "grid",
         modelContext: ModelContext,
         terminalManager: TerminalManager,
         appState: AppState
@@ -63,7 +65,9 @@ extension DispatchPlanService {
         let run = DispatchRun(
             project: project,
             label: resolvedLabel,
-            brief: brief
+            brief: brief,
+            dispatchMode: dispatchMode == "kanban" ? "kanban" : "grid",
+            executionType: executionType == "wave" ? "wave" : "sequential"
         )
         run.spawnedByCoordinatorTodoID = coordinatorTodoID
         modelContext.insert(run)

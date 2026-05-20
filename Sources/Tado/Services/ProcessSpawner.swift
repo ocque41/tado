@@ -228,6 +228,11 @@ enum ProcessSpawner {
         claudeDisplay: ClaudeDisplayEnv = .defaults
     ) -> [String] {
         var env = ProcessInfo.processInfo.environment
+        if env["TADO_DESKTOP_ALLOW_RUNTIME_ENV"] != "1" {
+            env.removeValue(forKey: "TADO_PROFILE")
+            env.removeValue(forKey: "TADO_RUNTIME_SOCKET")
+            env.removeValue(forKey: "TADO_RUNTIME_ID")
+        }
         env["TADO_IPC_ROOT"] = ipcRoot.path
         env["TADO_STORAGE_ROOT"] = StorePaths.root.path
         env["TADO_SESSION_ID"] = sessionID.uuidString.lowercased()
@@ -564,19 +569,26 @@ enum ProcessSpawner {
         not in the compact form.
 
         **Core CLI tools** (installed at `~/.local/bin/`):
-          tado-list [--toon]                        \u{2014} active sessions (UUID, engine, grid, status, name)
+          tado                                     - CLI-first Agent OS. Starts `tadod`
+                                                    for the active profile, then supports
+                                                    `daemon`, `spawn`, `list`, `read`,
+                                                    `send`, `kill`, `search`, `board`,
+                                                    `bootstrap`, and `events`.
+          tado-list [--toon]                        \u{2014} active sessions (desktop IPC or CLI runtime profile)
           tado-read <target> [--tail N] [--follow] [--raw]
-          tado-send <target> <message>
+                                                    \u{2014} read screen/transcript output
+          tado-send <target> <message>              \u{2014} send input to a live PTY session
           tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
-          tado-events [filter] [--toon]             \u{2014} real-time event stream from /tmp/tado-ipc/events.sock
+                                                    \u{2014} desktop canvas spawn, or runtime spawn when `TADO_PROFILE`/`TADO_RUNTIME_SOCKET` is active
+          tado-events [filter] [--toon]             \u{2014} real-time event stream from desktop IPC or `tadod`
           tado-config {get,set,list,path,export,import} [scope] [key] [value]
           tado-notify {send "<title>", tail}
           tado-memory {read,note,search,path} [scope]
           tado-dome {register,query,read,code-search,...} [--toon]
                                                     \u{2014} scoped Dome knowledge from canvas agents
           tado-kanban {list, move <todo-id> <column-key>, add-column --title <text>}
-                                                    \u{2014} per-project Kanban board (cards + columns)
-          tado-tui                                  \u{2014} interactive terminal work queue for the human operator
+                                                    \u{2014} runtime Agent View board when a profile is active; otherwise per-project Kanban
+          tado-tui                                  \u{2014} runtime-backed Agent OS TUI for the human operator
 
         **Target resolution** (priority order, same for `tado-read` and `tado-send`):
           1. Exact UUID
@@ -595,6 +607,7 @@ enum ProcessSpawner {
           tado-mcp \u{2014} `tado_list`, `tado_send`, `tado_read`, `tado_broadcast`,
                        `tado_config_{get,set,list}`, `tado_memory_{read,append,search}`,
                        `tado_notify`, `tado_events_query`
+                       (A2A tools route to `tadod` when a runtime profile/socket is active.)
           dome-mcp \u{2014} `dome_search`, `dome_read`, `dome_note`, `dome_schedule`,
                        `dome_graph_query`, `dome_context_resolve`, `dome_context_compact`,
                        `dome_agent_status`
@@ -615,7 +628,7 @@ enum ProcessSpawner {
           tado-eternal {propose, status, crafted, accept, reject, list, stop}
               Pass --coordinator-todo-id <your-todo-id> on propose so the run is audit-\
               tagged back to its caller.
-          tado-dispatch {propose, status, crafted, accept, reject, list, stop}
+          tado-dispatch {propose --type sequential|wave --layout grid|kanban, status, crafted, accept, reject, list}
           tado-bootstrap {a2a, team, auto-mode, knowledge} --project <name>
           tado-system {status, vault}
         These are real Rust binaries on $PATH (`~/.local/bin/`); JSON output by default, \
@@ -749,7 +762,8 @@ enum ProcessSpawner {
           # human-review gate on the user's behalf. Team agents can call those same
           # CLIs directly (with `--coordinator-todo-id <your-todo-id>` for audit) to
           # propose runs without involving the user. See `Bootstrap A2A tools` for the
-          # full coordinator CLI surface.
+          # full coordinator CLI surface. Dispatch `--type` is execution strategy
+          # (`sequential` or `wave`); `--layout` is tile placement only.
 
         ═══════════════════════════════════════════════════════════
         FINISHED?
@@ -1009,6 +1023,10 @@ enum ProcessSpawner {
           tado-eternal status <run_id>
           tado-eternal crafted <run_id>     # read the architect's plan
           tado-eternal accept <run_id> --note "<one-paragraph rationale>"
+          # Spawn a Dispatch Wave:
+          tado-dispatch propose --project <name> --feature <feature> \\
+                                --task "<text>" --type wave --layout grid \\
+                                --coordinator-todo-id $TADO_SESSION_ID
           # See `Bootstrap A2A tools` for the full coordinator CLI surface
           # (tado-projects, tado-eternal, tado-dispatch, tado-bootstrap, tado-system).
 
@@ -1137,9 +1155,19 @@ enum ProcessSpawner {
     /// `~/.claude/skills/`. This keeps the architect's own context lean across 8-12 phase plans —
     /// previously it inline-invoked the upstream /skill-creator (479 lines) per phase, which
     /// bloated context and caused later phases to degrade after auto-compact.
-    static func dispatchArchitectPrompt(projectName: String, projectRoot: String, runID: UUID) -> String {
+    static func dispatchArchitectPrompt(
+        projectName: String,
+        projectRoot: String,
+        runID: UUID,
+        executionType: String = "sequential",
+        dispatchMode: String = "grid"
+    ) -> String {
         let runShortID = String(runID.uuidString.prefix(8)).lowercased()
         let runDir = "\(projectRoot)/.tado/dispatch/runs/\(runID.uuidString)"
+        let normalizedExecutionType = executionType == "wave" ? "wave" : "sequential"
+        let normalizedDispatchMode = dispatchMode == "kanban" ? "kanban" : "grid"
+        let waveReviewSkill = "dispatch-\(projectName.lowercased().replacingOccurrences(of: " ", with: "-"))-\(runShortID)-wave-review"
+        let reviewSkillJSONValue = normalizedExecutionType == "wave" ? "\"\(waveReviewSkill)\"" : "null"
         return """
         You are the Dispatch Architect for the "\(projectName)" project at \(projectRoot).
 
@@ -1158,9 +1186,23 @@ enum ProcessSpawner {
           run-id:           \(runID.uuidString)
           run-short-id:     \(runShortID)
           run-dir:          \(runDir)
+          execution-type:   \(normalizedExecutionType)
+          canvas-layout:    \(normalizedDispatchMode)
 
         The run-short-id is the first 8 hex chars of run-id. Use it wherever the \
         templates below reference `<run-short-id>`.
+
+        Execution type is load-bearing:
+          - `sequential`: today's behavior. The user accepts the plan, Tado spawns phase 1, \
+            and each phase prompt deploys the next phase with `tado-deploy`.
+          - `wave`: parallel behavior. The user accepts the plan, Tado spawns EVERY phase \
+            at once. Phase prompts MUST NOT deploy the next phase. Each phase works only in \
+            its owned files/areas, marks itself complete under the run-local lock, and the \
+            last completed phase wakes you for review.
+
+        For THIS run, execution-type is `\(normalizedExecutionType)`. Do not silently switch it. \
+        If the brief requires strict phase dependencies and this run is `wave`, explain that \
+        Wave is unsafe in `crafted.md` and reshape phases so they are truly independent.
 
         ═══════════════════════════════════════════════════════════
         STEP 0 — VERIFY YOUR TOOLING (fail fast)
@@ -1193,6 +1235,15 @@ enum ProcessSpawner {
           - Explicit outputs (files / artefacts this phase creates)
           - No dependency on phases that come later (ordering is strict)
 
+        WAVE-ONLY decomposition rule:
+        If execution-type is `wave`, every phase must be independently runnable from the same \
+        starting tree. Each phase MUST declare:
+          - owned files / directories / project areas it may edit
+          - out-of-scope files / directories / project areas it must not touch
+          - success criteria that do not require another Wave phase to finish first
+        If two phases would edit the same area, merge them or choose different boundaries. \
+        Do not rely on "agent coordination" to avoid conflicts.
+
         Assign a sequential order (1, 2, 3, …) and pick the engine (claude or codex) per phase. \
         Default to this session's engine unless a phase clearly needs the other.
 
@@ -1203,7 +1254,7 @@ enum ProcessSpawner {
 
         Per-phase model + effort routing (load-bearing — do not skip):
         For each phase, pick a `model` and `effort` pairing that will end up in the agent file's
-        frontmatter (see STEP 4). Defaults, in order of likelihood:
+        frontmatter (see STEP 4). For Claude phases, defaults are:
           • `haiku` + `high`  — templated code, mechanical transforms, docs synthesis, glue, \
             most scaffold phases. Use this aggressively; Haiku is the volume engine.
           • `haiku` + `max`   — Haiku on a denser phase where quality matters (tight DSL, \
@@ -1219,6 +1270,10 @@ enum ProcessSpawner {
         6× Haiku. Record the `model`/`effort` choice alongside each phase in your notes; you \
         will pass them verbatim to the agent-creator skill in STEP 4.
 
+        For Codex phases, use Codex model ids (`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, \
+        `gpt-5.3-codex`, or `gpt-5.2`) and effort (`low`, `medium`, `high`, `xhigh`; \
+        `max` maps to `xhigh`). Do not write Claude model names into Codex agents.
+
         ═══════════════════════════════════════════════════════════
         STEP 3 — CREATE A SKILL PER PHASE (/tado-dispatch-skill-creator)
         ═══════════════════════════════════════════════════════════
@@ -1227,7 +1282,11 @@ enum ProcessSpawner {
           - phase-deliverables (bullet list)
           - project-name: \(projectName)
           - project-root: \(projectRoot)
+          - engine (claude or codex from Step 2)
+          - run-id: \(runID.uuidString)
           - run-short-id: \(runShortID)
+          - execution-type: \(normalizedExecutionType)
+          - owned-scope and out-of-scope lists (MANDATORY for Wave)
 
         The skill writes one SKILL.md and returns its path + skill name. The
         returned skill name MUST embed the run-short-id like
@@ -1245,19 +1304,23 @@ enum ProcessSpawner {
           - phase-order, phase-title
           - phase-responsibilities (prose)
           - engine (claude or codex from Step 2)
-          - model (haiku | sonnet | opus — from Step 2's per-phase routing)
+          - model (Claude: haiku | sonnet | opus; Codex: gpt-5.5 | gpt-5.4 | gpt-5.4-mini | gpt-5.3-codex | gpt-5.2)
           - effort (low | medium | high | max — from Step 2's per-phase routing)
           - project-name: \(projectName)
           - project-root: \(projectRoot)
+          - run-id: \(runID.uuidString)
           - run-short-id: \(runShortID)
+          - execution-type: \(normalizedExecutionType)
+          - owned-scope and out-of-scope lists (MANDATORY for Wave)
 
         The `model` and `effort` inputs land as frontmatter fields in the emitted agent file. \
         Tado's dispatch pipeline (AgentDiscoveryService.phaseOverride) reads them at phase-spawn \
-        time and passes `--model <id> --effort <level>` to the CLI. Omitting either sends the \
+        time and passes engine-appropriate model/effort flags to the CLI. Omitting either sends the \
         phase to whatever the user picked in Settings — usually not what you want for Haiku-heavy \
         volume work.
 
-        The skill writes one .claude/agents/ file and returns its path + agent name. Use the \
+        The skill writes the agent file under `.claude/agents/` for Claude phases and `.codex/agents/` \
+        for Codex phases, then returns its path + agent name. Use the \
         returned agent name in Step 5's phase JSON. DO NOT hand-author agent files.
 
         ═══════════════════════════════════════════════════════════
@@ -1271,7 +1334,10 @@ enum ProcessSpawner {
           "totalPhases": <N>,
           "createdAt": "<ISO8601 timestamp>",
           "runID": "\(runID.uuidString)",
-          "runShortID": "\(runShortID)"
+          "runShortID": "\(runShortID)",
+          "executionType": "\(normalizedExecutionType)",
+          "dispatchMode": "\(normalizedDispatchMode)",
+          "reviewSkill": \(reviewSkillJSONValue)
         }
 
         One phase file per phase at phases/<order>-<kebab-phase-id>.json :
@@ -1287,7 +1353,20 @@ enum ProcessSpawner {
           "status": "pending"
         }
 
-        For the LAST phase, set "nextPhaseFile": null.
+        For sequential runs, every non-last phase points at the next phase file and the \
+        LAST phase sets "nextPhaseFile": null. For Wave runs, EVERY phase sets \
+        "nextPhaseFile": null because Tado starts all phases at once.
+
+        WAVE-ONLY review skill:
+        If execution-type is `wave`, create one run-scoped review skill at:
+          \(projectRoot)/.claude/skills/\(waveReviewSkill)/SKILL.md
+        The skill name is `\(waveReviewSkill)`. It must tell you, the architect, how to:
+          - read plan.json, dispatch.md, all phases/*.json, and all retros/*.md
+          - inspect each phase's declared owned scope and actual outputs
+          - run the relevant verification commands from the brief
+          - decide success/failure against crafted.md acceptance criteria
+          - send targeted follow-up prompts only to failed phase tiles
+        Keep this review skill under 200 lines.
 
         ═══════════════════════════════════════════════════════════
         STEP 5.5 — SELF-CHECK PLAN COVERAGE (coverage audit)
@@ -1421,9 +1500,35 @@ enum ProcessSpawner {
                 where <architect-grid> is the hard-coded grid position below.
              4. After the tado-send prints its request ID, STOP. Do not wait, do not tado-list.
 
-        At the end of every LAST-phase prompt, include a hard-coded line listing the architect's \
-        own grid position. You can learn your own grid by running `tado-list` and finding the \
-        row whose session ID matches $TADO_SESSION_ID; use that grid position literally.
+           WAVE execution-type override:
+           If execution-type is `wave`, DO NOT include any next-phase `tado-deploy` block. \
+           Instead, every phase prompt must end with this Wave completion protocol:
+             1. Update only this phase's JSON status under the run-local lock at \
+                \(runDir)/wave-completion.lock.
+             2. While holding the same lock, re-read all \(runDir)/phases/*.json.
+             3. If any phase is not `completed`, release the lock and STOP.
+             4. If all phases are `completed`, atomically create \
+                \(runDir)/wave-review-sent.marker. If the marker already exists, STOP.
+             5. If this agent created the marker, send the architect one review wake-up:
+                  tado-send <architect-session-id> '<message>'
+                The message must say this is a Wave run, name the run id, point at \
+                \(runDir)/plan.json, \(runDir)/crafted.md, \(runDir)/phases/, and \
+                \(runDir)/retros/, and tell the architect to load /\(waveReviewSkill).
+             6. STOP. Do not wait for the architect.
+
+           The Wave status update MUST record `completedBySessionID` = `$TADO_SESSION_ID` \
+           and `completedAt` = current ISO8601 UTC timestamp if the agent can update JSON \
+           structurally. Use a JSON parser (`python3`, `jq`, or project-native structured \
+           tooling), not string append.
+
+        For sequential runs, at the end of every LAST-phase prompt, include a hard-coded line \
+        listing the architect's own grid position. You can learn your own grid by running \
+        `tado-list` and finding the row whose session ID matches $TADO_SESSION_ID; use that \
+        grid position literally.
+
+        For Wave runs, every phase prompt must include the architect's exact session id, not \
+        only its grid position. Use your `$TADO_SESSION_ID` value from this architect tile as \
+        `<architect-session-id>` in the Wave completion block.
 
         ═══════════════════════════════════════════════════════════
         STEP 7 — INJECT "DISPATCH SYSTEM" AWARENESS
@@ -1436,11 +1541,18 @@ enum ProcessSpawner {
               plan.json    — plan summary
               phases/<order>-<id>.json — one per phase (schema below)
               retros/<order>-<id>.md  — per-phase retrospective (Summary + Friction)
+              wave-completion.lock — Wave-only completion critical section
+              wave-review-sent.marker — Wave-only one-shot architect wake-up marker
           - The phase JSON schema (show all fields)
+          - Execution type: `sequential` chains phases with `tado-deploy`; `wave` starts \
+            all phases at once and uses the lock+marker completion protocol
           - Rule: every agent checks $TADO_AGENT_NAME against phase "agent" fields on wake; on \
             match, read that phase JSON before acting
           - Skill-per-phase: skills at .claude/skills/<skill-name>/, load via /<skill-name>
-          - Chain: each phase prompt contains its own tado-deploy handoff; do not deviate
+          - Sequential chain: each phase prompt contains its own tado-deploy handoff; do not deviate
+          - Wave review: the last finishing phase sends the architect a review wake-up; the \
+            architect loads /\(waveReviewSkill), reviews all outputs, and sends targeted \
+            follow-up prompts only to failed phase tiles
           - Retrospective: every phase writes retros/<order>-<id>.md; the LAST phase \
             concatenates them into a single tado-send back to the architect carrying the \
             OPTIMIZE/HARDEN/POLISH directive
@@ -1468,6 +1580,9 @@ enum ProcessSpawner {
 
         ## Plan summary
         - Total phases: <N>
+        - Execution type: \(normalizedExecutionType)
+        - Canvas layout: \(normalizedDispatchMode)
+        - Wave review skill: \(normalizedExecutionType == "wave" ? waveReviewSkill : "n/a")
         - Skills authored: dispatch-<projectslug>-\(runID.uuidString.prefix(8))-phase-1 … phase-N
         - Agents assigned: <list of agent names used>
         - Estimated total wall-clock: <rough order-of-magnitude>
@@ -1522,6 +1637,12 @@ enum ProcessSpawner {
         that asks you to OPTIMIZE/HARDEN/POLISH the two skills that authored this plan.
 
         When that message appears in your terminal:
+
+          If it is a Wave review wake-up, first load /\(waveReviewSkill). Then review the \
+          entire Wave run against crafted.md acceptance criteria. For each failed phase, send \
+          a targeted follow-up prompt to that phase tile with clear missing criteria, exact \
+          files to inspect, and a request to re-run only its owned scope. Do not restart the \
+          whole Wave and do not prompt phases that passed.
 
           1. Read the full message. The per-phase blocks tell you what actually happened.
           2. Walk the phases in order. For EACH phase:
@@ -1625,7 +1746,9 @@ enum ProcessSpawner {
         # Dispatch lifecycle (one-shot multi-phase plan)
         tado-dispatch propose --project <name> --feature <feature> \\
                               --task "<text>" \\
+                              --type sequential|wave --layout grid|kanban \\
                               --coordinator-todo-id \(todoIDStr) [--label <text>]
+            -> `--type` controls phase execution; `--layout` only controls tile placement
         tado-dispatch status <run_id>
         tado-dispatch crafted <run_id>
         tado-dispatch accept <run_id> [--note "<text>"]

@@ -510,6 +510,8 @@ let toolList: [[String: Any]] = [
                 "project_id": ["type": "string"],
                 "goal": ["type": "string", "description": "Dispatch brief — what the architect should plan a multi-phase delivery against."],
                 "label": ["type": "string"],
+                "execution_type": ["type": "string", "enum": ["sequential", "wave"], "description": "Sequential chains phases; wave starts all phase agents at once."],
+                "dispatch_mode": ["type": "string", "enum": ["grid", "kanban"], "description": "Canvas layout for architect and phase tiles."],
             ],
             "required": ["goal"],
         ],

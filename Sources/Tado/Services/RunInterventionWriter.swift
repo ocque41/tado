@@ -43,7 +43,10 @@ enum RunInterventionWriter {
     ) throws -> Delivery {
         let trimmed = directive.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw InterventionError.emptyDirective }
-        guard let targetTodoID = run.currentPhaseTodoID ?? run.architectTodoID else {
+        let targetTodoIDCandidate = run.normalizedExecutionType == "wave"
+            ? (run.architectTodoID ?? run.currentPhaseTodoID)
+            : (run.currentPhaseTodoID ?? run.architectTodoID)
+        guard let targetTodoID = targetTodoIDCandidate else {
             throw InterventionError.noDispatchTarget
         }
         guard let session = terminalManager.session(forTodoID: targetTodoID) else {

@@ -11,6 +11,50 @@ struct PhaseJSON: Codable {
     let prompt: String
     let nextPhaseFile: String?
     let status: String
+    let completedBySessionID: String?
+    let completedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, order, title, skill, agent, engine, prompt, nextPhaseFile, status
+        case completedBySessionID, completedAt
+    }
+
+    init(
+        id: String,
+        order: Int,
+        title: String,
+        skill: String?,
+        agent: String?,
+        engine: String?,
+        prompt: String,
+        nextPhaseFile: String?,
+        status: String,
+        completedBySessionID: String? = nil,
+        completedAt: String? = nil
+    ) {
+        self.id = id
+        self.order = order
+        self.title = title
+        self.skill = skill
+        self.agent = agent
+        self.engine = engine
+        self.prompt = prompt
+        self.nextPhaseFile = nextPhaseFile
+        self.status = status
+        self.completedBySessionID = completedBySessionID
+        self.completedAt = completedAt
+    }
+}
+
+struct DispatchPlanJSON: Codable {
+    let status: String
+    let totalPhases: Int
+    let createdAt: String?
+    let runID: String?
+    let runShortID: String?
+    let executionType: String?
+    let dispatchMode: String?
+    let reviewSkill: String?
 }
 
 enum DispatchPlanService {
@@ -267,6 +311,96 @@ enum DispatchPlanService {
         return settings
     }
 
+    private static func normalizedExecutionType(_ value: String) -> String {
+        value == "wave" ? "wave" : "sequential"
+    }
+
+    private static func normalizedDispatchMode(_ value: String) -> String {
+        value == "kanban" ? "kanban" : "grid"
+    }
+
+    @MainActor
+    private static func nextAvailableGridIndices(
+        count: Int,
+        modelContext: ModelContext
+    ) -> [Int] {
+        let descriptor = FetchDescriptor<TodoItem>()
+        let allTodos = (try? modelContext.fetch(descriptor)) ?? []
+        var usedIndices = Set(allTodos.filter { $0.listState == .active }.map(\.gridIndex))
+        var indices: [Int] = []
+        var index = 0
+        while indices.count < count {
+            if !usedIndices.contains(index) {
+                indices.append(index)
+                usedIndices.insert(index)
+            }
+            index += 1
+        }
+        return indices
+    }
+
+    @MainActor
+    private static func resolvedEngine(
+        for phase: PhaseJSON,
+        project: Project,
+        settings: AppSettings
+    ) -> TerminalEngine {
+        if let phaseEngine = phase.engine, let parsed = TerminalEngine(rawValue: phaseEngine) {
+            return parsed
+        }
+        if let agentName = phase.agent,
+           let resolved = AgentDiscoveryService.resolveEngine(
+               agentName: agentName,
+               projectRoot: project.rootPath
+           ) {
+            return resolved
+        }
+        return settings.engine
+    }
+
+    @MainActor
+    private static func spawnPhase(
+        run: DispatchRun,
+        project: Project,
+        phase: PhaseJSON,
+        gridIndex: Int,
+        settings: AppSettings,
+        terminalManager: TerminalManager,
+        modelContext: ModelContext
+    ) -> TodoItem {
+        let engine = resolvedEngine(for: phase, project: project, settings: settings)
+        let position = (normalizedDispatchMode(run.dispatchMode) == "kanban")
+            ? CanvasLayout.kanbanPosition(columnIndex: phase.order, rowInColumn: 0)
+            : CanvasLayout.position(forIndex: gridIndex, gridColumns: settings.gridColumns)
+
+        let todo = TodoItem(text: phase.prompt, gridIndex: gridIndex, canvasPosition: position)
+        todo.projectID = project.id
+        todo.agentName = phase.agent
+        modelContext.insert(todo)
+
+        let phaseOverride = phase.agent.map {
+            AgentDiscoveryService.phaseOverride(
+                agentName: $0,
+                projectRoot: project.rootPath,
+                engine: engine
+            )
+        } ?? AgentDiscoveryService.PhaseOverride(modelFlags: nil, effortFlags: nil)
+
+        terminalManager.spawnAndWire(
+            todo: todo,
+            engine: engine,
+            cwd: project.rootPath,
+            agentName: phase.agent,
+            projectName: project.name,
+            modelFlagsOverride: phaseOverride.modelFlags,
+            effortFlagsOverride: phaseOverride.effortFlags,
+            dispatchRunID: run.id,
+            runRole: "phase"
+        )
+
+        return todo
+    }
+
     /// Spawn the dispatch architect terminal for one run. Writes dispatch.md
     /// from `run.brief`, clears any existing plan under the run dir, transitions
     /// the run state to "planning", and navigates to the canvas.
@@ -306,7 +440,9 @@ enum DispatchPlanService {
         let prompt = ProcessSpawner.dispatchArchitectPrompt(
             projectName: project.name,
             projectRoot: project.rootPath,
-            runID: run.id
+            runID: run.id,
+            executionType: normalizedExecutionType(run.executionType),
+            dispatchMode: normalizedDispatchMode(run.dispatchMode)
         )
         let index = nextAvailableGridIndex(modelContext: modelContext)
         // Kanban-mode runs park the architect in column 0 of the run's
@@ -315,7 +451,7 @@ enum DispatchPlanService {
         // coordinates onto the TodoItem means the canvas renderer (which
         // reads `session.canvasPosition`) snaps the tile into place
         // automatically; no per-frame mode branch needed.
-        let position = (run.dispatchMode == "kanban")
+        let position = (normalizedDispatchMode(run.dispatchMode) == "kanban")
             ? CanvasLayout.kanbanPosition(columnIndex: 0, rowInColumn: 0)
             : CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
 
@@ -357,59 +493,73 @@ enum DispatchPlanService {
         appState: AppState
     ) -> Bool {
         guard let project = run.project else { return false }
-        guard planExistsOnDisk(run), let phase = firstPhase(run) else {
+        guard planExistsOnDisk(run) else {
             return false
         }
+        if normalizedExecutionType(run.executionType) == "wave" {
+            return startWave(run: run, modelContext: modelContext, terminalManager: terminalManager, appState: appState)
+        }
+        guard let phase = firstPhase(run) else { return false }
 
         let settings = fetchOrCreateSettings(modelContext: modelContext)
-        let engine: TerminalEngine
-        if let phaseEngine = phase.engine, let parsed = TerminalEngine(rawValue: phaseEngine) {
-            engine = parsed
-        } else if let agentName = phase.agent,
-                  let resolved = AgentDiscoveryService.resolveEngine(agentName: agentName, projectRoot: project.rootPath) {
-            engine = resolved
-        } else {
-            engine = settings.engine
-        }
-
         let index = nextAvailableGridIndex(modelContext: modelContext)
-        // Kanban-mode: phase 1 lives in column 1 (column 0 is the
-        // architect). Grid-mode falls back to the flat-grid placement
-        // that's been the dispatch default since v0.6.
-        let position = (run.dispatchMode == "kanban")
-            ? CanvasLayout.kanbanPosition(columnIndex: phase.order, rowInColumn: 0)
-            : CanvasLayout.position(forIndex: index, gridColumns: settings.gridColumns)
-
-        let todo = TodoItem(text: phase.prompt, gridIndex: index, canvasPosition: position)
-        todo.projectID = project.id
-        todo.agentName = phase.agent
-        modelContext.insert(todo)
-
-        terminalManager.spawnAndWire(
-            todo: todo,
-            engine: engine,
-            cwd: project.rootPath,
-            agentName: phase.agent,
-            projectName: project.name,
-            dispatchRunID: run.id,
-            runRole: "phase"
+        let todo = spawnPhase(
+            run: run,
+            project: project,
+            phase: phase,
+            gridIndex: index,
+            settings: settings,
+            terminalManager: terminalManager,
+            modelContext: modelContext
         )
-
-        if let agentName = phase.agent, engine == .claude,
-           let session = terminalManager.session(forTodoID: todo.id) {
-            let override = AgentDiscoveryService.phaseOverride(
-                agentName: agentName,
-                projectRoot: project.rootPath
-            )
-            session.modelFlagsOverride = override.modelFlags
-            session.effortFlagsOverride = override.effortFlags
-        }
 
         run.state = "dispatching"
         run.currentPhaseTodoID = todo.id
         try? modelContext.save()
 
         appState.pendingNavigationID = todo.id
+        appState.currentView = .canvas
+        return true
+    }
+
+    @MainActor
+    @discardableResult
+    static func startWave(
+        run: DispatchRun,
+        modelContext: ModelContext,
+        terminalManager: TerminalManager,
+        appState: AppState
+    ) -> Bool {
+        guard let project = run.project else { return false }
+        let phases = allPhases(run)
+        guard planExistsOnDisk(run), !phases.isEmpty else { return false }
+
+        let settings = fetchOrCreateSettings(modelContext: modelContext)
+        let indices = nextAvailableGridIndices(
+            count: phases.count,
+            modelContext: modelContext
+        )
+        var firstTodo: TodoItem?
+        for (phase, index) in zip(phases, indices) {
+            let todo = spawnPhase(
+                run: run,
+                project: project,
+                phase: phase,
+                gridIndex: index,
+                settings: settings,
+                terminalManager: terminalManager,
+                modelContext: modelContext
+            )
+            if firstTodo == nil { firstTodo = todo }
+        }
+
+        run.state = "dispatching"
+        run.currentPhaseTodoID = firstTodo?.id
+        try? modelContext.save()
+
+        if let firstTodo {
+            appState.pendingNavigationID = firstTodo.id
+        }
         appState.currentView = .canvas
         return true
     }

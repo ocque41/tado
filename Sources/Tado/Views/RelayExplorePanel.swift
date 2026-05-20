@@ -411,7 +411,7 @@ struct RelayExplorePanel: View {
                         .font(Typography.sans(size: 13, weight: .regular))
                         .foregroundStyle(RelayPalette.foreground(for: theme))
                         .lineLimit(1)
-                    Text("\(run.state.uppercased()) · \(run.dispatchMode.uppercased())")
+                    Text("\(run.state.uppercased()) · \(run.normalizedExecutionType.uppercased()) · \(run.dispatchMode.uppercased())")
                         .font(Typography.sans(size: 9, weight: .regular))
                         .tracking(RelayTracking.caps(9))
                         .foregroundStyle(RelayPalette.foreground3(for: theme))

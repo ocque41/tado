@@ -68,7 +68,7 @@ struct RelayDispatchView: View {
                     RelayTableHeader(columns: [
                         RelayTableColumn("RUN",     width: .fixed(96)),
                         RelayTableColumn("LABEL"),
-                        RelayTableColumn("PHASES",  alignment: .trailing, width: .fixed(96)),
+                        RelayTableColumn("TYPE",    alignment: .trailing, width: .fixed(140)),
                         RelayTableColumn("STATE",   alignment: .trailing, width: .fixed(140)),
                     ])
                     ForEach(runs) { run in
@@ -83,8 +83,8 @@ struct RelayDispatchView: View {
         RelayTableRow(content: {
             RelayTableCell(text: run.shortID, style: .meta, width: 96)
             RelayTableCell(text: run.label, style: .body)
-            RelayTableCell(text: "\(run.dispatchMode.uppercased())",
-                           style: .meta, alignment: .trailing, width: 96)
+            RelayTableCell(text: "\(run.normalizedExecutionType.uppercased())/\(run.dispatchMode.uppercased())",
+                           style: .meta, alignment: .trailing, width: 140)
             HStack {
                 Spacer()
                 RelayPill(label: run.state,

@@ -55,29 +55,57 @@ enum AgentDiscoveryService {
         let effortFlags: [String]?
     }
 
-    static func phaseOverride(agentName: String, projectRoot: String) -> PhaseOverride {
+    static func phaseOverride(
+        agentName: String,
+        projectRoot: String,
+        engine: TerminalEngine = .claude
+    ) -> PhaseOverride {
         let agents = discover(projectRoot: projectRoot)
-        guard let agent = agents.first(where: { $0.id == agentName }),
-              agent.source == .claude,
+        let expectedSource: AgentDefinition.AgentSource
+        switch engine {
+        case .claude:
+            expectedSource = .claude
+        case .codex:
+            expectedSource = .codex
+        case .cowork:
+            return PhaseOverride(modelFlags: nil, effortFlags: nil)
+        }
+        guard let agent = agents.first(where: { $0.id == agentName && $0.source == expectedSource }),
               let contents = try? String(contentsOfFile: agent.filePath) else {
             return PhaseOverride(modelFlags: nil, effortFlags: nil)
         }
         let frontmatter = extractFrontmatter(contents)
         let modelShort = frontmatter["model"].flatMap { value -> String? in
-            let trimmed = value.trimmingCharacters(in: .whitespaces)
+            let trimmed = cleanFrontmatterValue(value)
             return trimmed.isEmpty ? nil : trimmed
         }
         let effortRaw = frontmatter["effort"].flatMap { value -> String? in
-            let trimmed = value.trimmingCharacters(in: .whitespaces).lowercased()
+            let trimmed = cleanFrontmatterValue(value).lowercased()
             return trimmed.isEmpty ? nil : trimmed
         }
         let modelFlags: [String]? = modelShort.flatMap { short in
-            guard let full = claudeModelID(forShort: short) else { return nil }
-            return ["--model", full]
+            switch engine {
+            case .claude:
+                guard let full = claudeModelID(forShort: short) else { return nil }
+                return ["--model", full]
+            case .codex:
+                guard let full = codexModelID(forShort: short) else { return nil }
+                return ["-c", "model=\"\(full)\""]
+            case .cowork:
+                return nil
+            }
         }
         let effortFlags: [String]? = effortRaw.flatMap { level in
-            guard ["low", "medium", "high", "max"].contains(level) else { return nil }
-            return ["--effort", level]
+            switch engine {
+            case .claude:
+                guard ["low", "medium", "high", "max"].contains(level) else { return nil }
+                return ["--effort", level]
+            case .codex:
+                guard let effort = codexEffortID(forShort: level) else { return nil }
+                return ["-c", "model_reasoning_effort=\"\(effort)\""]
+            case .cowork:
+                return nil
+            }
         }
         return PhaseOverride(modelFlags: modelFlags, effortFlags: effortFlags)
     }
@@ -93,6 +121,35 @@ enum AgentDiscoveryService {
         case "opus", "opus47", "opus-4-7", "opus4.7": return "claude-opus-4-7"
         default: return nil
         }
+    }
+
+    /// Map short names used in Codex agent frontmatter to the CLI config
+    /// value passed through `-c model="<id>"`.
+    static func codexModelID(forShort short: String) -> String? {
+        switch short.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "gpt55", "gpt-5.5": return "gpt-5.5"
+        case "gpt54", "gpt-5.4": return "gpt-5.4"
+        case "gpt54mini", "gpt54-mini", "gpt-5.4-mini": return "gpt-5.4-mini"
+        case "gpt53codex", "gpt53-codex", "gpt-5.3-codex": return "gpt-5.3-codex"
+        case "gpt52", "gpt-5.2": return "gpt-5.2"
+        default: return nil
+        }
+    }
+
+    static func codexEffortID(forShort short: String) -> String? {
+        switch short.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "low", "medium", "high", "xhigh": return short.trimmingCharacters(in: .whitespaces).lowercased()
+        // Older dispatch prompts used `max` for every engine. Codex's
+        // current picker exposes `xhigh`, so preserve intent without
+        // passing an invalid config value.
+        case "max": return "xhigh"
+        default: return nil
+        }
+    }
+
+    private static func cleanFrontmatterValue(_ value: String) -> String {
+        let withoutComment = value.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? value
+        return withoutComment.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
     }
 
     private static func extractFrontmatter(_ contents: String) -> [String: String] {

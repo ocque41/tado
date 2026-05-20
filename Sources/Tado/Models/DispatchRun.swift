@@ -2,12 +2,12 @@ import Foundation
 import SwiftData
 
 /// One invocation of Dispatch — architect plans N phases from a brief, then
-/// phase tiles run sequentially. Replaces the single `dispatch*` state block
+/// phase tiles either run sequentially or as one parallel wave. Replaces the single `dispatch*` state block
 /// on `Project`. A project can now hold N `DispatchRun`s concurrently; each
 /// owns its own `.tado/dispatch/runs/<id>/` directory and namespaces its
-/// per-phase skill/agent files under `.claude/skills/dispatch-<projectslug>-<shortid>-*`
-/// so two concurrent dispatches in the same project can't clobber each other's
-/// skill definitions.
+/// per-phase skill/agent files under engine-specific `.claude` or `.codex`
+/// dispatch-<projectslug>-<shortid>-* paths so two concurrent dispatches in
+/// the same project can't clobber each other's definitions.
 ///
 /// Simpler than EternalRun: no mode split, no loop kind, no completion marker,
 /// no watchdog. `completed` is reserved as a state the UI archive flow can
@@ -37,6 +37,12 @@ final class DispatchRun {
     /// tracking every hop).
     var currentPhaseTodoID: UUID?
 
+    /// `sequential` (default — today's behavior, phase 1 starts and each
+    /// phase prompt deploys the next) or `wave` (Accept starts every phase
+    /// agent at once; the last completed phase wakes the architect for
+    /// review). Defaults to `sequential` so existing runs decode unchanged.
+    var executionType: String = "sequential"
+
     /// `grid` (default — today's behavior, all tiles flow into the canvas
     /// grid via `CanvasLayout.position(forIndex:)`) or `kanban` (the run's
     /// architect tile + every phase tile snap into named columns drawn on
@@ -62,7 +68,8 @@ final class DispatchRun {
         brief: String = "",
         architectTodoID: UUID? = nil,
         currentPhaseTodoID: UUID? = nil,
-        dispatchMode: String = "grid"
+        dispatchMode: String = "grid",
+        executionType: String = "sequential"
     ) {
         self.id = id
         self.project = project
@@ -73,6 +80,7 @@ final class DispatchRun {
         self.architectTodoID = architectTodoID
         self.currentPhaseTodoID = currentPhaseTodoID
         self.dispatchMode = dispatchMode
+        self.executionType = executionType
     }
 }
 
@@ -93,5 +101,9 @@ extension DispatchRun {
     /// overwriting a running dispatch's files.
     var shortID: String {
         String(id.uuidString.prefix(8)).lowercased()
+    }
+
+    var normalizedExecutionType: String {
+        executionType == "wave" ? "wave" : "sequential"
     }
 }

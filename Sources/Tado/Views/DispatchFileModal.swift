@@ -12,6 +12,10 @@ struct DispatchFileModal: View {
 
     @State private var draft: String = ""
     @State private var showReplanAlert: Bool = false
+    /// Execution type. `sequential` preserves the historical phase-chain
+    /// behavior; `wave` starts every architect-authored phase at once after
+    /// review acceptance.
+    @State private var executionType: String = "sequential"
     /// Layout mode applied to this dispatch run on Accept. `grid` is the
     /// historical default — every tile flows into the canvas grid via
     /// `CanvasLayout.position(forIndex:)`. `kanban` parks the architect
@@ -91,13 +95,17 @@ struct DispatchFileModal: View {
 
             Divider()
 
-            // Layout mode picker. Kanban-mode runs lay out the
-            // architect + phase tiles as named columns on the canvas;
-            // Grid (the default) keeps the historical flat-grid
-            // placement. Uses the design-system `ModeTab` primitive
-            // shared with the project page's Detail|Kanban toggle so
-            // every "view mode" segmented control reads the same.
-            HStack(spacing: 12) {
+            // Execution type + layout mode are independent. Type controls
+            // when phases start; layout controls where tiles land.
+            HStack(spacing: 16) {
+                ModeTab(
+                    eyebrow: "TYPE",
+                    options: [
+                        .init(id: "sequential", label: "Sequential", icon: "arrow.right"),
+                        .init(id: "wave", label: "Wave", icon: "waveform.path.ecg"),
+                    ],
+                    selection: $executionType
+                )
                 ModeTab(
                     eyebrow: "LAYOUT",
                     options: [
@@ -107,9 +115,7 @@ struct DispatchFileModal: View {
                     selection: $dispatchMode
                 )
                 Spacer()
-                Text(dispatchMode == "kanban"
-                    ? "Phases become named columns on the canvas."
-                    : "Tiles flow into the canvas grid.")
+                Text(modeHint)
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textTertiary)
                     .lineLimit(1)
@@ -142,6 +148,7 @@ struct DispatchFileModal: View {
         .onAppear {
             draft = run.brief
             dispatchMode = run.dispatchMode
+            executionType = run.normalizedExecutionType
         }
         .alert("Delete existing plan and re-plan?", isPresented: $showReplanAlert) {
             Button("Delete & Re-plan", role: .destructive) {
@@ -166,6 +173,7 @@ struct DispatchFileModal: View {
 
     private func commitAndSpawnArchitect() {
         run.brief = draft
+        run.executionType = executionType == "wave" ? "wave" : "sequential"
         // Kanban-mode runs need their `dispatchMode` set BEFORE
         // spawnArchitect so the spawn helper can choose
         // `kanbanPosition(...)` over `position(forIndex:)`. After this
@@ -182,5 +190,15 @@ struct DispatchFileModal: View {
         )
 
         dismiss()
+    }
+
+    private var modeHint: String {
+        let type = executionType == "wave"
+            ? "Wave starts every phase at once."
+            : "Sequential starts phase 1, then chains handoffs."
+        let layout = dispatchMode == "kanban"
+            ? "Kanban puts phases in columns."
+            : "Grid uses normal tile placement."
+        return "\(type) \(layout)"
     }
 }

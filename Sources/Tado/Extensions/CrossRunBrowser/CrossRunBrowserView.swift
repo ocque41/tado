@@ -406,7 +406,7 @@ struct BrowserRow: Identifiable {
             createdAt: run.createdAt,
             sprints: nil,
             lastMetric: nil,
-            mode: nil,
+            mode: "\(run.normalizedExecutionType)/\(run.dispatchMode)",
             perfCycles: nil,
             lastPerfScore: nil,
             perfRegression: false,
