@@ -109,16 +109,18 @@ make mcp                                     # Build dome-mcp + tado-mcp stdio b
 make perf-suite                              # Build perf-suite binary (Eternal Performance step)
 make perf-test                               # Run perf-suite full test matrix
 make perf-bench                              # Self-bench (Criterion harness, <30s)
-cargo test --workspace                       # Full Rust matrix (~323 tests, all 12 crates)
+cargo test --workspace                       # Full Rust matrix across the workspace
 cargo test -p tado-ipc -p tado-settings      # Targeted: IPC + settings crates only
 ```
 
 The project uses Swift Package Manager (swift-tools-version 5.10, macOS 14+)
-plus a Cargo workspace under `tado-core/` with **thirteen crates**:
+plus a Cargo workspace under `tado-core/` with **fourteen crates**:
 `tado-terminal` (PTY + grid + VT parser + cbindgen FFI),
 `tado-shared` (cross-crate primitives),
 `tado-ipc` (IPC contract types + registry serialization),
 `tado-settings` (atomic JSON IO + 5-scope enum + path helpers),
+`tado-runtime` (profile-isolated CLI daemon `tadod`, Unix-socket protocol,
+SQLite runtime/transcript store, PTY session manager, and Agent OS backing API),
 `tado-eternal-state` (off-main reader for one Eternal run's
 `state.json` + `metrics.jsonl` + flag files; backs the Swift
 `EternalRunStateCache` so SwiftUI's `ProjectEternalSection`
@@ -127,9 +129,11 @@ freeze fix per CLAUDE.md rule 9),
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
-`tado-cli` (the canvas-agent CLI surface — hosts nine binaries: `tado-bootstrap`,
+`tado-cli` (the canvas-agent CLI surface — hosts fourteen binaries: `tado`,
+`tado-bootstrap`,
 `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-projects`, `tado-system`,
-`tado-cowork`, `tado-deploy`, `tado-tui` — all auto-installed under
+`tado-cowork`, `tado-deploy`, `tado-list`, `tado-read`, `tado-send`,
+`tado-events`, `tado-tui` — all auto-installed under
 `~/.local/bin/` on first launch),
 `dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
 `replay`, `corpus run`, `explain` subcommands; the v0.10.0 Phase 2 CI gate),
@@ -789,6 +793,13 @@ Tado exposes three coordinated A2A surfaces. They share data — every
 event, send, and broadcast hits the same in-process `EventBus` and
 `IPCBroker` — but each surface answers a different question.
 
+The standalone CLI runtime is separate from the desktop IPC path. `tado`
+starts `tadod --profile cli` when needed, then talks to that daemon over a
+profile-specific Unix socket. The daemon owns CLI-mode PTYs, WAL SQLite
+runtime state, transcript chunks, events, and the Agent OS TUI backing API.
+The macOS app still uses Swift services by default; a shared-daemon desktop
+mode is a future opt-in, not the current default.
+
 ### CLI (`~/.local/bin/`)
 
 Two families of binaries are auto-installed on first launch:
@@ -810,21 +821,77 @@ tado-dome {register,query,...}                    # Scoped Dome knowledge from c
 ```
 
 **`tado-cli` workspace binaries** (built from
-`tado-core/crates/tado-cli/`, nine [[bin]] targets — these are
+`tado-core/crates/tado-cli/`, fourteen [[bin]] targets — these are
 typed-Rust drop-ins that operate on the same on-disk state the
 Swift app reads):
 
 ```bash
-tado-bootstrap …                                  # Project bootstrap orchestration
-tado-dispatch …                                   # Dispatch run state read / write
-tado-eternal …                                    # Eternal run state read / write
-tado-kanban {list,move,add,read,…}                # Per-project Kanban board mutation
+tado                                             # CLI-first Agent OS; starts tadod for the active profile
+tado --profile <name>                            # Open/use another profile
+tado daemon {status,start,stop}                  # Manage the profile daemon
+tado spawn|list|read|send|kill|search|board      # Runtime-backed session/control/board
+tado bootstrap <action>                          # Runtime-backed bootstrap request
+tado-list                                        # Runtime-backed session list for CLI profiles
+tado-read <target> [--tail N] [--follow] [--raw] # Runtime-backed screen/transcript read
+tado-send <target> <message>                     # Runtime-backed PTY input
+tado-events [filter] [--follow]                  # Runtime-backed event list/stream
+tado-bootstrap …                                  # Runtime-backed bootstrap when a profile is selected; desktop fallback otherwise
+tado-dispatch …                                   # Runtime workflow state when a profile is selected; desktop fallback otherwise
+tado-eternal …                                    # Runtime workflow state when a profile is selected; desktop fallback otherwise
+tado-kanban {list,move,add-column}                # Runtime Agent View board when a profile is selected; project Kanban fallback otherwise
 tado-projects …                                   # Project CRUD across the storage root
 tado-system …                                     # Storage-root introspection / health checks
 tado-cowork …                                     # Cowork URL-scheme launcher
 tado-deploy …                                     # Spawn visible canvas agents from the CLI
-tado-tui …                                        # Terminal UI for active Tado work
+tado-tui …                                        # Runtime-backed Agent OS TUI
 ```
+
+CLI runtime profiles are selected by `--profile <name>` or `TADO_PROFILE`.
+Profile state lives under `<storage-root>/runtime/profiles/<profile>/`.
+
+Dispatch has two independent knobs. `executionType` is `sequential` or
+`wave`; `dispatchMode` is layout only (`grid` or `kanban`). Sequential
+acceptance preserves the phase-1 then `tado-deploy` handoff chain. Wave
+acceptance reads every phase JSON, spawns all phases sorted by `order`,
+and relies on the phase agents to complete under `wave-completion.lock`.
+The last completed phase creates `wave-review-sent.marker` and wakes the
+architect for one review pass. No watchdogs, retry loops, or synthetic
+timeouts are part of this path.
+
+CLI/TUI examples:
+
+```bash
+tado-dispatch propose --type wave --layout grid ...
+/dispatch start --type wave --layout kanban <brief>
+/dispatch list
+/dispatch status <run_id>
+/dispatch crafted <run_id>
+/dispatch accept <run_id>
+/dispatch reject <run_id> --reason <text>
+```
+Runtime sockets live under `/tmp/tado-runtime-<uid>/<profile>.sock` unless
+`TADO_RUNTIME_SOCKET_DIR` or `TADO_RUNTIME_SOCKET` overrides them for tests.
+`tado-deploy` preserves desktop IPC behavior when the desktop app is active,
+but in CLI-runtime mode it spawns through `tadod`.
+
+TUI contract:
+
+- `tado` opens the runtime-backed Agent OS. `tadod` is only the daemon.
+- Use is the only page that explains controls and commands.
+- Work, Board, Projects, Events, and Mux show user/runtime data, not control help.
+- `/project` and `/projects` both autocomplete.
+- Projects is a selection surface: arrows choose a project, Space activates it, and normal prompt text spawns the configured default agent in that selected project.
+- Project paths typed without `/`, `./`, or `../` resolve from `$HOME`; `Documents/foo` means `~/Documents/foo`, not the repo cwd.
+- `Shift+X` kills and deletes the selected runtime session.
+- Settings is an arrow/Space list of toggles and choices, with human-readable runtime status instead of raw JSON. It should expose engine, model, effort, permission, terminal display, board, event, and project prompt behavior where the runtime can honor them.
+- Events defaults to human-readable timeline rows, with JSON as an explicit Settings choice.
+
+When `TADO_PROFILE`, `TADO_RUNTIME_SOCKET`, or `TADO_RUNTIME_ID` is set,
+`tado-mcp` routes A2A list/send/read/broadcast/notify/events tools through
+the selected `tadod` profile. It fails visibly if that explicit runtime is
+unavailable, rather than falling back to the desktop namespace and sending to
+the wrong surface. Config and memory MCP tools continue to use local
+settings/project files.
 
 **Target resolution** (same for `tado-read` and `tado-send`, in
 priority order):

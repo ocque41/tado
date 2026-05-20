@@ -62,3 +62,4 @@ sessions/
 # tracked file we touch; always 0 bytes; never meaningful diff.
 .tado/*.lock
 .tado/.*.lock
+/.playwright-mcp

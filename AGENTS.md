@@ -161,7 +161,8 @@ Rust workspace:
 - `tado-core/crates/bt-core` - Dome knowledge service, SQLite schema, RPC mutator, retrieval, automations, graph, notes.
 - `tado-core/crates/tado-ipc` - IPC paths, registry, external messages, event socket.
 - `tado-core/crates/tado-settings` - atomic JSON IO, storage paths, scope enum.
-- `tado-core/crates/tado-cli` - typed CLIs such as `tado-bootstrap`, `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-system`, `tado-cowork`, `tado-deploy`, `tado-tui`.
+- `tado-core/crates/tado-runtime` - profile-isolated CLI daemon `tadod`, runtime protocol, SQLite session/transcript store, PTY ownership, and Agent OS backing API.
+- `tado-core/crates/tado-cli` - typed CLIs such as `tado`, `tado-bootstrap`, `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-system`, `tado-cowork`, `tado-deploy`, `tado-tui`.
 - `tado-core/crates/tado-mcp` - Rust MCP bridge for Tado canvas/tools.
 - `tado-core/crates/dome-mcp` - Rust MCP bridge for Dome tools.
 - `tado-core/crates/tado-dome` - Dome CLI.
@@ -211,6 +212,27 @@ IPC is local:
 - helper CLIs are installed into the IPC bin and `~/.local/bin`.
 - `tado-list`, `tado-read`, `tado-send`, and `tado-deploy` are the main A2A tools.
 - `tado-events` subscribes to the real-time event socket.
+
+CLI-first runtime is separate:
+
+- `tado` starts `tadod --profile cli` when the profile daemon is missing.
+- `--profile <name>` or `TADO_PROFILE=<name>` selects another isolated runtime.
+- Each CLI profile has its own daemon, Unix socket, SQLite store, sessions, transcript chunks, events, Kanban lanes, Dispatch/Eternal workflow state, and IPC namespace.
+- Profile state lives under `<storage-root>/runtime/profiles/<profile>/`.
+- Runtime sockets default to `/tmp/tado-runtime-<uid>/<profile>.sock`.
+- The desktop app remains on Swift services by default. Shared daemon desktop mode is future opt-in.
+- No launchd auto-restart loop. If `tadod` fails, the CLI/TUI surfaces the failure.
+
+CLI Agent OS behavior:
+
+- `tado` is the public TUI entrypoint. `tadod` is the daemon entrypoint.
+- The Use page is the command/control reference. Work, Board, Projects, Events, and Mux should stay data-first.
+- `/project` and `/projects` are both valid command-palette verbs.
+- On Projects, arrow keys select a project, Space activates it, and normal prompt text spawns the configured default agent in the selected project.
+- Project paths typed without `/`, `./`, or `../` resolve from `$HOME`; `Documents/foo` means `~/Documents/foo`, not the repo cwd.
+- `Shift+X` in the TUI kills and deletes the selected runtime session.
+- Settings is an interactive list controlled with arrows and Space; do not regress it to raw JSON. It should expose engine, model, effort, permission, terminal display, board, event, and project prompt behavior where the runtime can honor them.
+- Events defaults to a human-readable timeline; JSON remains an explicit settings mode.
 
 SwiftData is a cache:
 
@@ -543,6 +565,13 @@ Rules:
 
 - no watchdogs, retries, or hidden restarts.
 - phase outputs are contracts; parse them strictly.
+- Dispatch execution type is separate from layout:
+  - `DispatchRun.executionType == "sequential"` starts phase 1 and lets phase prompts chain with `tado-deploy`.
+  - `DispatchRun.executionType == "wave"` starts every phase JSON at once after plan acceptance.
+  - `DispatchRun.dispatchMode` is layout only: `grid` or `kanban`.
+- Wave phases must have explicit owned scope and out-of-scope areas. They must not depend on future phase output.
+- Wave completion is agent-driven: each phase writes its retro, updates its phase JSON under `wave-completion.lock`, checks whether all phases are complete, and only the last phase creates `wave-review-sent.marker` and wakes the architect for review.
+- Wave review is one architect review pass. Failed phases get targeted follow-up prompts; do not add retry loops or watchdog supervision.
 - perf gate success emits `[PERF-OK]`.
 - sprint gate success emits `[SCORE-OK]`.
 - gate writes must use atomic store.
@@ -624,6 +653,7 @@ Runtime MCP bridges:
 Primary shell tools:
 
 ```bash
+tado
 tado-list
 tado-read
 tado-send
@@ -642,6 +672,31 @@ tado-system
 tado-cowork
 ```
 
+Unified runtime-backed CLI:
+
+```bash
+tado
+tado --profile <name>
+tado profile list/create/delete/use
+tado daemon status/start/stop
+tado spawn
+tado list
+tado read <session>
+tado send <session> <message>
+tado kill <session> [--hard]
+tado search <text>
+tado board
+tado events
+```
+
+`tado`, `tado-tui`, `tado-list`, `tado-read`, `tado-send`, `tado-events`, `tado-kanban`, `tado-bootstrap`, `tado-eternal`, and `tado-dispatch` use `tadod` for CLI profiles. `tado-deploy` preserves desktop IPC behavior when the desktop app is active, but uses `tadod` when a runtime profile/socket is active or no desktop IPC root exists.
+
+Runtime-backed MCP:
+
+- `tado-mcp` routes A2A list/send/read/broadcast/notify/events tools through `tadod` when `TADO_PROFILE`, `TADO_RUNTIME_SOCKET`, or `TADO_RUNTIME_ID` is set.
+- If a runtime profile is explicitly selected and unavailable, MCP fails visibly instead of falling back to the desktop IPC namespace.
+- Config and memory tools still use local settings/project files.
+
 If you change target resolution, message format, output format, or available tools:
 
 - update Rust CLI/MCP code
@@ -649,6 +704,20 @@ If you change target resolution, message format, output format, or available too
 - update bootstrap prompts
 - update docs
 - add parity tests where possible
+
+Dispatch CLI/TUI:
+
+```bash
+tado-dispatch propose --type sequential|wave --layout grid|kanban
+/dispatch start --type wave --layout grid <brief>
+/dispatch list
+/dispatch status <run_id>
+/dispatch crafted <run_id>
+/dispatch accept <run_id>
+/dispatch reject <run_id> --reason <text>
+```
+
+`--type` controls Dispatch execution. `--layout` controls only tile placement.
 
 ## Tado A2A IPC
 
