@@ -24,14 +24,29 @@ if (!target) {
   fail(`unsupported macOS architecture: ${process.arch}`);
 }
 
-const override = process.env.TADO_TUI_BINARY;
-const binary = override || path.join(__dirname, "..", "prebuilt", target, "tado-tui");
+const prebuiltDir = path.join(__dirname, "..", "prebuilt", target);
+const override = process.env.TADO_BINARY;
+const invoked = path.basename(process.argv[1] || "tado");
+const requested = path.join(prebuiltDir, invoked);
+const preferred = path.join(prebuiltDir, "tado");
+let binary = override;
+
+if (!binary) {
+  if (fs.existsSync(requested)) {
+    binary = requested;
+  } else if (invoked === "tado" && fs.existsSync(preferred)) {
+    binary = preferred;
+  } else {
+    binary = requested;
+  }
+}
 
 if (!fs.existsSync(binary)) {
   fail(
-    `missing prebuilt tado-tui for ${target}. ` +
-      "Build it with `cargo build --release -p tado-cli --bin tado-tui` " +
-      "and place the binary under npm/tado/prebuilt/<target>/tado-tui."
+    `missing prebuilt ${invoked} binary for ${target}. ` +
+      "Build it with `cargo build --release -p tado-runtime --bin tadod -p tado-cli --bin tado --bin tado-tui --bin tado-list --bin tado-read --bin tado-send --bin tado-events --bin tado-deploy --bin tado-bootstrap --bin tado-kanban --bin tado-eternal --bin tado-dispatch -p tado-mcp --bin tado-mcp` " +
+      "or the full release target documented in prebuilt/README.md, " +
+      "and place the binaries under npm/tado/prebuilt/<target>/."
   );
 }
 

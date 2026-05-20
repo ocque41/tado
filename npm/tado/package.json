@@ -1,13 +1,23 @@
 {
   "name": "@cumulus_cloud/tado",
-  "version": "0.1.0",
-  "description": "Terminal entrypoint for the Tado macOS agent work view.",
+  "version": "0.2.5",
+  "description": "CLI-first Tado runtime and Agent OS terminal UI.",
   "license": "MIT",
   "private": false,
   "type": "commonjs",
   "bin": {
     "tado": "bin/tado.js",
-    "tado-tui": "bin/tado.js"
+    "tadod": "bin/tado.js",
+    "tado-list": "bin/tado.js",
+    "tado-read": "bin/tado.js",
+    "tado-send": "bin/tado.js",
+    "tado-events": "bin/tado.js",
+    "tado-deploy": "bin/tado.js",
+    "tado-bootstrap": "bin/tado.js",
+    "tado-kanban": "bin/tado.js",
+    "tado-eternal": "bin/tado.js",
+    "tado-dispatch": "bin/tado.js",
+    "tado-mcp": "bin/tado.js"
   },
   "files": [
     "bin/",

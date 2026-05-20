@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@cumulus_cloud/tado": "^0.1.0"
+  }
+}
