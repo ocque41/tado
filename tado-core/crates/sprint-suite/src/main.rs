@@ -183,12 +183,15 @@ fn cmd_measure(args: MeasureArgs) -> Result<ExitCode> {
     if !data_path.exists() {
         // Treat as a free pass — `score` will translate the missing
         // report into NO-DATA-DETECTED.
-        eprintln!("sprint-suite: {} missing — measurement skipped", data_path.display());
+        eprintln!(
+            "sprint-suite: {} missing — measurement skipped",
+            data_path.display()
+        );
         return Ok(ExitCode::from(0));
     }
     let raw = fs::read(&data_path).with_context(|| format!("reading {}", data_path.display()))?;
-    let parsed: SprintDataFile = serde_json::from_slice(&raw)
-        .with_context(|| format!("parsing {}", data_path.display()))?;
+    let parsed: SprintDataFile =
+        serde_json::from_slice(&raw).with_context(|| format!("parsing {}", data_path.display()))?;
     let entry = match parsed {
         SprintDataFile::Single(e) => e,
         SprintDataFile::Many(many) => many
@@ -224,9 +227,8 @@ fn cmd_measure(args: MeasureArgs) -> Result<ExitCode> {
         notes,
         rules_file_hash,
     };
-    write_report(&args.output, &report).with_context(|| {
-        format!("writing report to {}", args.output.display())
-    })?;
+    write_report(&args.output, &report)
+        .with_context(|| format!("writing report to {}", args.output.display()))?;
     let _ = args.run_dir; // run_dir is reserved for future per-run scratch
     println!(
         "measured composite={:.3} → {}",
@@ -279,7 +281,11 @@ fn cmd_propose(args: ProposeArgs) -> Result<ExitCode> {
     md.push_str(&format!(
         "Rules file: `{}`{}\n\n",
         rules_path.display(),
-        if rules_present { "" } else { " (missing — write one before proposing)" }
+        if rules_present {
+            ""
+        } else {
+            " (missing — write one before proposing)"
+        }
     ));
 
     let mut proposals: Vec<(&str, &str)> = Vec::new();
@@ -383,13 +389,22 @@ fn cmd_explain(args: ExplainArgs) -> Result<ExitCode> {
     println!("Project root:     {}", report.project_root);
     println!();
     println!("Inputs:");
-    println!("  tickets_completed:            {}", report.data.tickets_completed);
+    println!(
+        "  tickets_completed:            {}",
+        report.data.tickets_completed
+    );
     println!(
         "  points_completed / planned:   {} / {}",
         report.data.points_completed, report.data.total_points_planned
     );
-    println!("  bugs_found_after_sprint:      {}", report.data.bugs_found_after_sprint);
-    println!("  code_review_passes:           {}", report.data.code_review_passes);
+    println!(
+        "  bugs_found_after_sprint:      {}",
+        report.data.bugs_found_after_sprint
+    );
+    println!(
+        "  code_review_passes:           {}",
+        report.data.code_review_passes
+    );
     println!(
         "  developer_satisfaction_score: {}",
         report.data.developer_satisfaction_score

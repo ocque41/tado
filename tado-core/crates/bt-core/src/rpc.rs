@@ -254,8 +254,7 @@ async fn dispatch_blocking(service: &CoreService, req: JsonRpcRequest) -> JsonRp
     let params = req.params;
     let method_for_log = method.clone();
     let started_at = Instant::now();
-    let outcome =
-        tokio::task::spawn_blocking(move || svc.handle_rpc(&method, params)).await;
+    let outcome = tokio::task::spawn_blocking(move || svc.handle_rpc(&method, params)).await;
     let elapsed = started_at.elapsed();
     if elapsed >= SLOW_RPC_WARN_THRESHOLD {
         // Intentional stderr write (no log crate in bt-core yet). The

@@ -21,7 +21,9 @@ use std::collections::BTreeMap;
 
 fn bench_slope_fit(c: &mut Criterion) {
     let small: Vec<(f64, f64)> = vec![(1.0, 1.0), (10.0, 10.0), (100.0, 100.0), (1000.0, 1000.0)];
-    let large: Vec<(f64, f64)> = (1..1000).map(|i| (i as f64, (i as f64).powf(1.5))).collect();
+    let large: Vec<(f64, f64)> = (1..1000)
+        .map(|i| (i as f64, (i as f64).powf(1.5)))
+        .collect();
 
     c.bench_function("algo_complexity::fit_loglog_slope/n=4", |b| {
         b.iter(|| algo_complexity::fit_loglog_slope(black_box(&small)))

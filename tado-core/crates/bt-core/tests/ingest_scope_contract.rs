@@ -67,7 +67,14 @@ fn ingest_persists_scope_for_project_and_global() {
 
     // 2. Global scope — must persist owner_scope='global' + project_id NULL
     let res = svc
-        .vault_ingest_path(&actor, &global_src, Some("codebase-global"), "global", None, None)
+        .vault_ingest_path(
+            &actor,
+            &global_src,
+            Some("codebase-global"),
+            "global",
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(res.get("created").and_then(|v| v.as_i64()), Some(1));
 

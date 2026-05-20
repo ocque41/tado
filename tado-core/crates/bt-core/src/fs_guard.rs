@@ -165,7 +165,11 @@ pub fn atomic_write(vault_root: &Path, target: &Path, content: &str) -> Result<(
 /// are atomic under `O_APPEND`. Audit entries are well under that limit.
 /// For larger payloads the atomicity guarantee degrades to "no interleave
 /// on the same fd" which is still correct for our append-only use case.
-pub fn append_log_line(vault_root: &Path, target: &Path, line_without_newline: &str) -> Result<(), BtError> {
+pub fn append_log_line(
+    vault_root: &Path,
+    target: &Path,
+    line_without_newline: &str,
+) -> Result<(), BtError> {
     let parent = target
         .parent()
         .ok_or_else(|| BtError::Io("target has no parent".to_string()))?;
@@ -179,10 +183,7 @@ pub fn append_log_line(vault_root: &Path, target: &Path, line_without_newline: &
         )));
     }
 
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(target)?;
+    let mut f = OpenOptions::new().create(true).append(true).open(target)?;
 
     // One write, one syscall, newline-terminated. This is the entire fix.
     let mut payload = String::with_capacity(line_without_newline.len() + 1);

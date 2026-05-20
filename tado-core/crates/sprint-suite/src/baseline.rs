@@ -89,10 +89,7 @@ pub fn init_from(report: &SprintReport, composite: f64) -> Baseline {
         "bugs_found_after_sprint".into(),
         report.data.bugs_found_after_sprint,
     );
-    components.insert(
-        "code_review_passes".into(),
-        report.data.code_review_passes,
-    );
+    components.insert("code_review_passes".into(), report.data.code_review_passes);
     components.insert("velocity_ratio".into(), report.data.velocity_ratio());
     components.insert(
         "developer_satisfaction_score".into(),
@@ -136,9 +133,10 @@ pub fn update_with(baseline: &Baseline, report: &SprintReport, composite: f64) -
         .copied()
         .unwrap_or(f64::INFINITY);
     if report.data.bugs_found_after_sprint < prev_bugs {
-        updated
-            .components
-            .insert("bugs_found_after_sprint".into(), report.data.bugs_found_after_sprint);
+        updated.components.insert(
+            "bugs_found_after_sprint".into(),
+            report.data.bugs_found_after_sprint,
+        );
     }
 
     // code_review_passes / velocity_ratio / satisfaction: keep the
@@ -151,7 +149,11 @@ pub fn update_with(baseline: &Baseline, report: &SprintReport, composite: f64) -
             report.data.developer_satisfaction_score,
         ),
     ] {
-        let prev = updated.components.get(key).copied().unwrap_or(f64::NEG_INFINITY);
+        let prev = updated
+            .components
+            .get(key)
+            .copied()
+            .unwrap_or(f64::NEG_INFINITY);
         if val > prev {
             updated.components.insert(key.into(), val);
         }

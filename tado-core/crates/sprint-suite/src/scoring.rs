@@ -104,7 +104,10 @@ impl ScoreVerdict {
     }
 }
 
-pub fn score(report: &SprintReport, baseline: Option<&Baseline>) -> Result<ScoreVerdict, ScoreError> {
+pub fn score(
+    report: &SprintReport,
+    baseline: Option<&Baseline>,
+) -> Result<ScoreVerdict, ScoreError> {
     let raw = report.composite;
     if !raw.is_finite() {
         return Err(ScoreError::NotFinite(raw));
@@ -210,7 +213,9 @@ mod tests {
         let r = report(100.0, 1.0, 12.0);
         let b = baseline(120.0, 1.0, 12.0);
         let v = score(&r, Some(&b)).unwrap();
-        assert!(matches!(v, ScoreVerdict::Regression { hot_metric, .. } if hot_metric == "composite"));
+        assert!(
+            matches!(v, ScoreVerdict::Regression { hot_metric, .. } if hot_metric == "composite")
+        );
     }
 
     #[test]
@@ -220,7 +225,9 @@ mod tests {
         let r = report(140.0, 5.0, 12.0);
         let b = baseline(120.0, 2.0, 12.0);
         let v = score(&r, Some(&b)).unwrap();
-        assert!(matches!(v, ScoreVerdict::Regression { hot_metric, .. } if hot_metric == "bugs_found_after_sprint"));
+        assert!(
+            matches!(v, ScoreVerdict::Regression { hot_metric, .. } if hot_metric == "bugs_found_after_sprint")
+        );
     }
 
     #[test]
@@ -228,7 +235,9 @@ mod tests {
         let r = report(140.0, 1.0, 8.0);
         let b = baseline(120.0, 1.0, 12.0);
         let v = score(&r, Some(&b)).unwrap();
-        assert!(matches!(v, ScoreVerdict::Regression { hot_metric, .. } if hot_metric == "code_review_passes"));
+        assert!(
+            matches!(v, ScoreVerdict::Regression { hot_metric, .. } if hot_metric == "code_review_passes")
+        );
     }
 
     #[test]

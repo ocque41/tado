@@ -105,7 +105,10 @@ fn project_fragment(ctx: &SpawnPackContext) -> Option<String> {
         lines.push(format!("- **root**: `{root}`"));
     }
     if let Some(id) = ctx.project_id.as_deref() {
-        lines.push(format!("- **dome topic**: `project-{}`", short_project_id(id)));
+        lines.push(format!(
+            "- **dome topic**: `project-{}`",
+            short_project_id(id)
+        ));
     }
     Some(lines.join("\n"))
 }
@@ -128,7 +131,11 @@ fn team_fragment(ctx: &SpawnPackContext) -> Option<String> {
     if !others.is_empty() {
         lines.push(format!(
             "- **teammates**: {}",
-            others.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+            others
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     Some(lines.join("\n"))

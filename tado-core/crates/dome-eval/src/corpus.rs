@@ -253,9 +253,7 @@ pub fn run_corpus(corpus: &Corpus) -> Result<CorpusReport> {
         let top1_freshness = hits
             .first()
             .and_then(|h| h.updated_at.as_deref())
-            .map(|u| {
-                bt_core::notes::freshness_score(Some(u), None, None, Utc::now()) as f64
-            })
+            .map(|u| bt_core::notes::freshness_score(Some(u), None, None, Utc::now()) as f64)
             .unwrap_or(0.0);
 
         per_case.push(PerCaseMetrics {
@@ -327,11 +325,7 @@ fn seed_vault(conn: &Connection, corpus: &Corpus) -> Result<()> {
     let embedder = NoopEmbedder;
 
     for doc in &corpus.docs {
-        let updated_at = doc
-            .updated_at
-            .as_deref()
-            .and_then(parse_dt)
-            .unwrap_or(now);
+        let updated_at = doc.updated_at.as_deref().and_then(parse_dt).unwrap_or(now);
         let slug = doc.slug.clone().unwrap_or_else(|| slugify(&doc.title));
         let user_path = format!("topics/{}/{}.user.md", doc.topic, slug);
         let agent_path = format!("topics/{}/{}.agent.md", doc.topic, slug);
@@ -389,7 +383,13 @@ fn parse_dt(s: &str) -> Option<DateTime<Utc>> {
 fn slugify(title: &str) -> String {
     title
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
@@ -408,7 +408,10 @@ mod tests {
 
     #[test]
     fn slugify_collapses_punctuation() {
-        assert_eq!(slugify("Auth refactor — 2026-04-26 retro!"), "auth-refactor-2026-04-26-retro");
+        assert_eq!(
+            slugify("Auth refactor — 2026-04-26 retro!"),
+            "auth-refactor-2026-04-26-retro"
+        );
         assert_eq!(slugify("Hello   world"), "hello-world");
         assert_eq!(slugify(""), "");
     }

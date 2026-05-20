@@ -9,13 +9,13 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::code::chunker::{default_chunker, CodeChunk, Chunker};
+use crate::code::chunker::{default_chunker, Chunker, CodeChunk};
 use crate::code::store;
 use crate::code::walker::{walk_project, WalkedFile};
 use crate::error::BtError;
@@ -141,7 +141,9 @@ where
     );
 
     let walk = walk_project(root_path);
-    progress.files_total.store(walk.files.len(), Ordering::Relaxed);
+    progress
+        .files_total
+        .store(walk.files.len(), Ordering::Relaxed);
 
     let mut result = IndexResult {
         project_id: project_id.to_string(),
@@ -162,7 +164,14 @@ where
     let progress_emit_every = 25usize;
 
     for (i, file) in walk.files.iter().enumerate() {
-        match index_one_file(&conn_factory, project_id, file, embedder, &*chunker, &metadata) {
+        match index_one_file(
+            &conn_factory,
+            project_id,
+            file,
+            embedder,
+            &*chunker,
+            &metadata,
+        ) {
             Ok(FileOutcome::Indexed { chunks, bytes }) => {
                 result.files_indexed += 1;
                 result.chunks_total += chunks;
@@ -176,11 +185,7 @@ where
                 progress.files_done.fetch_add(1, Ordering::Relaxed);
             }
             Err(err) => {
-                eprintln!(
-                    "[code-index] {} at {}: {err}",
-                    err.code(),
-                    file.repo_path
-                );
+                eprintln!("[code-index] {} at {}: {err}", err.code(), file.repo_path);
                 progress.files_done.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -270,13 +275,13 @@ fn index_one_file<E: Embedder + ?Sized, F: Fn() -> Result<Connection, BtError>>(
             &[],
             metadata,
         )?;
-        return Ok(FileOutcome::Indexed { chunks: 0, bytes: file.byte_size as usize });
+        return Ok(FileOutcome::Indexed {
+            chunks: 0,
+            bytes: file.byte_size as usize,
+        });
     }
 
-    let embeddings: Vec<Vec<f32>> = chunks
-        .iter()
-        .map(|c| embedder.embed(&c.text))
-        .collect();
+    let embeddings: Vec<Vec<f32>> = chunks.iter().map(|c| embedder.embed(&c.text)).collect();
     let line_count = source.lines().count() as i64;
     store::replace_chunks_for_file(
         &mut conn,
@@ -338,7 +343,11 @@ mod tests {
         let project_root = tempdir();
         stdfs::write(project_root.join("main.rs"), "pub fn alpha() {}\n").unwrap();
         stdfs::create_dir_all(project_root.join("src")).unwrap();
-        stdfs::write(project_root.join("src/lib.rs"), "pub fn beta() -> i32 { 1 }\n").unwrap();
+        stdfs::write(
+            project_root.join("src/lib.rs"),
+            "pub fn beta() -> i32 { 1 }\n",
+        )
+        .unwrap();
 
         // Use a single shared in-memory connection — re-opening a
         // `:memory:` URI gets you a fresh empty DB, which would
@@ -362,14 +371,8 @@ mod tests {
         };
         let setup = factory().unwrap();
         migrate(&setup).unwrap();
-        store::register_project(
-            &setup,
-            "p1",
-            "Demo",
-            &project_root.to_string_lossy(),
-            true,
-        )
-        .unwrap();
+        store::register_project(&setup, "p1", "Demo", &project_root.to_string_lossy(), true)
+            .unwrap();
         drop(setup);
         drop(conn);
 

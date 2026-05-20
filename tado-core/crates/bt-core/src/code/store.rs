@@ -68,11 +68,7 @@ pub fn register_project(
     Ok(())
 }
 
-pub fn unregister_project(
-    conn: &Connection,
-    project_id: &str,
-    purge: bool,
-) -> Result<(), BtError> {
+pub fn unregister_project(conn: &Connection, project_id: &str, purge: bool) -> Result<(), BtError> {
     if purge {
         purge_project(conn, project_id)?;
     }
@@ -240,7 +236,12 @@ pub fn replace_chunks_for_file(
                 metadata.instruction,
                 metadata.source_hash,
             ])?;
-            insert_fts.execute(params![project_id, repo_path, chunk.language.as_str(), chunk.text])?;
+            insert_fts.execute(params![
+                project_id,
+                repo_path,
+                chunk.language.as_str(),
+                chunk.text
+            ])?;
         }
     }
 
@@ -274,10 +275,7 @@ fn encode_embedding(vector: &[f32], metadata: &EmbeddingModelMetadata) -> (Vec<u
 /// to decide format.
 pub fn decode_embedding(bytes: &[u8], quant: &str) -> Vec<f32> {
     match quant {
-        "i8" => bytes
-            .iter()
-            .map(|&b| (b as i8) as f32 / 127.0)
-            .collect(),
+        "i8" => bytes.iter().map(|&b| (b as i8) as f32 / 127.0).collect(),
         _ => {
             // f32 little-endian
             let mut out = Vec::with_capacity(bytes.len() / 4);

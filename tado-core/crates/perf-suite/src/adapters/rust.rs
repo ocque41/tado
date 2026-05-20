@@ -56,7 +56,9 @@ use crate::metrics::{
     algo_complexity, alloc_per_op, cold_start_ops, critical_path_ops, db_query_cost,
     io_syscalls_per_op, steady_state_rss_ratio, xproc_roundtrips, MetricSample,
 };
-use crate::runtime::{cold_start_lines, io_syscalls, rss_ratio, run_with_budget, SpawnTarget, which};
+use crate::runtime::{
+    cold_start_lines, io_syscalls, rss_ratio, run_with_budget, which, SpawnTarget,
+};
 use crate::MeasurementContext;
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -216,7 +218,10 @@ fn measure_algo_complexity(root: &Path, budget: Option<Duration>) -> (f64, Optio
         if let Some(suf) = suffix_re.captures(name) {
             let base = name.trim_end_matches(suf.get(0).unwrap().as_str());
             let n: f64 = suf.get(1).unwrap().as_str().parse().unwrap_or(0.0);
-            groups.entry(base.to_string()).or_default().push((n, ns_value));
+            groups
+                .entry(base.to_string())
+                .or_default()
+                .push((n, ns_value));
         }
     }
 
@@ -251,8 +256,15 @@ fn measure_algo_complexity(root: &Path, budget: Option<Duration>) -> (f64, Optio
 /// returns 0.0 (sentinel that the scoring layer treats as neutral).
 fn measure_alloc_per_op(root: &Path, budget: Option<Duration>) -> (f64, Option<String>) {
     let mut cmd = Command::new("cargo");
-    cmd.args(["bench", "--no-fail-fast", "--quiet", "--", "--profile-time", "1"])
-        .current_dir(root);
+    cmd.args([
+        "bench",
+        "--no-fail-fast",
+        "--quiet",
+        "--",
+        "--profile-time",
+        "1",
+    ])
+    .current_dir(root);
     let output = match run_with_budget(cmd, budget) {
         Ok(out) => out,
         Err(e) => return (0.0, Some(format!("alloc_per_op: skipped ({e})"))),
@@ -277,7 +289,13 @@ fn measure_alloc_per_op(root: &Path, budget: Option<Duration>) -> (f64, Option<S
         );
     }
     let mean = totals.iter().sum::<f64>() / totals.len() as f64;
-    (mean, Some(format!("alloc_per_op: mean {mean:.0} blocks across {} benches", totals.len())))
+    (
+        mean,
+        Some(format!(
+            "alloc_per_op: mean {mean:.0} blocks across {} benches",
+            totals.len()
+        )),
+    )
 }
 
 /// `cargo-llvm-cov` is the supported way to count function calls.
@@ -300,7 +318,9 @@ fn measure_critical_path_ops(root: &Path, budget: Option<Duration>) -> (f64, Opt
     if std::env::var("TADO_PERF_FULL").as_deref() != Ok("1") {
         return (
             0.0,
-            Some("critical_path_ops: skipped (set TADO_PERF_FULL=1 for cargo-llvm-cov mode)".into()),
+            Some(
+                "critical_path_ops: skipped (set TADO_PERF_FULL=1 for cargo-llvm-cov mode)".into(),
+            ),
         );
     }
     let mut cmd = Command::new("cargo");
@@ -308,14 +328,24 @@ fn measure_critical_path_ops(root: &Path, budget: Option<Duration>) -> (f64, Opt
         .current_dir(root);
     let output = match run_with_budget(cmd, budget.or(Some(Duration::from_secs(180)))) {
         Ok(out) => out,
-        Err(e) => return (0.0, Some(format!("critical_path_ops: cargo-llvm-cov failed ({e})"))),
+        Err(e) => {
+            return (
+                0.0,
+                Some(format!("critical_path_ops: cargo-llvm-cov failed ({e})")),
+            )
+        }
     };
     let text = String::from_utf8_lossy(&output.stdout);
     // The summary JSON has shape:
     // {"data":[{"totals":{"functions":{"count":<N>,"covered":...}, ...}}]}
     let value: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,
-        Err(_) => return (0.0, Some("critical_path_ops: llvm-cov JSON parse failed".into())),
+        Err(_) => {
+            return (
+                0.0,
+                Some("critical_path_ops: llvm-cov JSON parse failed".into()),
+            )
+        }
     };
     let count = value
         .get("data")
@@ -327,9 +357,17 @@ fn measure_critical_path_ops(root: &Path, budget: Option<Duration>) -> (f64, Opt
         .and_then(|c| c.as_f64())
         .unwrap_or(0.0);
     if count <= 0.0 {
-        return (0.0, Some("critical_path_ops: llvm-cov returned zero functions".into()));
+        return (
+            0.0,
+            Some("critical_path_ops: llvm-cov returned zero functions".into()),
+        );
     }
-    (count, Some(format!("critical_path_ops: cargo-llvm-cov counted {count:.0} functions covered")))
+    (
+        count,
+        Some(format!(
+            "critical_path_ops: cargo-llvm-cov counted {count:.0} functions covered"
+        )),
+    )
 }
 
 /// Wrap the project's primary binary in dtrace (macOS) or strace
@@ -339,7 +377,12 @@ fn measure_critical_path_ops(root: &Path, budget: Option<Duration>) -> (f64, Opt
 fn measure_io_syscalls(root: &Path, budget: Option<Duration>) -> (f64, Option<String>) {
     let bin_name = match detect_primary_bin(root) {
         Some(name) => name,
-        None => return (0.0, Some("io_syscalls_per_op: no [[bin]] target detected".into())),
+        None => {
+            return (
+                0.0,
+                Some("io_syscalls_per_op: no [[bin]] target detected".into()),
+            )
+        }
     };
     // Build first so dtrace/strace measures runtime behavior, not
     // compilation. Best-effort — if the build fails we get the
@@ -370,10 +413,12 @@ fn measure_db_query_cost(root: &Path) -> (f64, Option<String>) {
         r"(?m)conn\.prepare\s*\(",
     ];
     let txn_re = Regex::new(r"(?i)BEGIN\s+TRANSACTION|conn\.transaction").unwrap();
-    let res = [Regex::new(patterns[0]).unwrap(),
-               Regex::new(patterns[1]).unwrap(),
-               Regex::new(patterns[2]).unwrap(),
-               Regex::new(patterns[3]).unwrap()];
+    let res = [
+        Regex::new(patterns[0]).unwrap(),
+        Regex::new(patterns[1]).unwrap(),
+        Regex::new(patterns[2]).unwrap(),
+        Regex::new(patterns[3]).unwrap(),
+    ];
     let mut query_count: u64 = 0;
     let mut txn_count: u64 = 0;
     for entry in walkdir::WalkDir::new(root)
@@ -383,14 +428,19 @@ fn measure_db_query_cost(root: &Path) -> (f64, Option<String>) {
         .filter(|e| e.file_type().is_file())
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("rs"))
     {
-        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
         for re in &res {
             query_count = query_count.saturating_add(re.find_iter(&text).count() as u64);
         }
         txn_count = txn_count.saturating_add(txn_re.find_iter(&text).count() as u64);
     }
     if query_count == 0 {
-        return (0.0, Some("db_query_cost: no DB queries detected — metric omitted".into()));
+        return (
+            0.0,
+            Some("db_query_cost: no DB queries detected — metric omitted".into()),
+        );
     }
     let unbatched = query_count.saturating_sub(txn_count);
     (
@@ -414,17 +464,24 @@ fn measure_xproc_roundtrips(root: &Path) -> (f64, Option<String>) {
         .filter(|e| e.file_type().is_file())
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("rs"))
     {
-        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
         declarations = declarations.saturating_add(extern_re.find_iter(&text).count() as u64);
         call_sites = call_sites.saturating_add(unsafe_call_re.find_iter(&text).count() as u64);
     }
     let total = declarations + call_sites;
     if total == 0 {
-        return (0.0, Some("xproc_roundtrips: no FFI boundaries detected".into()));
+        return (
+            0.0,
+            Some("xproc_roundtrips: no FFI boundaries detected".into()),
+        );
     }
     (
         total as f64,
-        Some(format!("xproc_roundtrips: {declarations} extern decls + {call_sites} unsafe call sites")),
+        Some(format!(
+            "xproc_roundtrips: {declarations} extern decls + {call_sites} unsafe call sites"
+        )),
     )
 }
 
@@ -434,18 +491,31 @@ fn measure_xproc_roundtrips(root: &Path) -> (f64, Option<String>) {
 fn measure_cold_start_ops(root: &Path, budget: Option<Duration>) -> (f64, Option<String>) {
     let bin_name = match detect_primary_bin(root) {
         Some(name) => name,
-        None => return (0.0, Some("cold_start_ops: no [[bin]] target detected".into())),
+        None => {
+            return (
+                0.0,
+                Some("cold_start_ops: no [[bin]] target detected".into()),
+            )
+        }
     };
     let build = Command::new("cargo")
         .args(["build", "--release", "--bin", &bin_name, "--quiet"])
         .current_dir(root)
         .output();
     if build.as_ref().map(|o| !o.status.success()).unwrap_or(true) {
-        return (0.0, Some(format!("cold_start_ops: failed to build bin {bin_name}")));
+        return (
+            0.0,
+            Some(format!("cold_start_ops: failed to build bin {bin_name}")),
+        );
     }
     let bin_path = root.join("target/release").join(&bin_name);
     if !bin_path.exists() {
-        return (0.0, Some(format!("cold_start_ops: binary {bin_name} not at expected path")));
+        return (
+            0.0,
+            Some(format!(
+                "cold_start_ops: binary {bin_name} not at expected path"
+            )),
+        );
     }
     let target = SpawnTarget {
         program: bin_path,
@@ -461,11 +531,21 @@ fn measure_cold_start_ops(root: &Path, budget: Option<Duration>) -> (f64, Option
 fn measure_steady_state_rss(root: &Path, budget: Option<Duration>) -> (f64, Option<String>) {
     let bin_name = match detect_primary_bin(root) {
         Some(name) => name,
-        None => return (1.0, Some("steady_state_rss_ratio: no [[bin]] target detected".into())),
+        None => {
+            return (
+                1.0,
+                Some("steady_state_rss_ratio: no [[bin]] target detected".into()),
+            )
+        }
     };
     let bin_path = root.join("target/release").join(&bin_name);
     if !bin_path.exists() {
-        return (1.0, Some(format!("steady_state_rss_ratio: build first via cold_start_ops to get {bin_name}")));
+        return (
+            1.0,
+            Some(format!(
+                "steady_state_rss_ratio: build first via cold_start_ops to get {bin_name}"
+            )),
+        );
     }
     let target = SpawnTarget {
         program: bin_path,
@@ -504,7 +584,10 @@ fn detect_primary_bin(root: &Path) -> Option<String> {
 }
 
 fn is_skip_dir(name: &str) -> bool {
-    matches!(name, "target" | "node_modules" | ".git" | ".tado" | "dist" | "build" | ".next")
+    matches!(
+        name,
+        "target" | "node_modules" | ".git" | ".tado" | "dist" | "build" | ".next"
+    )
 }
 
 #[cfg(test)]
@@ -525,7 +608,8 @@ edition = "2021"
 name = "myapp"
 path = "src/main.rs"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(detect_primary_bin(dir.path()), Some("myapp".into()));
     }
 
@@ -538,7 +622,8 @@ path = "src/main.rs"
 name = "tool"
 version = "0.1.0"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
         assert_eq!(detect_primary_bin(dir.path()), Some("tool".into()));
@@ -566,7 +651,8 @@ fn insert(conn: &Conn) {
     }
 }
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let (cost, _note) = measure_db_query_cost(dir.path());
         assert!(cost > 0.0);
     }
@@ -581,7 +667,8 @@ fn insert(conn: &Conn) {
 extern "C" fn first() {}
 extern "C" fn second() {}
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let (count, _note) = measure_xproc_roundtrips(dir.path());
         assert!(count >= 2.0);
     }
@@ -598,7 +685,17 @@ extern "C" fn second() {}
         TempDir { path }
     }
 
-    struct TempDir { path: std::path::PathBuf }
-    impl TempDir { fn path(&self) -> &std::path::Path { &self.path } }
-    impl Drop for TempDir { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); } }
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }

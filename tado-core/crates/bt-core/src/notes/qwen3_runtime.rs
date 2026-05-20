@@ -146,12 +146,8 @@ impl Qwen3Runtime {
         // candle's qwen3 forward doesn't accept out of the box; the
         // single-input throughput is enough for v1 (Phase 4 incremental
         // updates dominate over full rebuilds).
-        let input = Tensor::from_slice(
-            &encoded.ids,
-            (1, encoded.real_len),
-            &self.device,
-        )
-        .map_err(|e| BtError::Internal(format!("input tensor: {e}")))?;
+        let input = Tensor::from_slice(&encoded.ids, (1, encoded.real_len), &self.device)
+            .map_err(|e| BtError::Internal(format!("input tensor: {e}")))?;
 
         // Each call is a fresh sequence; clear state from the prior
         // embedding so KV cache doesn't leak across inputs.
@@ -281,15 +277,24 @@ mod tests {
             return;
         };
         let dir = std::path::PathBuf::from(dir);
-        let mut rt = Qwen3Runtime::load(&dir, DEFAULT_DIM)
-            .expect("load qwen3 runtime");
+        let mut rt = Qwen3Runtime::load(&dir, DEFAULT_DIM).expect("load qwen3 runtime");
         assert_eq!(rt.dimension(), DEFAULT_DIM);
-        let v_cat = rt.embed_passage("the cat sat on the mat").expect("embed cat");
-        let v_feline = rt.embed_passage("a feline rested upon the carpet").expect("embed feline");
-        let v_unrelated = rt.embed_passage("rocket trajectory at low orbit").expect("embed rocket");
+        let v_cat = rt
+            .embed_passage("the cat sat on the mat")
+            .expect("embed cat");
+        let v_feline = rt
+            .embed_passage("a feline rested upon the carpet")
+            .expect("embed feline");
+        let v_unrelated = rt
+            .embed_passage("rocket trajectory at low orbit")
+            .expect("embed rocket");
         assert_eq!(v_cat.len(), DEFAULT_DIM);
         let dot_paraphrase: f32 = v_cat.iter().zip(v_feline.iter()).map(|(a, b)| a * b).sum();
-        let dot_unrelated: f32 = v_cat.iter().zip(v_unrelated.iter()).map(|(a, b)| a * b).sum();
+        let dot_unrelated: f32 = v_cat
+            .iter()
+            .zip(v_unrelated.iter())
+            .map(|(a, b)| a * b)
+            .sum();
         eprintln!("paraphrase cosine={dot_paraphrase} unrelated cosine={dot_unrelated}");
         assert!(
             dot_paraphrase > dot_unrelated,

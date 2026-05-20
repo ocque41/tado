@@ -55,7 +55,11 @@ impl fmt::Display for Stack {
 #[derive(Debug)]
 pub enum AdapterError {
     Detection(String),
-    Correctness { stack: Stack, exit_code: i32, stderr: String },
+    Correctness {
+        stack: Stack,
+        exit_code: i32,
+        stderr: String,
+    },
     Measurement(String),
     Io(std::io::Error),
 }
@@ -64,7 +68,11 @@ impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AdapterError::Detection(s) => write!(f, "stack detection failed: {s}"),
-            AdapterError::Correctness { stack, exit_code, stderr } => write!(
+            AdapterError::Correctness {
+                stack,
+                exit_code,
+                stderr,
+            } => write!(
                 f,
                 "correctness gate failed for {stack} (exit {exit_code}): {stderr}",
             ),
@@ -103,11 +111,10 @@ pub trait Adapter {
 /// return Polyglot.
 pub fn detect_stack(project_root: &Path) -> Stack {
     let has_rust = project_root.join("Cargo.toml").exists();
-    let has_swift = project_root.join("Package.swift").exists()
-        || has_xcode_project(project_root);
+    let has_swift = project_root.join("Package.swift").exists() || has_xcode_project(project_root);
     let has_node = project_root.join("package.json").exists();
-    let has_python = project_root.join("pyproject.toml").exists()
-        || project_root.join("setup.py").exists();
+    let has_python =
+        project_root.join("pyproject.toml").exists() || project_root.join("setup.py").exists();
     let has_go = project_root.join("go.mod").exists();
 
     let count = [has_rust, has_swift, has_node, has_python, has_go]

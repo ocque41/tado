@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub enum ReportError {
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     Json(serde_json::Error),
 }
 

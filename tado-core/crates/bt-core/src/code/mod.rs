@@ -28,7 +28,7 @@ pub mod store;
 pub mod walker;
 pub mod watcher;
 
-pub use chunker::{CodeChunk, Chunker, LineWindowChunker, TreeSitterChunker};
+pub use chunker::{Chunker, CodeChunk, LineWindowChunker, TreeSitterChunker};
 pub use indexer::{run_full_index, IndexProgress, IndexResult};
 pub use language::Language;
 pub use search::{code_hybrid_search, CodeQuery, CodeSearchHit};

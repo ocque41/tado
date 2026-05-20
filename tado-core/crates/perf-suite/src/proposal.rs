@@ -47,7 +47,12 @@ impl fmt::Display for Proposal {
         write!(
             f,
             "- **Rung {} · {}**{} — {}{} — {}",
-            self.rung, self.category, target, self.file.display(), line, self.message
+            self.rung,
+            self.category,
+            target,
+            self.file.display(),
+            line,
+            self.message
         )
     }
 }
@@ -149,14 +154,16 @@ fn patterns() -> Vec<Pattern> {
             &["js", "ts"], None),
     ];
     raw.iter()
-        .map(|(rung, category, re, hint, extensions, target_metric)| Pattern {
-            rung: *rung,
-            category,
-            re: Regex::new(re).expect("static regex"),
-            hint,
-            extensions,
-            target_metric: *target_metric,
-        })
+        .map(
+            |(rung, category, re, hint, extensions, target_metric)| Pattern {
+                rung: *rung,
+                category,
+                re: Regex::new(re).expect("static regex"),
+                hint,
+                extensions,
+                target_metric: *target_metric,
+            },
+        )
         .collect()
 }
 
@@ -176,11 +183,15 @@ pub fn generate_proposals(
     let mut proposals = Vec::new();
     for file in diff_files {
         let path = project_root.join(&file);
-        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         let ext = file.extension().and_then(|s| s.to_str()).unwrap_or("");
         for (lineno, line) in text.lines().enumerate() {
             for pat in &pats {
-                if !pat.extensions.contains(&ext) { continue; }
+                if !pat.extensions.contains(&ext) {
+                    continue;
+                }
                 if pat.re.is_match(line) {
                     proposals.push(Proposal {
                         rung: pat.rung,
@@ -224,10 +235,18 @@ fn git_diff_files(project_root: &Path) -> Vec<PathBuf> {
         .args(["diff", "--name-only", "HEAD"])
         .current_dir(project_root)
         .output();
-    let Ok(out) = output else { return Vec::new(); };
-    if !out.status.success() { return Vec::new(); }
+    let Ok(out) = output else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    stdout.lines().filter(|s| !s.is_empty()).map(PathBuf::from).collect()
+    stdout
+        .lines()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// Fallback when no git repo or `--since-last-commit=false` — scan
@@ -241,8 +260,12 @@ fn all_source_files(project_root: &Path) -> Vec<PathBuf> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
     {
-        let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) else { continue };
-        if !exts.contains(&ext) { continue; }
+        let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !exts.contains(&ext) {
+            continue;
+        }
         if let Ok(rel) = entry.path().strip_prefix(project_root) {
             out.push(rel.to_path_buf());
         }
@@ -253,8 +276,19 @@ fn all_source_files(project_root: &Path) -> Vec<PathBuf> {
 fn is_skip_dir(name: &str) -> bool {
     matches!(
         name,
-        "target" | "node_modules" | ".git" | ".tado" | "dist" | "build" | ".next"
-        | ".build" | "DerivedData" | "Pods" | "venv" | ".venv" | "__pycache__"
+        "target"
+            | "node_modules"
+            | ".git"
+            | ".tado"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".build"
+            | "DerivedData"
+            | "Pods"
+            | "venv"
+            | ".venv"
+            | "__pycache__"
     )
 }
 
@@ -275,7 +309,11 @@ mod tests {
     #[test]
     fn pattern_compiles() {
         let pats = patterns();
-        assert!(pats.len() >= 25, "expected ≥25 patterns, got {}", pats.len());
+        assert!(
+            pats.len() >= 25,
+            "expected ≥25 patterns, got {}",
+            pats.len()
+        );
     }
 
     #[test]
@@ -297,9 +335,30 @@ mod tests {
     #[test]
     fn count_by_category_groups() {
         let proposals = vec![
-            Proposal { rung: 2, category: "allocation".into(), file: "a.rs".into(), line: None, message: "".into(), target_metric: None },
-            Proposal { rung: 2, category: "allocation".into(), file: "b.rs".into(), line: None, message: "".into(), target_metric: None },
-            Proposal { rung: 6, category: "io".into(), file: "c.rs".into(), line: None, message: "".into(), target_metric: None },
+            Proposal {
+                rung: 2,
+                category: "allocation".into(),
+                file: "a.rs".into(),
+                line: None,
+                message: "".into(),
+                target_metric: None,
+            },
+            Proposal {
+                rung: 2,
+                category: "allocation".into(),
+                file: "b.rs".into(),
+                line: None,
+                message: "".into(),
+                target_metric: None,
+            },
+            Proposal {
+                rung: 6,
+                category: "io".into(),
+                file: "c.rs".into(),
+                line: None,
+                message: "".into(),
+                target_metric: None,
+            },
         ];
         let counts = count_by_category(&proposals);
         assert_eq!(counts.get("allocation"), Some(&2));
@@ -316,7 +375,10 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!(
             "perf-pat-ext-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.py"), "x = Vec::new()\n").unwrap();

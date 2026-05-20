@@ -49,7 +49,11 @@ pub fn apply_recipe(
     let recipes = load_recipes(
         conn,
         Some(intent_key),
-        Some(if project_id.is_some() { "project" } else { "global" }),
+        Some(if project_id.is_some() {
+            "project"
+        } else {
+            "global"
+        }),
         project_id,
     )?;
     let recipe = recipes
@@ -172,7 +176,12 @@ pub fn apply_recipe(
         TemplateValue::List(
             citations
                 .iter()
-                .map(|c| format!("`{}` ({}, scope `{}`, confidence {:.2})", c.title, c.topic, c.scope, c.confidence))
+                .map(|c| {
+                    format!(
+                        "`{}` ({}, scope `{}`, confidence {:.2})",
+                        c.title, c.topic, c.scope, c.confidence
+                    )
+                })
                 .collect(),
         ),
     );
@@ -349,7 +358,12 @@ mod tests {
         // Recipe title "Smoke recipe" — FTS5 sanitiser ANDs both
         // tokens, so the doc body must contain both "smoke" and
         // "recipe" for a match.
-        seed_doc(&conn, "d1", "Decision: smoke testing protocol", "smoke testing recipe in CI");
+        seed_doc(
+            &conn,
+            "d1",
+            "Decision: smoke testing protocol",
+            "smoke testing recipe in CI",
+        );
         let answer = apply_recipe(&conn, "smoke", None, "system", None, false).unwrap();
         assert_eq!(answer.intent_key, "smoke");
         assert!(!answer.citations.is_empty());

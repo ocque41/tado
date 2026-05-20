@@ -260,8 +260,7 @@ pub unsafe extern "C" fn tado_session_is_running(session: *mut TadoSession) -> u
     }
     let r = panic::catch_unwind(|| {
         let s = &*(session as *const Session);
-        s.running
-            .load(std::sync::atomic::Ordering::Acquire) as u8
+        s.running.load(std::sync::atomic::Ordering::Acquire) as u8
     });
     r.unwrap_or(0)
 }
@@ -362,8 +361,7 @@ pub unsafe extern "C" fn tado_session_take_title(session: *mut TadoSession) -> *
         let s = &*(session as *const Session);
         match s.take_title() {
             Some(t) => {
-                let sanitized: Vec<u8> =
-                    t.into_bytes().into_iter().filter(|b| *b != 0).collect();
+                let sanitized: Vec<u8> = t.into_bytes().into_iter().filter(|b| *b != 0).collect();
                 match std::ffi::CString::new(sanitized) {
                     Ok(c) => c.into_raw(),
                     Err(_) => ptr::null_mut(),

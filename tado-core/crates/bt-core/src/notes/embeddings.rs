@@ -48,10 +48,7 @@ pub fn clear_runtime() -> Option<Arc<Mutex<Qwen3Runtime>>> {
 }
 
 fn current_runtime() -> Option<Arc<Mutex<Qwen3Runtime>>> {
-    registry()
-        .read()
-        .ok()
-        .and_then(|g| g.as_ref().cloned())
+    registry().read().ok().and_then(|g| g.as_ref().cloned())
 }
 
 /// Legacy dimension used by rows stamped `noop@1`.

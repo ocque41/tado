@@ -88,13 +88,7 @@ impl<'a> Perform for GridPerformer<'a> {
         }
     }
 
-    fn csi_dispatch(
-        &mut self,
-        params: &Params,
-        intermediates: &[u8],
-        _ignore: bool,
-        action: char,
-    ) {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         // DEC private sequences are prefixed with '?'. Dispatch those
         // separately — most of them toggle modes (25=cursor, 1049=alt).
         if intermediates.starts_with(b"?") {
@@ -271,10 +265,7 @@ fn apply_sgr(grid: &mut Grid, params: &Params) {
     }
 }
 
-fn read_extended_color<I: Iterator<Item = u16>>(
-    iter: &mut I,
-    palette: &[u32; 16],
-) -> Option<u32> {
+fn read_extended_color<I: Iterator<Item = u16>>(iter: &mut I, palette: &[u32; 16]) -> Option<u32> {
     match iter.next()? {
         2 => {
             let r = iter.next()? as u32;
@@ -420,20 +411,22 @@ mod tests {
         feed(&mut g, b"\x1b[?1049l");
         assert!(!g.is_alt_screen());
         for (i, c) in g.cells.iter().enumerate() {
-            assert_eq!(c.ch, primary_snapshot[i].ch,
-                "cell {i} should be restored to primary", );
+            assert_eq!(
+                c.ch, primary_snapshot[i].ch,
+                "cell {i} should be restored to primary",
+            );
         }
     }
 
     #[test]
     fn save_restore_cursor() {
         let mut g = Grid::new(10, 5);
-        feed(&mut g, b"\x1b[3;5H");   // cursor to (row=3, col=5) → (2,4) 0-idx
-        feed(&mut g, b"\x1b[31m");    // red fg
-        feed(&mut g, b"\x1b[s");      // save
-        feed(&mut g, b"\x1b[1;1H");   // move elsewhere
-        feed(&mut g, b"\x1b[0m");     // reset SGR
-        feed(&mut g, b"\x1b[u");      // restore
+        feed(&mut g, b"\x1b[3;5H"); // cursor to (row=3, col=5) → (2,4) 0-idx
+        feed(&mut g, b"\x1b[31m"); // red fg
+        feed(&mut g, b"\x1b[s"); // save
+        feed(&mut g, b"\x1b[1;1H"); // move elsewhere
+        feed(&mut g, b"\x1b[0m"); // reset SGR
+        feed(&mut g, b"\x1b[u"); // restore
         assert_eq!(g.cursor_x, 4);
         assert_eq!(g.cursor_y, 2);
         assert_eq!(g.current_fg, 0xCC241DFF);
@@ -450,8 +443,8 @@ mod tests {
         assert_eq!(g.cursor_y, 2);
         // Force a scroll inside the region by printing past bottom
         feed(&mut g, b"\x1b[4;1H"); // go to last row
-        feed(&mut g, b"eeee\n");   // linefeed at bottom scrolls region
-        // Rows 0..1 unchanged
+        feed(&mut g, b"eeee\n"); // linefeed at bottom scrolls region
+                                 // Rows 0..1 unchanged
         assert_eq!(g.cells[0].ch, b'a' as u32);
         assert_eq!(g.cells[4].ch, b'b' as u32);
         // Row 2 should now hold what was row 3 before (c's got wiped by

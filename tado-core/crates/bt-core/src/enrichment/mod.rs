@@ -38,8 +38,8 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use uuid::Uuid;
 
-pub mod deduper;
 pub mod decayer;
+pub mod deduper;
 pub mod extractor;
 pub mod linker;
 pub mod worker;
@@ -230,7 +230,9 @@ pub fn claim_batch(
             placeholders
         );
         let mut stmt = conn.prepare(&select_sql)?;
-        let mut rows = stmt.query(rusqlite::params_from_iter(job_ids.iter().map(String::as_str)))?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(
+            job_ids.iter().map(String::as_str),
+        ))?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let kind_str: String = row.get(3)?;

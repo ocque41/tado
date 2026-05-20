@@ -182,7 +182,10 @@ fn run_watcher_loop<F, EF>(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
         };
         for event in batch {
-            if !matches!(event.kind, DebouncedEventKind::Any | DebouncedEventKind::AnyContinuous) {
+            if !matches!(
+                event.kind,
+                DebouncedEventKind::Any | DebouncedEventKind::AnyContinuous
+            ) {
                 continue;
             }
             let path = event.path;
@@ -204,11 +207,7 @@ fn run_watcher_loop<F, EF>(
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    eprintln!(
-                        "[dome-watcher] {} {}: {err}",
-                        project_id,
-                        path.display()
-                    );
+                    eprintln!("[dome-watcher] {} {}: {err}", project_id, path.display());
                 }
                 Err(panic_payload) => {
                     let msg = panic_payload
@@ -442,14 +441,8 @@ mod tests {
         {
             let setup = factory().unwrap();
             migrate(&setup).unwrap();
-            store::register_project(
-                &setup,
-                "p1",
-                "Demo",
-                &project_root.to_string_lossy(),
-                true,
-            )
-            .unwrap();
+            store::register_project(&setup, "p1", "Demo", &project_root.to_string_lossy(), true)
+                .unwrap();
         }
         let progress = IndexProgress::new("p1".into());
         let watcher = start_watcher(

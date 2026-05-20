@@ -255,8 +255,7 @@ fn sweep_corrupt_qwen3_chunks(target_dim: usize) -> u64 {
 }
 
 fn log_to_fetch(vault: &Path, model_dir: &Path, line: &str) {
-    let path = model_fetch::fetch_log_path(vault)
-        .unwrap_or_else(|_| model_dir.join("_fetch.log"));
+    let path = model_fetch::fetch_log_path(vault).unwrap_or_else(|_| model_dir.join("_fetch.log"));
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -286,9 +285,7 @@ fn spawn_model_fetch(vault_path: &Path) {
     if let Ok(mut g) = MODEL_LOAD_ERROR.lock() {
         *g = None;
     }
-    let progress = MODEL_PROGRESS
-        .get_or_init(FetchProgress::new)
-        .clone();
+    let progress = MODEL_PROGRESS.get_or_init(FetchProgress::new).clone();
     // Reset the FetchProgress's sticky error too — disk size is the
     // truth, but the error string is stale across retries.
     progress.record_error_clear();
@@ -331,8 +328,9 @@ pub extern "C" fn tado_dome_model_status() -> *mut c_char {
 
     let snap = match (&vault_present, MODEL_PROGRESS.get()) {
         (Some(vault), Some(p)) => p.snapshot(vault),
-        (Some(vault), None) => bt_core::notes::model_fetch::FetchProgress::default()
-            .snapshot(vault),
+        (Some(vault), None) => {
+            bt_core::notes::model_fetch::FetchProgress::default().snapshot(vault)
+        }
         _ => bt_core::notes::model_fetch::FetchSnapshot {
             total_bytes: 0,
             downloaded_bytes: 0,
@@ -350,10 +348,7 @@ pub extern "C" fn tado_dome_model_status() -> *mut c_char {
     // Surface either the fetch error or the load error, whichever is
     // present (load errors are stickier — they happen after fetch
     // completed). Loads after a successful fetch clear this slot.
-    let load_err = MODEL_LOAD_ERROR
-        .lock()
-        .ok()
-        .and_then(|g| g.clone());
+    let load_err = MODEL_LOAD_ERROR.lock().ok().and_then(|g| g.clone());
     let error = snap.error.clone().or(load_err);
 
     let payload = json!({
@@ -383,9 +378,7 @@ pub extern "C" fn tado_dome_model_fetch_start() -> c_int {
     };
 
     // If files are complete and the runtime is loaded, no-op.
-    if model_fetch::is_complete(&vault)
-        && Qwen3EmbeddingProvider::default().is_runtime_loaded()
-    {
+    if model_fetch::is_complete(&vault) && Qwen3EmbeddingProvider::default().is_runtime_loaded() {
         return 0;
     }
 
@@ -1591,9 +1584,7 @@ pub extern "C" fn tado_dome_vault_status() -> *mut c_char {
 /// # Safety
 /// `root_path_cstr` may be null.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_import_preview(
-    root_path_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_import_preview(root_path_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1615,9 +1606,7 @@ pub unsafe extern "C" fn tado_dome_import_preview(
 /// `items_json_cstr` must be non-null NUL-terminated UTF-8 holding
 /// a JSON array.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_import_execute(
-    items_json_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_import_execute(items_json_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1691,9 +1680,7 @@ pub unsafe extern "C" fn tado_dome_token_create(
 /// # Safety
 /// `token_id_cstr` must be non-null NUL-terminated UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_token_rotate(
-    token_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_token_rotate(token_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1715,9 +1702,7 @@ pub unsafe extern "C" fn tado_dome_token_rotate(
 /// # Safety
 /// `token_id_cstr` must be non-null NUL-terminated UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_token_revoke(
-    token_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_token_revoke(token_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1793,9 +1778,7 @@ pub extern "C" fn tado_dome_topic_list() -> *mut c_char {
 /// # Safety
 /// `doc_id_cstr` must be non-null NUL-terminated UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_graph_links(
-    doc_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_graph_links(doc_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1842,9 +1825,7 @@ pub unsafe extern "C" fn tado_dome_context_list(
 /// # Safety
 /// `context_id_cstr` must be non-null NUL-terminated UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_context_get(
-    context_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_context_get(context_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1868,9 +1849,7 @@ pub unsafe extern "C" fn tado_dome_context_get(
 /// # Safety
 /// `context_id_cstr` must be non-null NUL-terminated UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_context_delete(
-    context_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_context_delete(context_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1913,9 +1892,7 @@ pub unsafe extern "C" fn tado_dome_suggestion_list(
 /// # Safety
 /// `id_cstr` must be non-null NUL-terminated UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_suggestion_apply(
-    id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_suggestion_apply(id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -1976,9 +1953,13 @@ pub unsafe extern "C" fn tado_dome_compose_spawn_preamble(
         .unwrap_or_default();
     let rendered = service.spawn_pack_get_or_build(
         value.get("agent_name").and_then(serde_json::Value::as_str),
-        value.get("project_name").and_then(serde_json::Value::as_str),
+        value
+            .get("project_name")
+            .and_then(serde_json::Value::as_str),
         value.get("project_id").and_then(serde_json::Value::as_str),
-        value.get("project_root").and_then(serde_json::Value::as_str),
+        value
+            .get("project_root")
+            .and_then(serde_json::Value::as_str),
         value.get("team_name").and_then(serde_json::Value::as_str),
         teammates,
     );
@@ -2440,9 +2421,7 @@ pub unsafe extern "C" fn tado_dome_code_index_project(
 /// files via the same `replace_chunks_for_file` path the full
 /// indexer uses.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_code_watch_start(
-    project_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_code_watch_start(project_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -2464,9 +2443,7 @@ pub unsafe extern "C" fn tado_dome_code_watch_start(
 /// Stop the file watcher for a project. No-op if no watcher was
 /// running. Returns `{ ok, project_id, watching: false, had_watcher }`.
 #[no_mangle]
-pub unsafe extern "C" fn tado_dome_code_watch_stop(
-    project_id_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_dome_code_watch_stop(project_id_cstr: *const c_char) -> *mut c_char {
     let Some(service) = DOME_SERVICE.get() else {
         return std::ptr::null_mut();
     };
@@ -2617,9 +2594,7 @@ fn shell_escape(value: &str) -> String {
 /// NUL-terminated UTF-8 string. The returned pointer is non-null on
 /// success and must be freed exactly once via `tado_string_free`.
 #[no_mangle]
-pub unsafe extern "C" fn tado_zombie_sweep(
-    options_json_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_zombie_sweep(options_json_cstr: *const c_char) -> *mut c_char {
     let opts: bt_core::zombie::SweepOptions = if options_json_cstr.is_null() {
         bt_core::zombie::SweepOptions::default()
     } else {

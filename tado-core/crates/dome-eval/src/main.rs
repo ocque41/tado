@@ -202,7 +202,12 @@ fn run_explain(args: ExplainArgs) -> Result<ExitCode> {
 fn print_explain_table(seed: &ExplainSeed, rows: &[dome_eval::ExplainRow]) {
     println!(
         "log_id={}  tool={}  actor={}  scope={}  consumed={}  latency_ms={}",
-        seed.log_id, seed.tool, seed.actor_kind, seed.knowledge_scope, seed.was_consumed, seed.latency_ms
+        seed.log_id,
+        seed.tool,
+        seed.actor_kind,
+        seed.knowledge_scope,
+        seed.was_consumed,
+        seed.latency_ms
     );
     println!("query: {}", seed.query);
     println!();
@@ -219,7 +224,9 @@ fn print_explain_table(seed: &ExplainSeed, rows: &[dome_eval::ExplainRow]) {
             r.freshness,
             r.scope_match,
             r.supersede_penalty,
-            r.confidence.map(|c| format!("{:.2}", c)).unwrap_or_else(|| "-".into()),
+            r.confidence
+                .map(|c| format!("{:.2}", c))
+                .unwrap_or_else(|| "-".into()),
             r.title.as_deref().unwrap_or("(no title)")
         );
     }

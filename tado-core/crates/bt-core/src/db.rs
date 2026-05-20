@@ -171,7 +171,13 @@ pub fn update_doc_scope(
             knowledge_kind = ?5
         WHERE id = ?1
         "#,
-        params![doc_id, owner_scope, project_id, project_root, knowledge_kind],
+        params![
+            doc_id,
+            owner_scope,
+            project_id,
+            project_root,
+            knowledge_kind
+        ],
     )?;
     Ok(())
 }

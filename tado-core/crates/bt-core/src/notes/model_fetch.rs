@@ -89,7 +89,10 @@ pub fn expected_total_bytes() -> u64 {
 
 /// Resolve the model directory under the vault. Created if missing.
 pub fn model_dir(vault_root: &Path) -> std::io::Result<PathBuf> {
-    let dir = vault_root.join(".bt").join("models").join("qwen3-embedding-0.6b");
+    let dir = vault_root
+        .join(".bt")
+        .join("models")
+        .join("qwen3-embedding-0.6b");
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -194,11 +197,7 @@ impl FetchProgress {
         FetchSnapshot {
             total_bytes: total,
             downloaded_bytes: downloaded,
-            current_file: self
-                .current_file
-                .lock()
-                .ok()
-                .and_then(|g| g.clone()),
+            current_file: self.current_file.lock().ok().and_then(|g| g.clone()),
             completed,
             error: self.error.lock().ok().and_then(|g| g.clone()),
         }
@@ -265,7 +264,10 @@ pub fn fetch_all(vault_root: &Path, progress: &Arc<FetchProgress>) -> Result<Pat
         progress.set_current(file.name);
         log_line(
             vault_root,
-            &format!("fetch_one start: {} (expected {} bytes)", file.name, file.expected_bytes),
+            &format!(
+                "fetch_one start: {} (expected {} bytes)",
+                file.name, file.expected_bytes
+            ),
         );
         let target = dir.join(file.name);
         if let Err(e) = fetch_one(vault_root, file, &target) {
@@ -391,7 +393,9 @@ fn fetch_one(
                         vault_root,
                         &format!(
                             "fetch_one progress: {} on-disk={} / expected={}",
-                            file.name, meta.len(), file.expected_bytes
+                            file.name,
+                            meta.len(),
+                            file.expected_bytes
                         ),
                     );
                 }

@@ -2273,8 +2273,16 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let version = migrate(&conn).unwrap();
         assert_eq!(version, LATEST_SCHEMA_VERSION);
-        for column in ["owner_scope", "project_id", "project_root", "knowledge_kind"] {
-            assert!(table_has_column(&conn, "docs", column).unwrap(), "missing {column}");
+        for column in [
+            "owner_scope",
+            "project_id",
+            "project_root",
+            "knowledge_kind",
+        ] {
+            assert!(
+                table_has_column(&conn, "docs", column).unwrap(),
+                "missing {column}"
+            );
         }
     }
 
@@ -2283,7 +2291,13 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let version = migrate(&conn).unwrap();
         assert_eq!(version, LATEST_SCHEMA_VERSION);
-        for table in ["code_projects", "code_files", "code_chunks", "code_index_jobs", "fts_code"] {
+        for table in [
+            "code_projects",
+            "code_files",
+            "code_chunks",
+            "code_index_jobs",
+            "fts_code",
+        ] {
             let exists: i64 = conn
                 .query_row(
                     "SELECT count(*) FROM sqlite_master WHERE name = ?1",
@@ -2398,7 +2412,10 @@ mod tests {
             ) VALUES (?1, 'architecture-review', 'global', NULL, 'dup', '.tado/verified-prompts/arch.md')"#,
             ["rec-test-2"],
         );
-        assert!(dup.is_err(), "duplicate intent_key/scope/project_id should be rejected");
+        assert!(
+            dup.is_err(),
+            "duplicate intent_key/scope/project_id should be rejected"
+        );
 
         // Re-running migrate is idempotent (no duplicate-column errors).
         let version_again = migrate(&conn).unwrap();

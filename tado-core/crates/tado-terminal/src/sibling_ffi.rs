@@ -74,8 +74,12 @@ pub unsafe extern "C" fn tado_ipc_send_external_message(
     body_cstr: *const c_char,
     from_name_cstr: *const c_char,
 ) -> c_int {
-    let Some(target_str) = cstr_to_str(target_uuid_cstr) else { return 2; };
-    let Some(body) = cstr_to_str(body_cstr) else { return 2; };
+    let Some(target_str) = cstr_to_str(target_uuid_cstr) else {
+        return 2;
+    };
+    let Some(body) = cstr_to_str(body_cstr) else {
+        return 2;
+    };
     let from_name = cstr_to_str(from_name_cstr).unwrap_or("tado-core FFI");
 
     let target = match Uuid::parse_str(target_str) {
@@ -139,7 +143,9 @@ pub unsafe extern "C" fn tado_ipc_write_registry_json(
     root_cstr: *const c_char,
     json_cstr: *const c_char,
 ) -> c_int {
-    let Some(json) = cstr_to_str(json_cstr) else { return 2; };
+    let Some(json) = cstr_to_str(json_cstr) else {
+        return 2;
+    };
     let entries: Vec<tado_ipc::IpcSessionEntry> = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return 2,
@@ -147,7 +153,9 @@ pub unsafe extern "C" fn tado_ipc_write_registry_json(
     let paths = if root_cstr.is_null() {
         tado_ipc::IpcPaths::stable()
     } else {
-        let Some(s) = cstr_to_str(root_cstr) else { return 2; };
+        let Some(s) = cstr_to_str(root_cstr) else {
+            return 2;
+        };
         tado_ipc::IpcPaths::at(s)
     };
     match tado_ipc::write_registry(&paths, &entries) {
@@ -179,7 +187,9 @@ pub unsafe extern "C" fn tado_events_start(socket_path_cstr: *const c_char) -> c
     let path = if socket_path_cstr.is_null() {
         tado_ipc::IpcPaths::stable().events_sock()
     } else {
-        let Some(s) = cstr_to_str(socket_path_cstr) else { return 2; };
+        let Some(s) = cstr_to_str(socket_path_cstr) else {
+            return 2;
+        };
         std::path::PathBuf::from(s)
     };
     match tado_ipc::start_events_server(&path) {
@@ -208,7 +218,9 @@ pub unsafe extern "C" fn tado_events_publish(
     kind_cstr: *const c_char,
     payload_json_cstr: *const c_char,
 ) -> c_int {
-    let Some(kind) = cstr_to_str(kind_cstr) else { return 2; };
+    let Some(kind) = cstr_to_str(kind_cstr) else {
+        return 2;
+    };
     let payload_str = cstr_to_str(payload_json_cstr).unwrap_or("{}");
     let payload: serde_json::Value =
         serde_json::from_str(payload_str).unwrap_or_else(|_| serde_json::json!({}));
@@ -231,8 +243,12 @@ pub unsafe extern "C" fn tado_settings_write_json(
     path_cstr: *const c_char,
     json_cstr: *const c_char,
 ) -> c_int {
-    let Some(path) = cstr_to_str(path_cstr) else { return 2; };
-    let Some(json) = cstr_to_str(json_cstr) else { return 2; };
+    let Some(path) = cstr_to_str(path_cstr) else {
+        return 2;
+    };
+    let Some(json) = cstr_to_str(json_cstr) else {
+        return 2;
+    };
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return 2,
@@ -252,7 +268,9 @@ pub unsafe extern "C" fn tado_settings_write_json(
 /// `path_cstr` must be a valid NUL-terminated UTF-8 string.
 #[no_mangle]
 pub unsafe extern "C" fn tado_settings_read_json(path_cstr: *const c_char) -> *mut c_char {
-    let Some(path) = cstr_to_str(path_cstr) else { return std::ptr::null_mut(); };
+    let Some(path) = cstr_to_str(path_cstr) else {
+        return std::ptr::null_mut();
+    };
     let value: Option<serde_json::Value> = match tado_settings::read_json(path) {
         Ok(v) => v,
         Err(_) => return std::ptr::null_mut(),
@@ -283,7 +301,10 @@ mod tests {
         let json_c = CString::new(r#"{"name":"alice","count":42}"#).unwrap();
 
         unsafe {
-            assert_eq!(tado_settings_write_json(path_c.as_ptr(), json_c.as_ptr()), 0);
+            assert_eq!(
+                tado_settings_write_json(path_c.as_ptr(), json_c.as_ptr()),
+                0
+            );
             let read_back = tado_settings_read_json(path_c.as_ptr());
             assert!(!read_back.is_null());
             let s = CStr::from_ptr(read_back).to_str().unwrap().to_string();

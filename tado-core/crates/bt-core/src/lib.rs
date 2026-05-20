@@ -22,4 +22,3 @@ pub mod zombie;
 pub use error::BtError;
 pub use model::Actor;
 pub use service::{CoreService, WriteOperation};
-

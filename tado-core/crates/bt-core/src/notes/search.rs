@@ -230,7 +230,11 @@ pub fn rerank(hit: &mut SearchHit, ctx: &RetrievalCtx, now: DateTime<Utc>) {
         None => 1.0_f32,
     };
     let confidence = hit.confidence.unwrap_or(1.0_f32).clamp(0.0, 1.0);
-    let supersede_penalty = if hit.superseded_by.is_some() { 0.3_f32 } else { 1.0_f32 };
+    let supersede_penalty = if hit.superseded_by.is_some() {
+        0.3_f32
+    } else {
+        1.0_f32
+    };
 
     hit.combined_score =
         hit.combined_score * (0.5 + 0.5 * fresh) * scope_match * confidence * supersede_penalty;
@@ -474,10 +478,7 @@ pub fn sanitize_fts5_query(input: &str) -> String {
         .filter_map(|tok| {
             // Drop tokens that became empty after normalization (e.g. a
             // bare `-` or `:`).
-            let normalized: String = tok
-                .chars()
-                .filter(|c| !matches!(c, '"'))
-                .collect();
+            let normalized: String = tok.chars().filter(|c| !matches!(c, '"')).collect();
             if normalized.is_empty() {
                 None
             } else {
@@ -524,28 +525,31 @@ pub fn lexical_candidates(
     "#;
 
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![sanitized, effective_scope, topic, limit as i64], |row| {
-        let bm25: Option<f64> = row.get(5).ok();
-        let lex_score = bm25
-            .map(|b| (1.0 / (1.0 + b.max(0.0) as f32)).min(1.0))
-            .unwrap_or(0.0);
-        Ok(SearchHit {
-            doc_id: row.get(0)?,
-            scope: row.get(1)?,
-            chunk_index: None,
-            topic: row.get(2)?,
-            title: row.get(3)?,
-            excerpt: row.get(4)?,
-            vector_score: None,
-            lexical_score: Some(lex_score),
-            combined_score: 0.0,
-            updated_at: row.get::<_, Option<String>>(6).unwrap_or(None),
-            created_at: row.get::<_, Option<String>>(7).unwrap_or(None),
-            last_referenced_at: None,
-            confidence: None,
-            superseded_by: None,
-        })
-    })?;
+    let rows = stmt.query_map(
+        params![sanitized, effective_scope, topic, limit as i64],
+        |row| {
+            let bm25: Option<f64> = row.get(5).ok();
+            let lex_score = bm25
+                .map(|b| (1.0 / (1.0 + b.max(0.0) as f32)).min(1.0))
+                .unwrap_or(0.0);
+            Ok(SearchHit {
+                doc_id: row.get(0)?,
+                scope: row.get(1)?,
+                chunk_index: None,
+                topic: row.get(2)?,
+                title: row.get(3)?,
+                excerpt: row.get(4)?,
+                vector_score: None,
+                lexical_score: Some(lex_score),
+                combined_score: 0.0,
+                updated_at: row.get::<_, Option<String>>(6).unwrap_or(None),
+                created_at: row.get::<_, Option<String>>(7).unwrap_or(None),
+                last_referenced_at: None,
+                confidence: None,
+                superseded_by: None,
+            })
+        },
+    )?;
 
     let mut out = Vec::new();
     for row in rows {
@@ -558,9 +562,8 @@ fn attach_doc_metadata(conn: &Connection, hits: &mut [SearchHit]) -> Result<(), 
     if hits.is_empty() {
         return Ok(());
     }
-    let mut docs_stmt = conn.prepare(
-        "SELECT topic, title, updated_at, created_at FROM docs WHERE id = ?1",
-    )?;
+    let mut docs_stmt =
+        conn.prepare("SELECT topic, title, updated_at, created_at FROM docs WHERE id = ?1")?;
     // Phase 3: pull the most-recent live `graph_nodes` row anchored on
     // this doc id. Confidence/supersede default to None when the doc
     // hasn't been extracted yet — rerank treats None as 1.0× so legacy
@@ -575,7 +578,11 @@ fn attach_doc_metadata(conn: &Connection, hits: &mut [SearchHit]) -> Result<(), 
             LIMIT 1"#,
     )?;
     for hit in hits.iter_mut() {
-        if hit.topic.is_empty() || hit.title.is_empty() || hit.updated_at.is_none() || hit.created_at.is_none() {
+        if hit.topic.is_empty()
+            || hit.title.is_empty()
+            || hit.updated_at.is_none()
+            || hit.created_at.is_none()
+        {
             let row: Option<(String, String, Option<String>, Option<String>)> = docs_stmt
                 .query_row(params![hit.doc_id], |r| {
                     Ok((
@@ -602,7 +609,10 @@ fn attach_doc_metadata(conn: &Connection, hits: &mut [SearchHit]) -> Result<(), 
             }
         }
 
-        if hit.confidence.is_none() && hit.superseded_by.is_none() && hit.last_referenced_at.is_none() {
+        if hit.confidence.is_none()
+            && hit.superseded_by.is_none()
+            && hit.last_referenced_at.is_none()
+        {
             let row: Option<(Option<f64>, Option<String>, Option<String>)> = entity_stmt
                 .query_row(params![hit.doc_id], |r| {
                     Ok((
@@ -711,14 +721,23 @@ mod tests {
 
     #[test]
     fn sanitize_fts5_query_quotes_each_token() {
-        assert_eq!(sanitize_fts5_query("auth-cookies decision"), "\"auth-cookies\" \"decision\"");
+        assert_eq!(
+            sanitize_fts5_query("auth-cookies decision"),
+            "\"auth-cookies\" \"decision\""
+        );
         assert_eq!(sanitize_fts5_query("Rust-first"), "\"Rust-first\"");
-        assert_eq!(sanitize_fts5_query("  spaced   words  "), "\"spaced\" \"words\"");
+        assert_eq!(
+            sanitize_fts5_query("  spaced   words  "),
+            "\"spaced\" \"words\""
+        );
     }
 
     #[test]
     fn sanitize_fts5_query_strips_embedded_quotes() {
-        assert_eq!(sanitize_fts5_query("she said \"hi\""), "\"she\" \"said\" \"hi\"");
+        assert_eq!(
+            sanitize_fts5_query("she said \"hi\""),
+            "\"she\" \"said\" \"hi\""
+        );
     }
 
     #[test]
@@ -738,7 +757,8 @@ mod tests {
             INSERT INTO fts_notes(doc_id, scope, content)
                 VALUES('d1', 'user', 'we adopted Rust-first for new non-UI logic');
             "#,
-        ).unwrap();
+        )
+        .unwrap();
         // Without the sanitizer, this would crash with "no such column: first".
         let hits = lexical_candidates(&conn, "Rust-first", "all", None, 10).unwrap();
         assert_eq!(hits.len(), 1);
@@ -781,7 +801,10 @@ mod tests {
 
         // 30-day half-life: a 30-day-old doc should be ~0.5
         let half_life = freshness_score(Some("2026-03-28T12:00:00Z"), None, None, now);
-        assert!((half_life - 0.5).abs() < 0.05, "expected ~0.5 at 30d, got {half_life}");
+        assert!(
+            (half_life - 0.5).abs() < 0.05,
+            "expected ~0.5 at 30d, got {half_life}"
+        );
     }
 
     #[test]
@@ -798,7 +821,10 @@ mod tests {
             .with_timezone(&Utc);
         // SQLite's `datetime('now')` produces "YYYY-MM-DD HH:MM:SS" without timezone.
         let s = freshness_score(Some("2026-04-27 11:30:00"), None, None, now);
-        assert!(s > 0.95, "very fresh sqlite-native timestamp should score high, got {s}");
+        assert!(
+            s > 0.95,
+            "very fresh sqlite-native timestamp should score high, got {s}"
+        );
     }
 
     #[test]
@@ -998,6 +1024,9 @@ mod tests {
         let row_count: i64 = conn
             .query_row("SELECT count(*) FROM retrieval_log", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(row_count, 0, "ctx-less call must not write a retrieval_log row");
+        assert_eq!(
+            row_count, 0,
+            "ctx-less call must not write a retrieval_log row"
+        );
     }
 }

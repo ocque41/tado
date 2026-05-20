@@ -177,7 +177,8 @@ pub struct CoreService {
     // when `code.index_project` enqueues a job; read by
     // `code.index_status`. The map outlives individual jobs so the UI
     // can fetch the final result snapshot after `running == false`.
-    code_progress: Arc<Mutex<std::collections::HashMap<String, Arc<crate::code::indexer::IndexProgress>>>>,
+    code_progress:
+        Arc<Mutex<std::collections::HashMap<String, Arc<crate::code::indexer::IndexProgress>>>>,
     // Phase 4: per-project file watchers. Started via
     // `code.watch.start`, dropped via `code.watch.stop` (or service
     // shutdown). Each watcher reuses the same `code_progress` entry
@@ -1617,9 +1618,7 @@ impl CoreService {
             "SELECT embedding_model_version, COUNT(*) FROM note_chunks \
              GROUP BY embedding_model_version",
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        })?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         let mut model_counts = serde_json::Map::new();
         let mut total: i64 = 0;
         for row in rows {
@@ -1680,11 +1679,7 @@ impl CoreService {
         }))
     }
 
-    pub fn code_unregister_project(
-        &self,
-        project_id: &str,
-        purge: bool,
-    ) -> Result<Value, BtError> {
+    pub fn code_unregister_project(&self, project_id: &str, purge: bool) -> Result<Value, BtError> {
         let _ = self.require_vault()?;
         // Stop the watcher first — otherwise it would keep re-creating
         // chunk rows the unregister is trying to delete.
@@ -1705,8 +1700,7 @@ impl CoreService {
     pub fn code_resume_watchers(&self) -> Result<Value, BtError> {
         let _ = self.require_vault()?;
         let conn = self.open_conn()?;
-        let mut stmt = conn
-            .prepare("SELECT project_id FROM code_projects WHERE enabled = 1")?;
+        let mut stmt = conn.prepare("SELECT project_id FROM code_projects WHERE enabled = 1")?;
         let project_ids: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))?
             .filter_map(|r| r.ok())
@@ -1745,9 +1739,8 @@ impl CoreService {
 
         // Read project metadata.
         let conn = self.open_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT name, root_path, enabled FROM code_projects WHERE project_id = ?1",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT name, root_path, enabled FROM code_projects WHERE project_id = ?1")?;
         let mut rows = stmt.query(rusqlite::params![project_id])?;
         let row = rows
             .next()?
@@ -1836,9 +1829,8 @@ impl CoreService {
 
         // Pull root_path + enabled from the registered project.
         let conn = self.open_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT root_path, enabled FROM code_projects WHERE project_id = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT root_path, enabled FROM code_projects WHERE project_id = ?1")?;
         let mut rows = stmt.query(rusqlite::params![project_id])?;
         let row = rows
             .next()?
@@ -1872,8 +1864,10 @@ impl CoreService {
             std::path::PathBuf::from(&root_path),
             progress,
             factory,
-            || Box::new(crate::notes::Qwen3EmbeddingProvider::default())
-                as Box<dyn crate::notes::Embedder + Send + Sync>,
+            || {
+                Box::new(crate::notes::Qwen3EmbeddingProvider::default())
+                    as Box<dyn crate::notes::Embedder + Send + Sync>
+            },
         )?;
         self.code_watchers.install(watcher);
         Ok(json!({
@@ -1921,7 +1915,9 @@ impl CoreService {
             Some(snap) => {
                 Ok(serde_json::to_value(snap).map_err(|e| BtError::Validation(e.to_string()))?)
             }
-            None => Ok(json!({ "project_id": project_id, "running": false, "files_done": 0, "files_total": 0, "chunks_done": 0 })),
+            None => Ok(
+                json!({ "project_id": project_id, "running": false, "files_done": 0, "files_total": 0, "chunks_done": 0 }),
+            ),
         }
     }
 
@@ -2284,7 +2280,8 @@ impl CoreService {
                 "DELETE FROM fts_notes WHERE doc_id = ?1",
                 rusqlite::params![doc_id],
             );
-            let removed = tx.execute("DELETE FROM docs WHERE id = ?1", rusqlite::params![doc_id])?;
+            let removed =
+                tx.execute("DELETE FROM docs WHERE id = ?1", rusqlite::params![doc_id])?;
             if removed > 0 {
                 purged += 1;
             }
@@ -2582,7 +2579,11 @@ impl CoreService {
         }))
     }
 
-    pub fn import_execute(&self, actor: &Actor, items: &[ImportPreviewItem]) -> Result<Value, BtError> {
+    pub fn import_execute(
+        &self,
+        actor: &Actor,
+        items: &[ImportPreviewItem],
+    ) -> Result<Value, BtError> {
         self.apply_write(actor, WriteOperation::CreateDocument)?;
         let vault_root = self.require_vault()?;
 
@@ -2871,23 +2872,20 @@ impl CoreService {
                     self.doc_list(topic, include_meta)
                 }
             }
-            "doc.list_scoped" => {
-                self.doc_list_scoped(
-                    optional_str(&params, "topic"),
-                    params
-                        .get("includeMeta")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    optional_str(&params, "knowledge_scope")
-                        .or_else(|| optional_str(&params, "knowledgeScope")),
-                    optional_str(&params, "project_id")
-                        .or_else(|| optional_str(&params, "projectId")),
-                    params
-                        .get("include_global")
-                        .or_else(|| params.get("includeGlobal"))
-                        .and_then(Value::as_bool),
-                )
-            }
+            "doc.list_scoped" => self.doc_list_scoped(
+                optional_str(&params, "topic"),
+                params
+                    .get("includeMeta")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                optional_str(&params, "knowledge_scope")
+                    .or_else(|| optional_str(&params, "knowledgeScope")),
+                optional_str(&params, "project_id").or_else(|| optional_str(&params, "projectId")),
+                params
+                    .get("include_global")
+                    .or_else(|| params.get("includeGlobal"))
+                    .and_then(Value::as_bool),
+            ),
             "knowledge.register" => {
                 let actor = parse_actor(&params)?;
                 self.knowledge_register(
@@ -2906,7 +2904,8 @@ impl CoreService {
                     optional_str(&params, "knowledge_kind")
                         .or_else(|| optional_str(&params, "knowledgeKind"))
                         .or_else(|| optional_str(&params, "kind")),
-                    optional_str(&params, "note_scope").or_else(|| optional_str(&params, "noteScope")),
+                    optional_str(&params, "note_scope")
+                        .or_else(|| optional_str(&params, "noteScope")),
                 )
             }
             "doc.get" => {
@@ -3028,8 +3027,7 @@ impl CoreService {
                         .or_else(|| params.get("includeGlobal"))
                         .and_then(Value::as_bool),
                     optional_str(&params, "tool"),
-                    optional_str(&params, "pack_id")
-                        .or_else(|| optional_str(&params, "packId")),
+                    optional_str(&params, "pack_id").or_else(|| optional_str(&params, "packId")),
                 )
             }
 
@@ -3664,42 +3662,34 @@ impl CoreService {
                     .map(|value| value as usize),
                 optional_str(&params, "knowledge_scope")
                     .or_else(|| optional_str(&params, "knowledgeScope")),
-                optional_str(&params, "project_id")
-                    .or_else(|| optional_str(&params, "projectId")),
+                optional_str(&params, "project_id").or_else(|| optional_str(&params, "projectId")),
                 params
                     .get("include_global")
                     .or_else(|| params.get("includeGlobal"))
                     .and_then(Value::as_bool),
             ),
             "graph.node_get" => self.graph_node_get(required_str(&params, "nodeId")?),
-            "agent.status" => self
-                .agent_status(
-                    params.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize,
-                    optional_str(&params, "knowledge_scope")
-                        .or_else(|| optional_str(&params, "knowledgeScope")),
-                    optional_str(&params, "project_id")
-                        .or_else(|| optional_str(&params, "projectId")),
-                    params
-                        .get("include_global")
-                        .or_else(|| params.get("includeGlobal"))
-                        .and_then(Value::as_bool),
-                ),
+            "agent.status" => self.agent_status(
+                params.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize,
+                optional_str(&params, "knowledge_scope")
+                    .or_else(|| optional_str(&params, "knowledgeScope")),
+                optional_str(&params, "project_id").or_else(|| optional_str(&params, "projectId")),
+                params
+                    .get("include_global")
+                    .or_else(|| params.get("includeGlobal"))
+                    .and_then(Value::as_bool),
+            ),
             "agent.context_event.record" => {
                 let actor = parse_actor(&params)?;
                 self.agent_context_event_record(&actor, &params)
             }
             "node.supersede" => {
                 let actor = parse_actor(&params)?;
-                let old_id = required_str(&params, "old_id")
-                    .or_else(|_| required_str(&params, "oldId"))?;
-                let new_id = required_str(&params, "new_id")
-                    .or_else(|_| required_str(&params, "newId"))?;
-                self.note_supersede(
-                    &actor,
-                    old_id,
-                    new_id,
-                    optional_str(&params, "reason"),
-                )
+                let old_id =
+                    required_str(&params, "old_id").or_else(|_| required_str(&params, "oldId"))?;
+                let new_id =
+                    required_str(&params, "new_id").or_else(|_| required_str(&params, "newId"))?;
+                self.note_supersede(&actor, old_id, new_id, optional_str(&params, "reason"))
             }
             "node.verify" => {
                 let actor = parse_actor(&params)?;
@@ -3710,8 +3700,7 @@ impl CoreService {
                     &actor,
                     node_id,
                     verdict,
-                    optional_str(&params, "agent_id")
-                        .or_else(|| optional_str(&params, "agentId")),
+                    optional_str(&params, "agent_id").or_else(|| optional_str(&params, "agentId")),
                     optional_str(&params, "reason"),
                 )
             }
@@ -3751,11 +3740,16 @@ impl CoreService {
                     })
                     .unwrap_or_default();
                 let rendered = self.spawn_pack_get_or_build(
-                    optional_str(&params, "agent_name").or_else(|| optional_str(&params, "agentName")),
-                    optional_str(&params, "project_name").or_else(|| optional_str(&params, "projectName")),
-                    optional_str(&params, "project_id").or_else(|| optional_str(&params, "projectId")),
-                    optional_str(&params, "project_root").or_else(|| optional_str(&params, "projectRoot")),
-                    optional_str(&params, "team_name").or_else(|| optional_str(&params, "teamName")),
+                    optional_str(&params, "agent_name")
+                        .or_else(|| optional_str(&params, "agentName")),
+                    optional_str(&params, "project_name")
+                        .or_else(|| optional_str(&params, "projectName")),
+                    optional_str(&params, "project_id")
+                        .or_else(|| optional_str(&params, "projectId")),
+                    optional_str(&params, "project_root")
+                        .or_else(|| optional_str(&params, "projectRoot")),
+                    optional_str(&params, "team_name")
+                        .or_else(|| optional_str(&params, "teamName")),
                     teammates,
                 )?;
                 Ok(json!({ "preamble": rendered }))
@@ -3819,10 +3813,7 @@ impl CoreService {
             }
             "code.project.unregister" => {
                 let project_id = required_str(&params, "project_id")?;
-                let purge = params
-                    .get("purge")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                let purge = params.get("purge").and_then(Value::as_bool).unwrap_or(true);
                 self.code_unregister_project(project_id, purge)
             }
             "code.list_projects" => self.code_list_projects(),
@@ -3875,7 +3866,10 @@ impl CoreService {
                     .and_then(|v| v.as_u64())
                     .map(|n| n as usize)
                     .unwrap_or(25);
-                let alpha = params.get("alpha").and_then(|v| v.as_f64()).map(|f| f as f32);
+                let alpha = params
+                    .get("alpha")
+                    .and_then(|v| v.as_f64())
+                    .map(|f| f as f32);
                 self.code_search(text, project_ids, languages, limit, alpha)
             }
 
@@ -5010,8 +5004,8 @@ impl CoreService {
 
         match crate::notes::hybrid_search(&conn, &query, &provider) {
             Ok(rows) if !rows.is_empty() => {
-                let mut results = serde_json::to_value(rows)
-                    .map_err(|e| BtError::Validation(e.to_string()))?;
+                let mut results =
+                    serde_json::to_value(rows).map_err(|e| BtError::Validation(e.to_string()))?;
                 self.filter_search_results_value(&conn, &mut results, &filter, limit)?;
                 Ok(json!({
                     "results": results,
@@ -5026,8 +5020,8 @@ impl CoreService {
             }
             Ok(_) | Err(_) => {
                 let rows = db::search(&conn, q, scope, topic, limit.saturating_mul(3).max(limit))?;
-                let mut results = serde_json::to_value(rows)
-                    .map_err(|e| BtError::Validation(e.to_string()))?;
+                let mut results =
+                    serde_json::to_value(rows).map_err(|e| BtError::Validation(e.to_string()))?;
                 self.filter_search_results_value(&conn, &mut results, &filter, limit)?;
                 Ok(json!({
                     "results": results,
@@ -13530,18 +13524,15 @@ Behavioral Policy\n\
         reason: Option<&str>,
     ) -> Result<Value, BtError> {
         if old_id == new_id {
-            return Err(BtError::Validation(
-                "old_id and new_id must differ".into(),
-            ));
+            return Err(BtError::Validation("old_id and new_id must differ".into()));
         }
         let conn = self.open_conn()?;
         // Both nodes must exist and not be archived.
-        let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM graph_nodes WHERE node_id IN (?1, ?2) AND archived_at IS NULL",
-                rusqlite::params![old_id, new_id],
-                |r| r.get(0),
-            )?;
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM graph_nodes WHERE node_id IN (?1, ?2) AND archived_at IS NULL",
+            rusqlite::params![old_id, new_id],
+            |r| r.get(0),
+        )?;
         if exists != 2 {
             return Err(BtError::NotFound(format!(
                 "supersede: both nodes must exist + be live (got {})",
@@ -13672,7 +13663,11 @@ Behavioral Policy\n\
                     payload_json = excluded.payload_json"#,
             rusqlite::params![
                 edge_id,
-                if verdict == "confirmed" { "confirms" } else { "disputes" },
+                if verdict == "confirmed" {
+                    "confirms"
+                } else {
+                    "disputes"
+                },
                 actor_id,
                 node_id,
                 serde_json::json!({ "reason": reason, "verdict": verdict }).to_string(),
@@ -13859,9 +13854,7 @@ Behavioral Policy\n\
             (None, Some(t)) => stmt
                 .query_map(params![t], mapper)?
                 .collect::<Result<Vec<_>, _>>()?,
-            (None, None) => stmt
-                .query_map([], mapper)?
-                .collect::<Result<Vec<_>, _>>()?,
+            (None, None) => stmt.query_map([], mapper)?.collect::<Result<Vec<_>, _>>()?,
         };
 
         // Aggregate: consumption rate + mean latency over the returned
@@ -13869,7 +13862,11 @@ Behavioral Policy\n\
         let n = rows.len() as f64;
         let consumed = rows
             .iter()
-            .filter(|r| r.get("was_consumed").and_then(Value::as_bool).unwrap_or(false))
+            .filter(|r| {
+                r.get("was_consumed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
             .count() as f64;
         let mean_latency = if n > 0.0 {
             rows.iter()
@@ -17451,9 +17448,7 @@ fn graph_node_within_time_window(
     true
 }
 
-fn graph_doc_scope_map(
-    nodes: &[GraphNodeRecord],
-) -> HashMap<String, (String, Option<String>)> {
+fn graph_doc_scope_map(nodes: &[GraphNodeRecord]) -> HashMap<String, (String, Option<String>)> {
     nodes
         .iter()
         .filter(|node| node.kind == "doc")
@@ -17927,7 +17922,11 @@ mod scoped_knowledge_tests {
             .get("model_counts")
             .and_then(Value::as_object)
             .expect("model_counts present");
-        assert!(counts.is_empty(), "expected no model rows, got {:?}", counts);
+        assert!(
+            counts.is_empty(),
+            "expected no model rows, got {:?}",
+            counts
+        );
 
         let _ = fs::remove_dir_all(&vault);
     }
@@ -17985,14 +17984,7 @@ mod scoped_knowledge_tests {
         let actor = ui_actor();
 
         let result = service
-            .vault_ingest_path(
-                &actor,
-                &source,
-                Some("codebase"),
-                "global",
-                None,
-                None,
-            )
+            .vault_ingest_path(&actor, &source, Some("codebase"), "global", None, None)
             .unwrap();
         assert_eq!(result.get("created").and_then(Value::as_i64), Some(2));
         assert_eq!(result.get("capped").and_then(Value::as_bool), Some(false));
@@ -18066,7 +18058,10 @@ mod scoped_knowledge_tests {
             )
             .unwrap();
         assert_eq!(scope, "global");
-        assert!(pid.is_none(), "global scope must persist project_id as NULL");
+        assert!(
+            pid.is_none(),
+            "global scope must persist project_id as NULL"
+        );
 
         let _ = fs::remove_dir_all(&vault);
         let _ = fs::remove_dir_all(&source);
@@ -18315,7 +18310,9 @@ fn parse_actor_aliases(actor: &Value) -> Result<Actor, BtError> {
         .get("kind")
         .or_else(|| actor.get("type"))
         .and_then(Value::as_str)
-        .ok_or_else(|| BtError::Validation("invalid actor payload: missing actor kind".to_string()))?;
+        .ok_or_else(|| {
+            BtError::Validation("invalid actor payload: missing actor kind".to_string())
+        })?;
 
     match kind {
         "user_ui" => {

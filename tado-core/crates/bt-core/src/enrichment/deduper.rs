@@ -108,7 +108,10 @@ fn chain_supersede_group(
             params![older, newest],
         )?;
         // Emit a supersedes edge for the graph view.
-        let edge_id = format!("edge_{}", short_hash(&format!("supersede:{older}->{newest}")));
+        let edge_id = format!(
+            "edge_{}",
+            short_hash(&format!("supersede:{older}->{newest}"))
+        );
         conn.execute(
             r#"INSERT INTO graph_edges(edge_id, kind, source_id, target_id,
                 search_text, sort_time, payload_json,

@@ -95,11 +95,16 @@ pub fn cold_start_lines(target: &SpawnTarget, budget: Duration) -> (f64, Option<
     let _ = child.kill();
     let _ = child.wait();
     if line_count == 0 {
-        return (0.0, Some("cold_start_ops: target produced no stdout in budget".into()));
+        return (
+            0.0,
+            Some("cold_start_ops: target produced no stdout in budget".into()),
+        );
     }
     (
         line_count as f64,
-        Some(format!("cold_start_ops: counted {line_count} lines from target")),
+        Some(format!(
+            "cold_start_ops: counted {line_count} lines from target"
+        )),
     )
 }
 
@@ -108,7 +113,10 @@ pub fn cold_start_lines(target: &SpawnTarget, budget: Duration) -> (f64, Option<
 /// second 1 (CLI tools that complete quickly aren't candidates).
 pub fn rss_ratio(target: &SpawnTarget, budget: Duration) -> (f64, Option<String>) {
     if budget < Duration::from_secs(3) {
-        return (1.0, Some("steady_state_rss_ratio: budget too small (need ≥3s)".into()));
+        return (
+            1.0,
+            Some("steady_state_rss_ratio: budget too small (need ≥3s)".into()),
+        );
     }
 
     let mut cmd = Command::new(&target.program);
@@ -121,7 +129,12 @@ pub fn rss_ratio(target: &SpawnTarget, budget: Duration) -> (f64, Option<String>
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return (1.0, Some(format!("steady_state_rss_ratio: spawn failed ({e})"))),
+        Err(e) => {
+            return (
+                1.0,
+                Some(format!("steady_state_rss_ratio: spawn failed ({e})")),
+            )
+        }
     };
     let pid = child.id();
 
@@ -138,11 +151,18 @@ pub fn rss_ratio(target: &SpawnTarget, budget: Duration) -> (f64, Option<String>
     match (rss1, rss2) {
         (Some(r1), Some(r2)) if r1 > 0.0 => {
             let ratio = r2 / r1;
-            (ratio, Some(format!("steady_state_rss_ratio: rss@1s={r1}KB rss@end={r2}KB ratio={ratio:.3}")))
+            (
+                ratio,
+                Some(format!(
+                    "steady_state_rss_ratio: rss@1s={r1}KB rss@end={r2}KB ratio={ratio:.3}"
+                )),
+            )
         }
         _ => (
             1.0,
-            Some("steady_state_rss_ratio: ps sampling failed (target may have exited early)".into()),
+            Some(
+                "steady_state_rss_ratio: ps sampling failed (target may have exited early)".into(),
+            ),
         ),
     }
 }
@@ -169,7 +189,10 @@ pub fn io_syscalls(target: &SpawnTarget, budget: Duration) -> (f64, Option<Strin
     #[cfg(target_os = "macos")]
     {
         if std::env::var("TADO_PERF_DTRACE").as_deref() != Ok("1") {
-            return (0.0, Some("io_syscalls_per_op: dtrace mode opt-in (set TADO_PERF_DTRACE=1)".into()));
+            return (
+                0.0,
+                Some("io_syscalls_per_op: dtrace mode opt-in (set TADO_PERF_DTRACE=1)".into()),
+            );
         }
         return io_syscalls_dtrace(target, budget);
     }
@@ -192,7 +215,10 @@ fn io_syscalls_dtrace(target: &SpawnTarget, budget: Duration) -> (f64, Option<St
     // Write a tiny D script that prints one line per syscall.
     let script_path = std::env::temp_dir().join(format!(
         "perf-suite-dtrace-{}.d",
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     let script = "syscall:::entry /pid == $target/ { @c = count(); }\n\
                   END { printa(\"PERF_SYSCALL_COUNT=%@d\\n\", @c); }\n";
@@ -213,7 +239,13 @@ fn io_syscalls_dtrace(target: &SpawnTarget, budget: Duration) -> (f64, Option<St
     let output = run_with_budget(cmd, Some(budget));
     let _ = std::fs::remove_file(&script_path);
     let Ok(out) = output else {
-        return (0.0, Some("io_syscalls_per_op: dtrace invocation failed (sudo prompt? not authorized?)".into()));
+        return (
+            0.0,
+            Some(
+                "io_syscalls_per_op: dtrace invocation failed (sudo prompt? not authorized?)"
+                    .into(),
+            ),
+        );
     };
     let combined = format!(
         "{}{}",
@@ -223,19 +255,30 @@ fn io_syscalls_dtrace(target: &SpawnTarget, budget: Duration) -> (f64, Option<St
     let re = Regex::new(r"PERF_SYSCALL_COUNT=(\d+)").unwrap();
     if let Some(cap) = re.captures(&combined) {
         if let Ok(n) = cap.get(1).unwrap().as_str().parse::<f64>() {
-            return (n, Some(format!("io_syscalls_per_op: dtrace counted {n} syscalls")));
+            return (
+                n,
+                Some(format!("io_syscalls_per_op: dtrace counted {n} syscalls")),
+            );
         }
     }
-    (0.0, Some("io_syscalls_per_op: dtrace produced no count".into()))
+    (
+        0.0,
+        Some("io_syscalls_per_op: dtrace produced no count".into()),
+    )
 }
 
 #[cfg(target_os = "linux")]
 fn io_syscalls_strace(target: &SpawnTarget, budget: Duration) -> (f64, Option<String>) {
     let mut cmd = Command::new("strace");
-    cmd.args(["-c", "-f", "-e", "trace=read,write,open,openat,close,lseek,mmap"])
-        .arg(&target.program)
-        .args(&target.args)
-        .current_dir(&target.working_dir);
+    cmd.args([
+        "-c",
+        "-f",
+        "-e",
+        "trace=read,write,open,openat,close,lseek,mmap",
+    ])
+    .arg(&target.program)
+    .args(&target.args)
+    .current_dir(&target.working_dir);
     let output = run_with_budget(cmd, Some(budget));
     let Ok(out) = output else {
         return (0.0, Some("io_syscalls_per_op: strace timed out".into()));
@@ -250,13 +293,21 @@ fn io_syscalls_strace(target: &SpawnTarget, budget: Duration) -> (f64, Option<St
             }
         }
     }
-    (total as f64, Some(format!("io_syscalls_per_op: strace counted {total} syscalls")))
+    (
+        total as f64,
+        Some(format!(
+            "io_syscalls_per_op: strace counted {total} syscalls"
+        )),
+    )
 }
 
 /// Run a command with an optional time budget. Returns the output on
 /// success, an error string on timeout / spawn failure. Used by
 /// every adapter for bench commands.
-pub fn run_with_budget(mut cmd: Command, budget: Option<Duration>) -> Result<std::process::Output, String> {
+pub fn run_with_budget(
+    mut cmd: Command,
+    budget: Option<Duration>,
+) -> Result<std::process::Output, String> {
     let cap = budget.unwrap_or(Duration::from_secs(120));
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
@@ -336,7 +387,10 @@ mod tests {
     fn cold_start_counts_lines() {
         let target = SpawnTarget {
             program: PathBuf::from("sh"),
-            args: vec!["-c".into(), "for i in 1 2 3; do echo line$i; done; sleep 5".into()],
+            args: vec![
+                "-c".into(),
+                "for i in 1 2 3; do echo line$i; done; sleep 5".into(),
+            ],
             working_dir: std::env::temp_dir(),
             env: vec![],
         };
@@ -348,7 +402,10 @@ mod tests {
     fn cold_start_stops_at_ready_sentinel() {
         let target = SpawnTarget {
             program: PathBuf::from("sh"),
-            args: vec!["-c".into(), "echo init; echo loading; echo ready; sleep 5".into()],
+            args: vec![
+                "-c".into(),
+                "echo init; echo loading; echo ready; sleep 5".into(),
+            ],
             working_dir: std::env::temp_dir(),
             env: vec![],
         };

@@ -73,7 +73,10 @@ mod tests {
     fn just_now_under_60s() {
         let n = now();
         assert_eq!(format_relative_ago(n - Duration::seconds(5), n), "just now");
-        assert_eq!(format_relative_ago(n - Duration::seconds(59), n), "just now");
+        assert_eq!(
+            format_relative_ago(n - Duration::seconds(59), n),
+            "just now"
+        );
     }
 
     #[test]
@@ -97,6 +100,9 @@ mod tests {
     fn future_timestamps_render_with_in_prefix() {
         let n = now();
         assert_eq!(format_relative_ago(n + Duration::minutes(15), n), "in 15m");
-        assert_eq!(format_relative_ago(n + Duration::seconds(5), n), "in a moment");
+        assert_eq!(
+            format_relative_ago(n + Duration::seconds(5), n),
+            "in a moment"
+        );
     }
 }

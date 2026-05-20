@@ -107,7 +107,10 @@ pub struct SprintReport {
 
 #[derive(Debug)]
 pub enum ReportError {
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     Json(serde_json::Error),
     /// `sprint-data.json` was missing or empty. The gate treats this
     /// as `SCORE: NO-DATA-DETECTED` — a free pass on the very first

@@ -12,7 +12,7 @@
 //! signal. Recoverable errors (`BtError`) get stashed in
 //! `pending_enrichment.last_error` and the worker continues.
 
-use crate::enrichment::{self, claim_batch, deduper, decayer, extractor, linker};
+use crate::enrichment::{self, claim_batch, decayer, deduper, extractor, linker};
 use crate::enrichment::{EnrichmentJob, EnrichmentKind};
 use crate::error::BtError;
 use crate::service::CoreService;
@@ -128,11 +128,7 @@ fn run_decayer_sweep(service: &CoreService) -> Result<(), BtError> {
     Ok(())
 }
 
-fn drain_once(
-    service: &CoreService,
-    kind: EnrichmentKind,
-    batch: usize,
-) -> Result<usize, BtError> {
+fn drain_once(service: &CoreService, kind: EnrichmentKind, batch: usize) -> Result<usize, BtError> {
     let conn = service.open_conn()?;
     let jobs = claim_batch(&conn, kind, batch)?;
     let n = jobs.len();

@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::thread;
 
+pub type OutputTap = Arc<dyn Fn(&[u8]) + Send + Sync + 'static>;
+
 pub struct Session {
     pub cols: u16,
     pub rows: u16,
@@ -59,6 +61,18 @@ impl Session {
         env: &[(String, String)],
         cols: u16,
         rows: u16,
+    ) -> std::io::Result<Arc<Self>> {
+        Self::spawn_with_output_tap(cmd, args, cwd, env, cols, rows, None)
+    }
+
+    pub fn spawn_with_output_tap(
+        cmd: &str,
+        args: &[String],
+        cwd: Option<&str>,
+        env: &[(String, String)],
+        cols: u16,
+        rows: u16,
+        output_tap: Option<OutputTap>,
     ) -> std::io::Result<Arc<Self>> {
         let PtyHandles {
             reader,
@@ -98,21 +112,23 @@ impl Session {
             bell_count,
             reader,
             running.clone(),
+            output_tap,
             {
-            let child = session.child.clone();
-            let exit_code = exit_code.clone();
-            let running = running.clone();
-            move || {
-                // Reader EOF → check child exit status once.
-                let mut guard = child.lock();
-                if let Some(c) = guard.as_mut() {
-                    if let Ok(status) = c.wait() {
-                        exit_code.store(status.exit_code() as i32, Ordering::SeqCst);
+                let child = session.child.clone();
+                let exit_code = exit_code.clone();
+                let running = running.clone();
+                move || {
+                    // Reader EOF → check child exit status once.
+                    let mut guard = child.lock();
+                    if let Some(c) = guard.as_mut() {
+                        if let Ok(status) = c.wait() {
+                            exit_code.store(status.exit_code() as i32, Ordering::SeqCst);
+                        }
                     }
+                    running.store(false, Ordering::SeqCst);
                 }
-                running.store(false, Ordering::SeqCst);
-            }
-        });
+            },
+        );
 
         Ok(session)
     }
@@ -123,6 +139,7 @@ impl Session {
         bell_count: Arc<std::sync::atomic::AtomicU32>,
         mut reader: Box<dyn Read + Send>,
         running: Arc<AtomicBool>,
+        output_tap: Option<OutputTap>,
         on_eof: impl FnOnce() + Send + 'static,
     ) {
         thread::spawn(move || {
@@ -138,6 +155,9 @@ impl Session {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        if let Some(tap) = output_tap.as_ref() {
+                            tap(&buf[..n]);
+                        }
                         scratch.clear();
                         let mut g = grid.lock();
                         let mut perf = GridPerformer::new(&mut g, &mut scratch);
@@ -158,10 +178,8 @@ impl Session {
                                 }
                             }
                             if pending_bells > 0 {
-                                bell_count.fetch_add(
-                                    pending_bells,
-                                    std::sync::atomic::Ordering::SeqCst,
-                                );
+                                bell_count
+                                    .fetch_add(pending_bells, std::sync::atomic::Ordering::SeqCst);
                             }
                             if let Some(t) = pending_title {
                                 *latest_title.lock() = Some(t);
@@ -193,8 +211,7 @@ impl Session {
     /// reader-thread updates during the drain are preserved (only the
     /// value seen at swap time is returned).
     pub fn take_bell_count(&self) -> u32 {
-        self.bell_count
-            .swap(0, std::sync::atomic::Ordering::SeqCst)
+        self.bell_count.swap(0, std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn bracketed_paste(&self) -> bool {

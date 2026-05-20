@@ -36,10 +36,7 @@ pub fn fit_loglog_slope(pairs: &[(f64, f64)]) -> Option<f64> {
     let n = valid.len() as f64;
     let mean_x = valid.iter().map(|(x, _)| x).sum::<f64>() / n;
     let mean_y = valid.iter().map(|(_, y)| y).sum::<f64>() / n;
-    let num: f64 = valid
-        .iter()
-        .map(|(x, y)| (x - mean_x) * (y - mean_y))
-        .sum();
+    let num: f64 = valid.iter().map(|(x, y)| (x - mean_x) * (y - mean_y)).sum();
     let den: f64 = valid.iter().map(|(x, _)| (x - mean_x).powi(2)).sum();
     if den.abs() < f64::EPSILON {
         return None;

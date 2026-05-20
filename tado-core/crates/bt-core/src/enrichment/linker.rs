@@ -170,7 +170,11 @@ mod tests {
         assert_eq!(report.edges_redirected, 1);
 
         let new_target: String = conn
-            .query_row("SELECT target_id FROM graph_edges WHERE edge_id = 'e1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT target_id FROM graph_edges WHERE edge_id = 'e1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(new_target, "doc-real");
 

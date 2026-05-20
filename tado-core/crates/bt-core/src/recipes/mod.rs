@@ -182,23 +182,26 @@ pub fn load_recipes(
         bound.push(k.to_string());
     }
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(bound.iter().map(|s| s.as_str())), |row| {
-        let policy_json: String = row.get(7)?;
-        let policy: RetrievalPolicy = serde_json::from_str(&policy_json).unwrap_or_default();
-        Ok(RetrievalRecipe {
-            recipe_id: row.get(0)?,
-            intent_key: row.get(1)?,
-            scope: row.get(2)?,
-            project_id: row.get(3)?,
-            title: row.get(4)?,
-            description: row.get(5)?,
-            template_path: row.get(6)?,
-            policy,
-            enabled: row.get::<_, i64>(8)? != 0,
-            last_verified_at: row.get(9)?,
-            template_body: None,
-        })
-    })?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(bound.iter().map(|s| s.as_str())),
+        |row| {
+            let policy_json: String = row.get(7)?;
+            let policy: RetrievalPolicy = serde_json::from_str(&policy_json).unwrap_or_default();
+            Ok(RetrievalRecipe {
+                recipe_id: row.get(0)?,
+                intent_key: row.get(1)?,
+                scope: row.get(2)?,
+                project_id: row.get(3)?,
+                title: row.get(4)?,
+                description: row.get(5)?,
+                template_path: row.get(6)?,
+                policy,
+                enabled: row.get::<_, i64>(8)? != 0,
+                last_verified_at: row.get(9)?,
+                template_body: None,
+            })
+        },
+    )?;
     let all: Vec<RetrievalRecipe> = rows.collect::<Result<_, _>>()?;
     // Resolution: prefer project-scoped match; fall back to global.
     // Two passes so DB iteration order doesn't change the outcome.
@@ -231,7 +234,13 @@ pub fn load_recipes(
 /// Default recipe definitions baked into the app. Used by Phase 5's
 /// bootstrap action to seed every fresh project. Returns a tuple of
 /// `(intent_key, title, description, policy, template_body)`.
-pub fn default_recipes() -> Vec<(&'static str, &'static str, &'static str, RetrievalPolicy, &'static str)> {
+pub fn default_recipes() -> Vec<(
+    &'static str,
+    &'static str,
+    &'static str,
+    RetrievalPolicy,
+    &'static str,
+)> {
     vec![
         (
             "architecture-review",
@@ -308,7 +317,8 @@ mod tests {
             template_body: None,
         };
         upsert_recipe(&conn, &recipe).unwrap();
-        let loaded = load_recipes(&conn, Some("architecture-review"), Some("global"), None).unwrap();
+        let loaded =
+            load_recipes(&conn, Some("architecture-review"), Some("global"), None).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].title, "Architecture review");
     }

@@ -141,7 +141,8 @@ fn vector_lane<E: Embedder + ?Sized>(
     }
 
     let mut stmt = conn.prepare(&sql)?;
-    let bound: Vec<&dyn rusqlite::ToSql> = vparams.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let bound: Vec<&dyn rusqlite::ToSql> =
+        vparams.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
     let rows = stmt.query_map(&bound[..], |row| {
         let project_id: String = row.get(0)?;
         let repo_path: String = row.get(1)?;
@@ -171,7 +172,19 @@ fn vector_lane<E: Embedder + ?Sized>(
 
     let mut scored: Vec<(f32, RawHit)> = Vec::new();
     for row in rows {
-        let (project_id, repo_path, chunk_index, language, node_kind, qualified_name, start_line, end_line, text, blob, quant) = match row {
+        let (
+            project_id,
+            repo_path,
+            chunk_index,
+            language,
+            node_kind,
+            qualified_name,
+            start_line,
+            end_line,
+            text,
+            blob,
+            quant,
+        ) = match row {
             Ok(t) => t,
             Err(_) => continue,
         };
@@ -217,7 +230,8 @@ fn lexical_lane(
          JOIN code_chunks c ON c.project_id = f.project_id AND c.repo_path = f.repo_path \
          WHERE fts_code MATCH ?1",
     );
-    let mut vparams: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::from(escape_fts(text))];
+    let mut vparams: Vec<rusqlite::types::Value> =
+        vec![rusqlite::types::Value::from(escape_fts(text))];
     if let Some(pids) = query.project_ids {
         if !pids.is_empty() {
             sql.push_str(" AND c.project_id IN (");
@@ -247,7 +261,8 @@ fn lexical_lane(
     sql.push_str(&format!(" ORDER BY score ASC LIMIT {cap}"));
 
     let mut stmt = conn.prepare(&sql)?;
-    let bound: Vec<&dyn rusqlite::ToSql> = vparams.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let bound: Vec<&dyn rusqlite::ToSql> =
+        vparams.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
     let rows = stmt.query_map(&bound[..], |row| {
         let project_id: String = row.get(0)?;
         let repo_path: String = row.get(1)?;
@@ -285,7 +300,19 @@ fn lexical_lane(
     let span = (max_s - min_s).abs().max(1e-9);
 
     let mut hits = Vec::with_capacity(collected.len());
-    for (project_id, repo_path, chunk_index, language, node_kind, qualified_name, start_line, end_line, text, raw) in collected {
+    for (
+        project_id,
+        repo_path,
+        chunk_index,
+        language,
+        node_kind,
+        qualified_name,
+        start_line,
+        end_line,
+        text,
+        raw,
+    ) in collected
+    {
         let normalized = ((max_s - raw) / span) as f32; // best score -> 1.0
         hits.push(RawHit {
             project_id,
@@ -327,10 +354,7 @@ fn merge(
         entry.lexical_score = h.lexical_score;
     }
 
-    let mut merged: Vec<CodeSearchHit> = by_key
-        .into_values()
-        .map(|m| m.into_hit(alpha))
-        .collect();
+    let mut merged: Vec<CodeSearchHit> = by_key.into_values().map(|m| m.into_hit(alpha)).collect();
     merged.sort_by(|a, b| {
         b.combined_score
             .partial_cmp(&a.combined_score)

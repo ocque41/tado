@@ -43,10 +43,8 @@ fn indexes_real_tado_codebase_with_real_qwen3() {
 
     // Use a file-backed temp DB so the indexer can re-open
     // connections from inside its closure.
-    let db_path = std::env::temp_dir().join(format!(
-        "tado-e2e-code-{}.sqlite",
-        uuid::Uuid::new_v4()
-    ));
+    let db_path =
+        std::env::temp_dir().join(format!("tado-e2e-code-{}.sqlite", uuid::Uuid::new_v4()));
     let factory = || -> Result<rusqlite::Connection, BtError> {
         let conn = rusqlite::Connection::open(&db_path)?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -131,7 +129,10 @@ fn indexes_real_tado_codebase_with_real_qwen3() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(qwen_count, chunk_count, "every chunk should be qwen3-stamped");
+    assert_eq!(
+        qwen_count, chunk_count,
+        "every chunk should be qwen3-stamped"
+    );
 
     let by_lang: Vec<(String, i64)> = {
         let mut stmt = conn
@@ -193,10 +194,8 @@ fn hybrid_search_finds_real_code() {
     let runtime = Qwen3Runtime::load(&model_dir, 1024).expect("load qwen3");
     embeddings::install_runtime(Arc::new(Mutex::new(runtime)));
 
-    let db_path = std::env::temp_dir().join(format!(
-        "tado-e2e-search-{}.sqlite",
-        uuid::Uuid::new_v4()
-    ));
+    let db_path =
+        std::env::temp_dir().join(format!("tado-e2e-search-{}.sqlite", uuid::Uuid::new_v4()));
     let factory = || -> Result<rusqlite::Connection, BtError> {
         let conn = rusqlite::Connection::open(&db_path)?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -258,7 +257,10 @@ fn hybrid_search_finds_real_code() {
     q2.project_ids = Some(&q2_pids);
     q2.limit = 10;
     let hits2 = code_hybrid_search(&conn, &q2, &provider).expect("search 2");
-    eprintln!("query \"where do we spawn the PTY...\" -> {} hits", hits2.len());
+    eprintln!(
+        "query \"where do we spawn the PTY...\" -> {} hits",
+        hits2.len()
+    );
     for h in hits2.iter().take(5) {
         eprintln!(
             "  {}:{} kind={:?} qn={:?} v={:?} l={:?} c={:.4}",

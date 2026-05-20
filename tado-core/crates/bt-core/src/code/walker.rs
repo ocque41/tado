@@ -217,7 +217,9 @@ fn is_binary(path: &Path) -> bool {
     }
     let nontext = slice
         .iter()
-        .filter(|&&b| !(b == b'\t' || b == b'\n' || b == b'\r' || (0x20..0x7f).contains(&b) || b >= 0x80))
+        .filter(|&&b| {
+            !(b == b'\t' || b == b'\n' || b == b'\r' || (0x20..0x7f).contains(&b) || b >= 0x80)
+        })
         .count();
     nontext * 10 > slice.len() * 3
 }

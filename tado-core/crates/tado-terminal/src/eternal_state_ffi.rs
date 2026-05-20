@@ -32,9 +32,7 @@ use std::path::Path;
 /// a directory path the process is allowed to read. Returns null on
 /// any failure (invalid pointer, non-UTF-8 path, JSON encode error).
 #[no_mangle]
-pub unsafe extern "C" fn tado_eternal_state_snapshot(
-    run_dir_cstr: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn tado_eternal_state_snapshot(run_dir_cstr: *const c_char) -> *mut c_char {
     if run_dir_cstr.is_null() {
         return std::ptr::null_mut();
     }

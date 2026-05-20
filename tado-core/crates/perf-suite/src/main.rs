@@ -33,7 +33,9 @@ use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
 use perf_suite::{
     adapters::{detect_adapter, detect_stack, Stack},
-    baseline::{init_from, machine_class, machine_drift, read_baseline, update_with, write_baseline},
+    baseline::{
+        init_from, machine_class, machine_drift, read_baseline, update_with, write_baseline,
+    },
     proposal::{generate_proposals, write_proposals_md},
     report::PerfReport,
     scoring::{score, ScoreVerdict},
@@ -234,9 +236,7 @@ fn run_measure(args: MeasureArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let (samples, notes) = adapter
-        .measure(&ctx)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let (samples, notes) = adapter.measure(&ctx).map_err(|e| anyhow::anyhow!("{e}"))?;
     let report = PerfReport {
         schema_version: 1,
         captured_at: Utc::now(),
@@ -280,7 +280,11 @@ fn run_propose(args: ProposeArgs) -> Result<ExitCode> {
     let since_last_commit = !args.all_files;
     let proposals = generate_proposals(&args.project_root, &report, since_last_commit, args.cap);
     write_proposals_md(&args.output, &proposals)?;
-    println!("Wrote {} proposals to {}", proposals.len(), args.output.display());
+    println!(
+        "Wrote {} proposals to {}",
+        proposals.len(),
+        args.output.display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -312,8 +316,7 @@ fn run_baseline_cmd(cmd: BaselineCmd) -> Result<ExitCode> {
     }
 
     let composite = match score(&report, existing.as_ref())? {
-        ScoreVerdict::Pass { composite }
-        | ScoreVerdict::BaselineInit { composite } => composite,
+        ScoreVerdict::Pass { composite } | ScoreVerdict::BaselineInit { composite } => composite,
         ScoreVerdict::Regression { .. } => {
             eprintln!("perf-suite: refusing to update baseline — score regressed");
             return Ok(ExitCode::from(2));
@@ -330,7 +333,10 @@ fn run_baseline_cmd(cmd: BaselineCmd) -> Result<ExitCode> {
 
 fn run_explain(args: ExplainArgs) -> Result<ExitCode> {
     let report = PerfReport::read_from(&args.report)?;
-    let baseline = args.baseline.as_deref().and_then(|p| read_baseline(p).ok().flatten());
+    let baseline = args
+        .baseline
+        .as_deref()
+        .and_then(|p| read_baseline(p).ok().flatten());
 
     if args.json {
         let mut out = serde_json::Map::new();
@@ -375,10 +381,18 @@ fn run_explain(args: ExplainArgs) -> Result<ExitCode> {
     }
     if let Some(metric) = args.metric.as_deref() {
         if let Some(s) = report.samples.get(metric) {
-            println!("{:24} value={:.4} unit={} adapter={}", metric, s.value, s.unit, s.adapter);
+            println!(
+                "{:24} value={:.4} unit={} adapter={}",
+                metric, s.value, s.unit, s.adapter
+            );
             if let Some(b) = baseline.as_ref() {
-                if let Some(comp) = report.normalized_component(metric, b.components.get(metric).copied()) {
-                    println!("  baseline={:.4}  normalized={:.3}", comp.baseline_value, comp.normalized);
+                if let Some(comp) =
+                    report.normalized_component(metric, b.components.get(metric).copied())
+                {
+                    println!(
+                        "  baseline={:.4}  normalized={:.3}",
+                        comp.baseline_value, comp.normalized
+                    );
                 }
             }
         } else {
@@ -387,7 +401,10 @@ fn run_explain(args: ExplainArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     println!();
-    println!("{:<24} {:>12} {:<16} {:<14} {:>9}", "metric", "value", "unit", "adapter", "norm");
+    println!(
+        "{:<24} {:>12} {:<16} {:<14} {:>9}",
+        "metric", "value", "unit", "adapter", "norm"
+    );
     for (name, weight, _) in perf_suite::metrics::registry() {
         let s = match report.samples.get(name) {
             Some(s) => s,

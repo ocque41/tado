@@ -303,8 +303,7 @@ impl Grid {
         } else {
             // Primary was sized differently — blank to new size rather than
             // show garbled geometry.
-            self.cells =
-                vec![Cell::BLANK; (self.cols as usize) * (self.rows as usize)];
+            self.cells = vec![Cell::BLANK; (self.cols as usize) * (self.rows as usize)];
         }
         self.cursor_x = saved.cursor_x.min(self.cols.saturating_sub(1));
         self.cursor_y = saved.cursor_y.min(self.rows.saturating_sub(1));

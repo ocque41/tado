@@ -281,7 +281,10 @@ fn push_node_chunks(
 /// Map byte offset → 0-based line index. Used when computing the
 /// starting line of gap-window chunks against the original source.
 fn byte_to_line(source: &str, byte: usize) -> usize {
-    source[..byte.min(source.len())].bytes().filter(|b| *b == b'\n').count()
+    source[..byte.min(source.len())]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count()
 }
 
 fn build_line_offsets(source: &str) -> Vec<usize> {

@@ -161,9 +161,18 @@ mod tests {
 
     #[test]
     fn extension_maps_to_language() {
-        assert_eq!(Language::from_path(&PathBuf::from("foo.rs")), Some(Language::Rust));
-        assert_eq!(Language::from_path(&PathBuf::from("Foo.SWIFT")), Some(Language::Swift));
-        assert_eq!(Language::from_path(&PathBuf::from("foo.tsx")), Some(Language::Tsx));
+        assert_eq!(
+            Language::from_path(&PathBuf::from("foo.rs")),
+            Some(Language::Rust)
+        );
+        assert_eq!(
+            Language::from_path(&PathBuf::from("Foo.SWIFT")),
+            Some(Language::Swift)
+        );
+        assert_eq!(
+            Language::from_path(&PathBuf::from("foo.tsx")),
+            Some(Language::Tsx)
+        );
         assert_eq!(Language::from_path(&PathBuf::from("foo.unknown")), None);
         assert_eq!(Language::from_path(&PathBuf::from("foo")), None);
     }

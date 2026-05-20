@@ -263,11 +263,7 @@ more
         );
         assert_eq!(
             chunks[2].heading_path,
-            vec![
-                "Top".to_string(),
-                "Middle".to_string(),
-                "Deep".to_string()
-            ]
+            vec!["Top".to_string(), "Middle".to_string(), "Deep".to_string()]
         );
     }
 

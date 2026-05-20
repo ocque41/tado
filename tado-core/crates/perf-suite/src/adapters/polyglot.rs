@@ -59,20 +59,31 @@ impl Adapter for PolyglotAdapter {
         let mut combined_notes: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (i, adapter) in active.iter().enumerate() {
             let weight = weights.get(i).copied().unwrap_or(0.0);
-            if weight <= 0.0 { continue; }
+            if weight <= 0.0 {
+                continue;
+            }
             let (samples, notes) = adapter.measure(ctx)?;
             for (name, sample) in samples {
-                combined.entry(name.clone()).or_default().push((weight, sample));
+                combined
+                    .entry(name.clone())
+                    .or_default()
+                    .push((weight, sample));
             }
             for (name, note) in notes {
-                combined_notes.entry(name).or_default().push(format!("[{}] {}", adapter.stack(), note));
+                combined_notes.entry(name).or_default().push(format!(
+                    "[{}] {}",
+                    adapter.stack(),
+                    note
+                ));
             }
         }
 
         let mut samples = BTreeMap::new();
         let mut notes = BTreeMap::new();
         for (metric_name, _, _direction) in registry() {
-            let Some(weighted) = combined.get(metric_name) else { continue };
+            let Some(weighted) = combined.get(metric_name) else {
+                continue;
+            };
             // Weighted mean of present (non-zero) samples.
             let mut total: f64 = 0.0;
             let mut wsum: f64 = 0.0;
@@ -80,7 +91,9 @@ impl Adapter for PolyglotAdapter {
             let mut direction = crate::metrics::Direction::LowerIsBetter;
             let mut unit = String::new();
             for (w, s) in weighted {
-                if s.value <= 0.0 && metric_name != "steady_state_rss_ratio" { continue; }
+                if s.value <= 0.0 && metric_name != "steady_state_rss_ratio" {
+                    continue;
+                }
                 total += w * s.value;
                 wsum += w;
                 adapter_label = "polyglot".into();
@@ -92,9 +105,17 @@ impl Adapter for PolyglotAdapter {
                 metric_name.to_string(),
                 MetricSample {
                     value,
-                    unit: if unit.is_empty() { "weighted".into() } else { unit },
+                    unit: if unit.is_empty() {
+                        "weighted".into()
+                    } else {
+                        unit
+                    },
                     direction,
-                    adapter: if adapter_label.is_empty() { "polyglot".into() } else { adapter_label },
+                    adapter: if adapter_label.is_empty() {
+                        "polyglot".into()
+                    } else {
+                        adapter_label
+                    },
                     notes: combined_notes.get(metric_name).map(|v| v.join("; ")),
                 },
             );
@@ -110,9 +131,18 @@ impl Adapter for PolyglotAdapter {
 /// caller can iterate without re-detecting.
 fn active_adapters(root: &Path) -> Vec<(bool, Box<dyn Adapter>)> {
     vec![
-        (root.join("Cargo.toml").exists(), Box::new(super::rust::RustAdapter) as Box<dyn Adapter>),
-        (root.join("Package.swift").exists(), Box::new(super::swift::SwiftAdapter)),
-        (root.join("package.json").exists(), Box::new(super::node::NodeAdapter)),
+        (
+            root.join("Cargo.toml").exists(),
+            Box::new(super::rust::RustAdapter) as Box<dyn Adapter>,
+        ),
+        (
+            root.join("Package.swift").exists(),
+            Box::new(super::swift::SwiftAdapter),
+        ),
+        (
+            root.join("package.json").exists(),
+            Box::new(super::node::NodeAdapter),
+        ),
         (
             root.join("pyproject.toml").exists() || root.join("setup.py").exists(),
             Box::new(super::python::PythonAdapter),
@@ -144,9 +174,15 @@ fn stack_loc_weights(root: &Path, adapters: &[Box<dyn Adapter>]) -> Vec<f64> {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) else { continue };
-            if !exts.contains(&ext) { continue; }
-            let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+            let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !exts.contains(&ext) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
             totals[idx] = totals[idx].saturating_add(text.lines().count() as u64);
         }
     }
@@ -162,8 +198,19 @@ fn stack_loc_weights(root: &Path, adapters: &[Box<dyn Adapter>]) -> Vec<f64> {
 fn is_skip_dir(name: &str) -> bool {
     matches!(
         name,
-        "target" | "node_modules" | ".git" | ".tado" | "dist" | "build" | ".next"
-        | ".build" | "DerivedData" | "Pods" | "venv" | ".venv" | "__pycache__"
+        "target"
+            | "node_modules"
+            | ".git"
+            | ".tado"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".build"
+            | "DerivedData"
+            | "Pods"
+            | "venv"
+            | ".venv"
+            | "__pycache__"
     )
 }
 
@@ -179,10 +226,17 @@ mod tests {
         fs::write(dir.path().join("package.json"), "{}").unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
         // 3 lines of Rust, 7 lines of TS — Rust weight ~0.3
-        fs::write(dir.path().join("src/lib.rs"), "fn a() {}\nfn b() {}\nfn c() {}").unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn a() {}\nfn b() {}\nfn c() {}",
+        )
+        .unwrap();
         fs::write(dir.path().join("a.ts"), "1\n2\n3\n4\n5\n6\n7\n").unwrap();
         let adapters = active_adapters(dir.path());
-        let active: Vec<Box<dyn Adapter>> = adapters.into_iter().filter_map(|(p, a)| if p { Some(a) } else { None }).collect();
+        let active: Vec<Box<dyn Adapter>> = adapters
+            .into_iter()
+            .filter_map(|(p, a)| if p { Some(a) } else { None })
+            .collect();
         let weights = stack_loc_weights(dir.path(), &active);
         let sum: f64 = weights.iter().sum();
         assert!((sum - 1.0).abs() < 1e-6);
@@ -191,12 +245,25 @@ mod tests {
     fn tmpdir(prefix: &str) -> TempDir {
         let path = std::env::temp_dir().join(format!(
             "{prefix}-{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         std::fs::create_dir_all(&path).unwrap();
         TempDir { path }
     }
-    struct TempDir { path: std::path::PathBuf }
-    impl TempDir { fn path(&self) -> &std::path::Path { &self.path } }
-    impl Drop for TempDir { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); } }
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }

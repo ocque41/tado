@@ -82,11 +82,7 @@ pub fn run(conn: &Connection, job: &EnrichmentJob) -> Result<ExtractReport, BtEr
         if !seen_links.insert(key) {
             continue;
         }
-        let target_node_id = ensure_link_target_node(
-            &tx,
-            &link,
-            project_id.as_deref(),
-        )?;
+        let target_node_id = ensure_link_target_node(&tx, &link, project_id.as_deref())?;
         upsert_graph_edge(
             &tx,
             doc_id,
@@ -138,9 +134,9 @@ struct Heading {
 
 #[derive(Debug, Clone)]
 struct LinkRef {
-    kind: String,        // "note" | "file" | "agent" | "run"
+    kind: String, // "note" | "file" | "agent" | "run"
     label: String,
-    target: String,      // raw target (id, path, name)
+    target: String, // raw target (id, path, name)
     edge_kind: &'static str,
 }
 
@@ -272,9 +268,8 @@ fn detect_file_mentions(body: &str) -> Vec<String> {
     // Path-shaped tokens with a known source extension. Whitelisted to
     // keep noise (URLs, content hashes, version strings) out.
     const EXTS: &[&str] = &[
-        "swift", "rs", "ts", "tsx", "js", "jsx", "py", "go", "java",
-        "kt", "rb", "c", "h", "cpp", "hpp", "m", "mm", "yaml", "yml",
-        "toml", "json", "md", "sql",
+        "swift", "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "kt", "rb", "c", "h", "cpp",
+        "hpp", "m", "mm", "yaml", "yml", "toml", "json", "md", "sql",
     ];
     let mut out = Vec::new();
     let mut current = String::new();

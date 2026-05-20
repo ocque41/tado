@@ -268,10 +268,7 @@ mod tests {
             ("alloc_per_op", 200.0, Direction::LowerIsBetter), // 0.5 (regression)
             ("critical_path_ops", 50.0, Direction::LowerIsBetter), // 2.0 (huge improvement)
         ]);
-        let b = baseline_with(vec![
-            ("alloc_per_op", 100.0),
-            ("critical_path_ops", 100.0),
-        ]);
+        let b = baseline_with(vec![("alloc_per_op", 100.0), ("critical_path_ops", 100.0)]);
         let verdict = score(&r, Some(&b)).unwrap();
         assert!(matches!(verdict, ScoreVerdict::Regression { .. }));
     }

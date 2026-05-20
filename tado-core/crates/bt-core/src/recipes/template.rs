@@ -81,7 +81,10 @@ fn render_one(expr: &str, ctx: &TemplateContext) -> String {
             return "  - _none_".to_string();
         }
         let take = items.iter().take(n);
-        return take.map(|line| format!("  - {line}")).collect::<Vec<_>>().join("\n");
+        return take
+            .map(|line| format!("  - {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
     }
 
     // Unknown filter — render the raw value.

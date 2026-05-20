@@ -39,7 +39,10 @@ fn cold_start_lines_counts_until_quiet() {
     // the count should land at 4.
     let target = shell_target("echo a; echo b; echo c; echo d; sleep 5");
     let (count, _) = cold_start_lines(&target, Duration::from_secs(2));
-    assert!(count >= 4.0 && count <= 5.0, "expected ~4 lines, got {count}");
+    assert!(
+        count >= 4.0 && count <= 5.0,
+        "expected ~4 lines, got {count}"
+    );
 }
 
 #[test]
@@ -47,7 +50,10 @@ fn cold_start_lines_stops_at_ready_sentinel() {
     // 3 lines, the third is "ready" — should stop after 3.
     let target = shell_target("echo init; echo loading; echo ready; sleep 30");
     let (count, _) = cold_start_lines(&target, Duration::from_secs(3));
-    assert!(count >= 1.0 && count <= 3.0, "expected stop at sentinel (≤3), got {count}");
+    assert!(
+        count >= 1.0 && count <= 3.0,
+        "expected stop at sentinel (≤3), got {count}"
+    );
 }
 
 #[test]

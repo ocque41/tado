@@ -33,6 +33,11 @@ pub mod baseline;
 pub mod report;
 pub mod scoring;
 
-pub use baseline::{init_from, machine_class, machine_drift, read_baseline, update_with, write_baseline, Baseline, BaselineError, BaselineHistoryEntry};
-pub use report::{SprintData, SprintReport, ReportError, Weights};
-pub use scoring::{score, ScoreError, ScoreVerdict, DEFAULT_REGRESSION_FLOOR, PER_COMPONENT_MIN_GUARD};
+pub use baseline::{
+    init_from, machine_class, machine_drift, read_baseline, update_with, write_baseline, Baseline,
+    BaselineError, BaselineHistoryEntry,
+};
+pub use report::{ReportError, SprintData, SprintReport, Weights};
+pub use scoring::{
+    score, ScoreError, ScoreVerdict, DEFAULT_REGRESSION_FLOOR, PER_COMPONENT_MIN_GUARD,
+};

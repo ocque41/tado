@@ -93,5 +93,9 @@ fn bench_snapshot_dirty_latency(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_grid_write_throughput, bench_snapshot_dirty_latency);
+criterion_group!(
+    benches,
+    bench_grid_write_throughput,
+    bench_snapshot_dirty_latency
+);
 criterion_main!(benches);

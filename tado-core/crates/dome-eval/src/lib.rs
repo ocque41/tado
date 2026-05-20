@@ -61,10 +61,7 @@ pub fn open_vault_readonly(vault_db: &Path) -> Result<Connection> {
 /// Cargo binary on disk.
 ///
 /// `since_seconds <= 0` → replay every row in `retrieval_log`.
-pub fn replay_for_vault(
-    vault_db: &Path,
-    since_seconds: i64,
-) -> Result<replay::ReplayReport> {
+pub fn replay_for_vault(vault_db: &Path, since_seconds: i64) -> Result<replay::ReplayReport> {
     let conn = open_vault_readonly(vault_db)?;
     let since = if since_seconds > 0 {
         Some(chrono::Duration::seconds(since_seconds))
@@ -75,7 +72,11 @@ pub fn replay_for_vault(
 }
 
 /// Precision@k — fraction of the top-k results that are relevant.
-pub fn precision_at_k<T: Eq + std::hash::Hash>(retrieved: &[T], relevant: &HashSet<T>, k: usize) -> f64 {
+pub fn precision_at_k<T: Eq + std::hash::Hash>(
+    retrieved: &[T],
+    relevant: &HashSet<T>,
+    k: usize,
+) -> f64 {
     if k == 0 {
         return 0.0;
     }
@@ -83,17 +84,29 @@ pub fn precision_at_k<T: Eq + std::hash::Hash>(retrieved: &[T], relevant: &HashS
     if cutoff == 0 {
         return 0.0;
     }
-    let hits = retrieved.iter().take(cutoff).filter(|r| relevant.contains(r)).count();
+    let hits = retrieved
+        .iter()
+        .take(cutoff)
+        .filter(|r| relevant.contains(r))
+        .count();
     hits as f64 / cutoff as f64
 }
 
 /// Recall@k — fraction of relevant results that appear in top-k.
-pub fn recall_at_k<T: Eq + std::hash::Hash>(retrieved: &[T], relevant: &HashSet<T>, k: usize) -> f64 {
+pub fn recall_at_k<T: Eq + std::hash::Hash>(
+    retrieved: &[T],
+    relevant: &HashSet<T>,
+    k: usize,
+) -> f64 {
     if relevant.is_empty() {
         return 0.0;
     }
     let cutoff = retrieved.len().min(k);
-    let hits = retrieved.iter().take(cutoff).filter(|r| relevant.contains(r)).count();
+    let hits = retrieved
+        .iter()
+        .take(cutoff)
+        .filter(|r| relevant.contains(r))
+        .count();
     hits as f64 / relevant.len() as f64
 }
 
@@ -119,7 +132,9 @@ pub fn ndcg_at_k<T: Eq + std::hash::Hash>(retrieved: &[T], relevant: &HashSet<T>
         .sum();
     // Ideal DCG: all relevant docs at the top.
     let ideal_count = relevant.len().min(k);
-    let idcg: f64 = (0..ideal_count).map(|i| 1.0 / ((i as f64 + 2.0).log2())).sum();
+    let idcg: f64 = (0..ideal_count)
+        .map(|i| 1.0 / ((i as f64 + 2.0).log2()))
+        .sum();
     if idcg == 0.0 {
         0.0
     } else {
@@ -153,9 +168,8 @@ impl AggregateMetrics {
             };
         }
         let n = per_case.len() as f64;
-        let mean = |f: fn(&PerCaseMetrics) -> f64| -> f64 {
-            per_case.iter().map(f).sum::<f64>() / n
-        };
+        let mean =
+            |f: fn(&PerCaseMetrics) -> f64| -> f64 { per_case.iter().map(f).sum::<f64>() / n };
         Self {
             n_cases: per_case.len(),
             mean_precision_at_5: mean(|c| c.precision_at_5),
@@ -285,9 +299,17 @@ pub fn explain(conn: &Connection, log_id: &str) -> Result<(ExplainSeed, Vec<Expl
 
     let mut rows = Vec::with_capacity(result_ids.len());
     for (idx, doc_id) in result_ids.iter().enumerate() {
-        let scope = result_scopes.get(idx).cloned().unwrap_or_else(|| "user".into());
+        let scope = result_scopes
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| "user".into());
 
-        let doc_meta: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> = conn
+        let doc_meta: Option<(
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = conn
             .query_row(
                 "SELECT topic, title, updated_at, created_at FROM docs WHERE id = ?1",
                 [doc_id],
@@ -318,10 +340,9 @@ pub fn explain(conn: &Connection, log_id: &str) -> Result<(ExplainSeed, Vec<Expl
             )
             .optional()?;
 
-        let (topic, title, updated_at, created_at) = doc_meta
-            .unwrap_or((None, None, None, None));
-        let (last_referenced_at, confidence, superseded_by) = node_meta
-            .unwrap_or((None, None, None));
+        let (topic, title, updated_at, created_at) = doc_meta.unwrap_or((None, None, None, None));
+        let (last_referenced_at, confidence, superseded_by) =
+            node_meta.unwrap_or((None, None, None));
 
         let freshness = bt_core::notes::freshness_score(
             updated_at.as_deref(),
@@ -376,7 +397,10 @@ mod tests {
 
     #[test]
     fn precision_at_k_perfect() {
-        assert_eq!(precision_at_k(&["a", "b", "c"], &h(&["a", "b", "c"]), 3), 1.0);
+        assert_eq!(
+            precision_at_k(&["a", "b", "c"], &h(&["a", "b", "c"]), 3),
+            1.0
+        );
     }
 
     #[test]

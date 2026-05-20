@@ -22,9 +22,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::{
-    precision_at_k, recall_at_k, ndcg_at_k, AggregateMetrics, PerCaseMetrics,
-};
+use crate::{ndcg_at_k, precision_at_k, recall_at_k, AggregateMetrics, PerCaseMetrics};
 
 /// One decoded row of `retrieval_log`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,8 +74,7 @@ pub fn replay(conn: &Connection, since: Option<Duration>) -> Result<ReplayReport
 
     let consumed = raw.iter().filter(|r| r.was_consumed).count();
     let consumption_rate = consumed as f64 / raw.len() as f64;
-    let mean_latency_ms =
-        raw.iter().map(|r| r.latency_ms as f64).sum::<f64>() / raw.len() as f64;
+    let mean_latency_ms = raw.iter().map(|r| r.latency_ms as f64).sum::<f64>() / raw.len() as f64;
 
     let per_case: Vec<PerCaseMetrics> = raw
         .iter()
@@ -171,7 +168,8 @@ fn load_rows(conn: &Connection, cutoff: Option<DateTime<Utc>>) -> Result<Vec<Rep
 
     let raw_rows: Vec<_> = if let Some(c) = cutoff {
         let cs = c.to_rfc3339();
-        stmt.query_map([cs], mapper)?.collect::<Result<Vec<_>, _>>()?
+        stmt.query_map([cs], mapper)?
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         stmt.query_map([], mapper)?.collect::<Result<Vec<_>, _>>()?
     };

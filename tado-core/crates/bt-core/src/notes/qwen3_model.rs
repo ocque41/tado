@@ -9,8 +9,8 @@
 //     `ConcatKvCache` between calls or the next embedding attends to
 //     leftover keys/values from the previous one.
 
-use candle_core as candle;
 use candle::{DType, Device, Module, Result, Tensor};
+use candle_core as candle;
 use candle_nn::{
     kv_cache::ConcatKvCache, linear_b, linear_no_bias, rms_norm, Activation, Linear, RmsNorm,
     VarBuilder,

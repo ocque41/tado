@@ -59,9 +59,7 @@ pub fn run(conn: &Connection, _job: &EnrichmentJob) -> Result<DecayReport, BtErr
     //    populates it with `datetime('now')` on first emit and only
     //    bumps it on supersede, so older retros keep their original
     //    sort_time and age out cleanly).
-    for (kind, days) in [
-        ("retro", retention_days("retro")),
-    ] {
+    for (kind, days) in [("retro", retention_days("retro"))] {
         if let Some(d) = days {
             let n = tx.execute(
                 r#"UPDATE graph_nodes
@@ -148,7 +146,13 @@ mod tests {
         }
     }
 
-    fn insert_node(conn: &Connection, id: &str, kind: &str, expires_at: Option<&str>, sort_time: &str) {
+    fn insert_node(
+        conn: &Connection,
+        id: &str,
+        kind: &str,
+        expires_at: Option<&str>,
+        sort_time: &str,
+    ) {
         conn.execute(
             r#"INSERT INTO graph_nodes(node_id, kind, ref_id, label, secondary_label,
                 group_key, search_text, sort_time, payload_json, content_hash,
@@ -163,11 +167,21 @@ mod tests {
     #[test]
     fn archives_rows_with_expired_ttl() {
         let conn = mem_db();
-        insert_node(&conn, "n1", "decision", Some("2025-01-01T00:00:00Z"), "2025-01-01T00:00:00Z");
+        insert_node(
+            &conn,
+            "n1",
+            "decision",
+            Some("2025-01-01T00:00:00Z"),
+            "2025-01-01T00:00:00Z",
+        );
         let report = run(&conn, &job()).unwrap();
         assert_eq!(report.expired_by_ttl, 1);
         let archived: Option<String> = conn
-            .query_row("SELECT archived_at FROM graph_nodes WHERE node_id = 'n1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT archived_at FROM graph_nodes WHERE node_id = 'n1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(archived.is_some());
     }
@@ -175,10 +189,20 @@ mod tests {
     #[test]
     fn skips_rows_with_future_ttl() {
         let conn = mem_db();
-        insert_node(&conn, "n1", "decision", Some("2099-01-01T00:00:00Z"), "2025-01-01T00:00:00Z");
+        insert_node(
+            &conn,
+            "n1",
+            "decision",
+            Some("2099-01-01T00:00:00Z"),
+            "2025-01-01T00:00:00Z",
+        );
         run(&conn, &job()).unwrap();
         let archived: Option<String> = conn
-            .query_row("SELECT archived_at FROM graph_nodes WHERE node_id = 'n1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT archived_at FROM graph_nodes WHERE node_id = 'n1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(archived.is_none());
     }
@@ -206,7 +230,13 @@ mod tests {
     #[test]
     fn decay_is_idempotent() {
         let conn = mem_db();
-        insert_node(&conn, "n1", "decision", Some("2025-01-01T00:00:00Z"), "2025-01-01T00:00:00Z");
+        insert_node(
+            &conn,
+            "n1",
+            "decision",
+            Some("2025-01-01T00:00:00Z"),
+            "2025-01-01T00:00:00Z",
+        );
         run(&conn, &job()).unwrap();
         let report = run(&conn, &job()).unwrap();
         assert_eq!(report.expired_by_ttl, 0);
@@ -278,6 +308,9 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(remaining, vec!["old_queued".to_string(), "recent_done".to_string()]);
+        assert_eq!(
+            remaining,
+            vec!["old_queued".to_string(), "recent_done".to_string()]
+        );
     }
 }

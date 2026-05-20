@@ -199,10 +199,7 @@ pub fn sweep(opts: SweepOptions) -> SweepResult {
         .iter()
         .filter_map(|(pid, proc)| {
             let cmd = joined_cmd(proc);
-            let matched = KILL_PATTERNS
-                .iter()
-                .find(|p| cmd.contains(*p))
-                .copied()?;
+            let matched = KILL_PATTERNS.iter().find(|p| cmd.contains(*p)).copied()?;
             Some(KilledProcess {
                 pid: pid.as_u32(),
                 // Resolved later, after we know whether to skip.
@@ -232,9 +229,7 @@ pub fn sweep(opts: SweepOptions) -> SweepResult {
         // second case catches edge scenarios where the candidate is
         // a non-leader sibling in our own group (highly unlikely but
         // free to guard).
-        if protected.contains(&cand.pid)
-            || (pgid > 0 && protected.contains(&(pgid as u32)))
-        {
+        if protected.contains(&cand.pid) || (pgid > 0 && protected.contains(&(pgid as u32))) {
             cand.kill_outcome = "skipped_protected".to_string();
             skipped_protected.push(cand);
             continue;
@@ -331,9 +326,7 @@ fn kill_outcome(pgid: i32, fallback_pid: u32) -> String {
 }
 
 fn io_error() -> i32 {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(0)
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
 fn errno_to_outcome(errno: i32) -> String {

@@ -63,10 +63,7 @@ fn full_cycle_baseline_init_then_pass() {
     let path = tmpfile("baseline-init.json");
 
     // Initial run: no baseline.
-    let r1 = report_with(vec![
-        ("alloc_per_op", 100.0),
-        ("critical_path_ops", 100.0),
-    ]);
+    let r1 = report_with(vec![("alloc_per_op", 100.0), ("critical_path_ops", 100.0)]);
     let v1 = score(&r1, None).unwrap();
     let composite = match v1 {
         ScoreVerdict::BaselineInit { composite } => composite,
@@ -76,10 +73,7 @@ fn full_cycle_baseline_init_then_pass() {
     write_baseline(&path, &b1).unwrap();
 
     // Second run: matches baseline → PASS.
-    let r2 = report_with(vec![
-        ("alloc_per_op", 100.0),
-        ("critical_path_ops", 100.0),
-    ]);
+    let r2 = report_with(vec![("alloc_per_op", 100.0), ("critical_path_ops", 100.0)]);
     let stored = read_baseline(&path).unwrap().unwrap();
     let v2 = score(&r2, Some(&stored)).unwrap();
     assert!(matches!(v2, ScoreVerdict::Pass { .. }));
@@ -111,15 +105,12 @@ fn baseline_ratchets_only_in_better_direction() {
 #[test]
 fn min_guard_fails_even_with_strong_composite() {
     let baseline = init_from(
-        &report_with(vec![
-            ("alloc_per_op", 100.0),
-            ("critical_path_ops", 100.0),
-        ]),
+        &report_with(vec![("alloc_per_op", 100.0), ("critical_path_ops", 100.0)]),
         1.0,
     );
     // Massive critical_path_ops improvement, alloc collapsed to 0.5x baseline.
     let r = report_with(vec![
-        ("alloc_per_op", 200.0),  // 0.5 normalized
+        ("alloc_per_op", 200.0),     // 0.5 normalized
         ("critical_path_ops", 50.0), // 2.0 normalized
     ]);
     let v = score(&r, Some(&baseline)).unwrap();
@@ -182,20 +173,20 @@ fn baseline_init_contract_line() {
     let r = report_with(vec![("alloc_per_op", 100.0)]);
     let v = score(&r, None).unwrap();
     let line = v.one_line();
-    assert!(line.starts_with("PERF: BASELINE-INIT composite="), "got: {line}");
+    assert!(
+        line.starts_with("PERF: BASELINE-INIT composite="),
+        "got: {line}"
+    );
 }
 
 #[test]
 fn regression_contract_line_includes_hot_metric() {
     let baseline = init_from(
-        &report_with(vec![
-            ("alloc_per_op", 100.0),
-            ("critical_path_ops", 100.0),
-        ]),
+        &report_with(vec![("alloc_per_op", 100.0), ("critical_path_ops", 100.0)]),
         1.0,
     );
     let r = report_with(vec![
-        ("alloc_per_op", 1000.0),  // 0.1 normalized — well below 0.85
+        ("alloc_per_op", 1000.0), // 0.1 normalized — well below 0.85
         ("critical_path_ops", 100.0),
     ]);
     let v = score(&r, Some(&baseline)).unwrap();

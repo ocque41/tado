@@ -257,10 +257,9 @@ async fn dome_verify(client: &RpcClient, actor: &Actor, args: Value) -> Result<V
         .get("node_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("dome_verify: missing required `node_id` (string)"))?;
-    let verdict = args
-        .get("verdict")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("dome_verify: missing required `verdict` ('confirmed' | 'disputed')"))?;
+    let verdict = args.get("verdict").and_then(Value::as_str).ok_or_else(|| {
+        anyhow!("dome_verify: missing required `verdict` ('confirmed' | 'disputed')")
+    })?;
     let mut body = json!({
         "actor": actor,
         "node_id": node_id,
@@ -589,10 +588,7 @@ async fn dome_note(client: &RpcClient, actor: &Actor, args: Value) -> Result<Val
         }
 
         let created = client
-            .call(
-                "doc.create_scoped",
-                create_body,
-            )
+            .call("doc.create_scoped", create_body)
             .await
             .map_err(|e| anyhow!(e.to_string()))?;
         created

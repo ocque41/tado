@@ -66,16 +66,19 @@ fn fixture_swift_detects_swift_stack() {
 fn fixture_polyglot_detects_polyglot_stack() {
     let dir = fixtures_dir().join("polyglot");
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(dir.join("Cargo.toml"), "[package]\nname='p'\nversion='0.0.1'\n");
+    let _ = std::fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname='p'\nversion='0.0.1'\n",
+    );
     let _ = std::fs::write(dir.join("package.json"), "{}");
     assert_eq!(detect_stack(&dir), Stack::Polyglot);
 }
 
 #[test]
 fn rust_fixture_has_db_pattern() {
+    use chrono::Utc;
     use perf_suite::proposal::generate_proposals;
     use perf_suite::report::PerfReport;
-    use chrono::Utc;
     use std::collections::BTreeMap;
 
     let dir = fixtures_dir().join("rust");
@@ -94,14 +97,17 @@ fn rust_fixture_has_db_pattern() {
     let proposals = generate_proposals(&dir, &report, false, 50);
     // The fixture's main.rs has Vec::new(), .clone() in a loop, and
     // rusqlite-style execute calls — at least one proposal should fire.
-    assert!(!proposals.is_empty(), "expected ≥1 proposal from Rust fixture, got 0");
+    assert!(
+        !proposals.is_empty(),
+        "expected ≥1 proposal from Rust fixture, got 0"
+    );
 }
 
 #[test]
 fn node_fixture_has_xproc_pattern() {
+    use chrono::Utc;
     use perf_suite::proposal::generate_proposals;
     use perf_suite::report::PerfReport;
-    use chrono::Utc;
     use std::collections::BTreeMap;
 
     let dir = fixtures_dir().join("node");
@@ -116,5 +122,8 @@ fn node_fixture_has_xproc_pattern() {
         correctness_failure: None,
     };
     let proposals = generate_proposals(&dir, &report, false, 50);
-    assert!(!proposals.is_empty(), "expected ≥1 proposal from Node fixture");
+    assert!(
+        !proposals.is_empty(),
+        "expected ≥1 proposal from Node fixture"
+    );
 }
