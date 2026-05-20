@@ -24,7 +24,11 @@ pub enum ControlClientError {
     AppNotRunning(String),
     Io(std::io::Error),
     Decode(String),
-    Server { code: String, message: String, data: Option<Value> },
+    Server {
+        code: String,
+        message: String,
+        data: Option<Value>,
+    },
 }
 
 impl std::fmt::Display for ControlClientError {
@@ -62,8 +66,9 @@ pub struct Response {
 /// to connect to. The socket lives at
 /// `/tmp/tado-ipc-<pid>/control.sock`.
 pub fn call(kind: &str, payload: Value) -> Result<Response, ControlClientError> {
-    let pid = active_pid()
-        .map_err(|e| ControlClientError::AppNotRunning(format!("could not read /tmp/tado-ipc/active-pid: {e}")))?;
+    let pid = active_pid().map_err(|e| {
+        ControlClientError::AppNotRunning(format!("could not read /tmp/tado-ipc/active-pid: {e}"))
+    })?;
     let socket_path = PathBuf::from(format!("/tmp/tado-ipc-{pid}/control.sock"));
     if !socket_path.exists() {
         return Err(ControlClientError::AppNotRunning(format!(
@@ -72,9 +77,8 @@ pub fn call(kind: &str, payload: Value) -> Result<Response, ControlClientError> 
         )));
     }
 
-    let mut stream = UnixStream::connect(&socket_path).map_err(|e| {
-        ControlClientError::AppNotRunning(format!("connect failed: {e}"))
-    })?;
+    let mut stream = UnixStream::connect(&socket_path)
+        .map_err(|e| ControlClientError::AppNotRunning(format!("connect failed: {e}")))?;
     // Read/write timeouts cap pathological hangs — these are NOT
     // retry timeouts (rule 1); they only catch a wedged socket
     // where the server died mid-write. 10 s is generous for a
@@ -88,15 +92,13 @@ pub fn call(kind: &str, payload: Value) -> Result<Response, ControlClientError> 
         kind: kind.to_string(),
         payload,
     };
-    let body = serde_json::to_vec(&request).map_err(|e| {
-        ControlClientError::Decode(format!("encode request: {e}"))
-    })?;
+    let body = serde_json::to_vec(&request)
+        .map_err(|e| ControlClientError::Decode(format!("encode request: {e}")))?;
     write_frame(&mut stream, &body).map_err(ControlClientError::Io)?;
 
     let resp_bytes = read_frame(&mut stream).map_err(ControlClientError::Io)?;
-    let response: Response = serde_json::from_slice(&resp_bytes).map_err(|e| {
-        ControlClientError::Decode(format!("decode response: {e}"))
-    })?;
+    let response: Response = serde_json::from_slice(&resp_bytes)
+        .map_err(|e| ControlClientError::Decode(format!("decode response: {e}")))?;
 
     if !response.ok {
         let code = response.error.clone().unwrap_or_else(|| "unknown".into());
@@ -168,4 +170,3 @@ where
     }
     Value::Object(map)
 }
-

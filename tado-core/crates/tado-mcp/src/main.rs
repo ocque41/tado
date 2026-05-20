@@ -9,15 +9,20 @@
 //! Ships 12 tools, matching the Node server surface one-for-one:
 //!
 //! - `tado_list` — read the session registry, optionally filter by
-//!   `project` / `team`. Delegates to `tado_ipc::read_registry`.
+//!   `project` / `team`.
 //! - `tado_send` — resolve a target by UUID / grid coordinates / name
-//!   substring, drop an envelope into `a2a-inbox/`.
-//! - `tado_read` — tail a session's log file, ANSI-stripped.
+//!   substring, then send a message.
+//! - `tado_read` — tail a session's terminal output, ANSI-stripped.
 //! - `tado_broadcast` — send to every session in a project/team.
-//! - `tado_notify` — append a `user.broadcast` event to the NDJSON log.
-//! - `tado_events_query` — tail + filter the NDJSON log.
+//! - `tado_notify` — append a `user.broadcast` event.
+//! - `tado_events_query` — tail + filter the event log.
 //! - `tado_config_{get,set,list}` — scoped JSON config.
 //! - `tado_memory_{read,append,search}` — scoped markdown memory.
+//!
+//! In desktop mode these A2A tools use `tado-ipc` and the app's NDJSON event
+//! log. In CLI-runtime mode (`TADO_PROFILE`, `TADO_RUNTIME_SOCKET`, or
+//! `TADO_RUNTIME_ID`) list/send/read/broadcast/notify/events route to `tadod`
+//! and fail visibly if that selected runtime is unavailable.
 
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -53,11 +58,7 @@ async fn run() -> Result<()> {
         let req: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(err) => {
-                let resp = rpc_error(
-                    Value::Null,
-                    "ERR_PARSE",
-                    &format!("invalid json: {err}"),
-                );
+                let resp = rpc_error(Value::Null, "ERR_PARSE", &format!("invalid json: {err}"));
                 write_line(&mut stdout, &resp).await?;
                 continue;
             }
@@ -334,11 +335,96 @@ fn events_current_path() -> PathBuf {
     app_support_root().join("events").join("current.ndjson")
 }
 
+fn runtime_a2a_requested() -> bool {
+    ["TADO_PROFILE", "TADO_RUNTIME_SOCKET", "TADO_RUNTIME_ID"]
+        .iter()
+        .any(|key| {
+            std::env::var_os(key)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        })
+}
+
+fn runtime_a2a_call(kind: &str, payload: Value) -> Result<Option<Value>> {
+    if !runtime_a2a_requested() {
+        return Ok(None);
+    }
+    let profile = tado_runtime::profile_from_env(None);
+    let client = tado_runtime::ensure_daemon(&profile)
+        .map_err(|e| anyhow!("CLI runtime A2A selected but unavailable: {e}"))?;
+    let response = client
+        .call(kind, payload)
+        .map_err(|e| anyhow!("CLI runtime A2A request failed: {e}"))?;
+    Ok(Some(response.data.unwrap_or_else(|| json!({}))))
+}
+
+fn runtime_sessions(args: &Value) -> Result<Option<Vec<Value>>> {
+    let Some(data) = runtime_a2a_call("session.list", json!({}))? else {
+        return Ok(None);
+    };
+    let project = args
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+    let team = args
+        .get("team")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+    let mut sessions = data
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(project) = &project {
+        sessions.retain(|session| {
+            runtime_session_project(session)
+                .map(|value| value.to_lowercase().contains(project))
+                .unwrap_or(false)
+        });
+    }
+    if let Some(team) = &team {
+        sessions.retain(|session| {
+            session
+                .get("team_name")
+                .and_then(Value::as_str)
+                .map(|value| value.to_lowercase() == *team)
+                .unwrap_or(false)
+        });
+    }
+    Ok(Some(sessions))
+}
+
+fn runtime_session_project(session: &Value) -> Option<&str> {
+    session
+        .get("project_id")
+        .and_then(Value::as_str)
+        .or_else(|| session.get("project_root").and_then(Value::as_str))
+}
+
+fn runtime_grid_label(session: &Value) -> String {
+    let row = session.get("grid_row").and_then(Value::as_i64);
+    let col = session.get("grid_col").and_then(Value::as_i64);
+    match (row, col) {
+        (Some(row), Some(col)) => format!("[{row}, {col}]"),
+        _ => "-".to_string(),
+    }
+}
+
 // ── tado_list ────────────────────────────────────────────────────
 
 fn tado_list(args: Value) -> Result<String> {
-    let project = args.get("project").and_then(Value::as_str).map(str::to_lowercase);
-    let team = args.get("team").and_then(Value::as_str).map(str::to_lowercase);
+    if let Some(sessions) = runtime_sessions(&args)? {
+        return render_runtime_session_table(&sessions);
+    }
+
+    let project = args
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+    let team = args
+        .get("team")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
 
     let paths = tado_ipc::IpcPaths::stable();
     let mut entries = tado_ipc::read_registry(&paths).map_err(|e| anyhow!(e.to_string()))?;
@@ -355,7 +441,9 @@ fn tado_list(args: Value) -> Result<String> {
     }
 
     // Table output matches the Node version: header + separator + rows.
-    let header = ["Grid", "Engine", "Status", "Project", "Team", "Agent", "Name", "ID"];
+    let header = [
+        "Grid", "Engine", "Status", "Project", "Team", "Agent", "Name", "ID",
+    ];
     let rows: Vec<[String; 8]> = entries
         .iter()
         .map(|e| {
@@ -402,7 +490,11 @@ fn tado_list(args: Value) -> Result<String> {
             .join(" | ")
     };
     let header_vec: Vec<String> = header.iter().map(|s| (*s).to_string()).collect();
-    let sep = widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join(" | ");
+    let sep = widths
+        .iter()
+        .map(|w| "-".repeat(*w))
+        .collect::<Vec<_>>()
+        .join(" | ");
 
     let mut out = Vec::with_capacity(rows.len() + 2);
     out.push(fmt(&header_vec));
@@ -411,6 +503,96 @@ fn tado_list(args: Value) -> Result<String> {
         out.push(fmt(r));
     }
     Ok(out.join("\n"))
+}
+
+fn render_runtime_session_table(sessions: &[Value]) -> Result<String> {
+    if sessions.is_empty() {
+        return Ok("No active Tado runtime sessions found.".to_string());
+    }
+    let header = [
+        "Grid", "Engine", "Status", "Project", "Team", "Agent", "Name", "ID",
+    ];
+    let rows: Vec<[String; 8]> = sessions
+        .iter()
+        .map(|session| {
+            let title = session
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("runtime session");
+            let title = truncate(title, 50);
+            let id = session.get("id").and_then(Value::as_str).unwrap_or("-");
+            [
+                runtime_grid_label(session),
+                session
+                    .get("engine")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_string(),
+                session
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_string(),
+                runtime_session_project(session).unwrap_or("-").to_string(),
+                session
+                    .get("team_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_string(),
+                session
+                    .get("agent_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_string(),
+                title,
+                truncate(id, 8),
+            ]
+        })
+        .collect();
+    Ok(render_table(&header, &rows))
+}
+
+fn render_table(header: &[&str], rows: &[[String; 8]]) -> String {
+    let mut widths = [0usize; 8];
+    for (i, h) in header.iter().enumerate() {
+        widths[i] = h.len();
+    }
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+    let fmt = |row: &[String]| {
+        row.iter()
+            .enumerate()
+            .map(|(i, cell)| format!("{:<width$}", cell, width = widths[i]))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let mut out = Vec::with_capacity(rows.len() + 2);
+    out.push(fmt(&header
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()));
+    out.push(
+        widths
+            .iter()
+            .map(|w| "-".repeat(*w))
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    for row in rows {
+        out.push(fmt(row));
+    }
+    out.join("\n")
+}
+
+fn truncate(value: &str, max: usize) -> String {
+    if value.len() > max {
+        format!("{}...", &value[..max.saturating_sub(3)])
+    } else {
+        value.to_string()
+    }
 }
 
 // ── tado_send ────────────────────────────────────────────────────
@@ -424,7 +606,24 @@ fn tado_send(args: Value) -> Result<String> {
         .get("message")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("tado_send: missing `message`"))?;
-    let project = args.get("project").and_then(Value::as_str).map(str::to_lowercase);
+    let project = args
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+
+    if let Some(data) = runtime_a2a_call(
+        "session.send",
+        json!({ "target": target, "message": message, "enter": true }),
+    )? {
+        let session_id = data
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(target);
+        let bytes = data.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+        return Ok(format!(
+            "Message sent to runtime session {session_id} ({bytes} bytes)"
+        ));
+    }
 
     let paths = tado_ipc::IpcPaths::stable();
     let entries = tado_ipc::read_registry(&paths).map_err(|e| anyhow!(e.to_string()))?;
@@ -438,12 +637,20 @@ fn tado_send(args: Value) -> Result<String> {
         let available = entries
             .iter()
             .map(|e| {
-                let n = if e.name.len() > 40 { &e.name[..40] } else { &e.name[..] };
+                let n = if e.name.len() > 40 {
+                    &e.name[..40]
+                } else {
+                    &e.name[..]
+                };
                 format!("  {} {n}", e.grid_label)
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let available = if available.is_empty() { "  (none)".to_string() } else { available };
+        let available = if available.is_empty() {
+            "  (none)".to_string()
+        } else {
+            available
+        };
         return Ok(format!(
             "Could not resolve target \"{target}\". Available sessions:\n{available}"
         ));
@@ -457,7 +664,11 @@ fn tado_send(args: Value) -> Result<String> {
     );
     tado_ipc::write_external_message(&paths, &msg).map_err(|e| anyhow!(e.to_string()))?;
 
-    let name_short = if entry.name.len() > 40 { &entry.name[..40] } else { &entry.name[..] };
+    let name_short = if entry.name.len() > 40 {
+        &entry.name[..40]
+    } else {
+        &entry.name[..]
+    };
     let msg_short = msg.id.simple().to_string();
     let msg_short = &msg_short[..8];
     Ok(format!(
@@ -510,8 +721,10 @@ fn resolve_target<'a>(
     }
 
     // Substring on name
-    let matches: Vec<&&tado_ipc::IpcSessionEntry> =
-        pool.iter().filter(|e| e.name.to_lowercase().contains(&t)).collect();
+    let matches: Vec<&&tado_ipc::IpcSessionEntry> = pool
+        .iter()
+        .filter(|e| e.name.to_lowercase().contains(&t))
+        .collect();
     if matches.len() == 1 {
         return Some(matches[0]);
     }
@@ -531,6 +744,14 @@ fn tado_notify(args: Value) -> Result<String> {
         .and_then(Value::as_str)
         .filter(|s| ["info", "success", "warning", "error"].contains(s))
         .unwrap_or("info");
+
+    if let Some(data) = runtime_a2a_call(
+        "events.notify",
+        json!({ "title": title, "body": body, "severity": severity }),
+    )? {
+        let id = data.get("id").and_then(Value::as_i64).unwrap_or_default();
+        return Ok(format!("published runtime event: {id}"));
+    }
 
     let id = Uuid::new_v4();
     let event = json!({
@@ -553,7 +774,10 @@ fn tado_notify(args: Value) -> Result<String> {
     // Plain append — the OS serializes single append writes; we
     // accept a rare interleave risk (same trade-off the Node server
     // and CLI `tado-notify` make).
-    let mut f = fs::OpenOptions::new().append(true).create(true).open(&path)?;
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)?;
     f.write_all(line.as_bytes())?;
     Ok(format!("published: {}", id))
 }
@@ -561,6 +785,50 @@ fn tado_notify(args: Value) -> Result<String> {
 // ── tado_events_query ────────────────────────────────────────────
 
 fn tado_events_query(args: Value) -> Result<String> {
+    if let Some(data) = runtime_a2a_call(
+        "events.list",
+        json!({ "limit": args.get("limit").and_then(Value::as_i64).map(|n| n.clamp(1, 500)).unwrap_or(100) }),
+    )? {
+        let mut events = data
+            .get("events")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(kind) = args
+            .get("type")
+            .or_else(|| args.get("kind"))
+            .and_then(Value::as_str)
+        {
+            events.retain(|event| {
+                event
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .map(|value| value == kind || value.starts_with(kind))
+                    .unwrap_or(false)
+            });
+        }
+        if events.is_empty() {
+            return Ok("(no matching runtime events)".to_string());
+        }
+        return Ok(events
+            .iter()
+            .map(|event| {
+                let ts = event
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-");
+                let kind = event.get("kind").and_then(Value::as_str).unwrap_or("-");
+                let subject = event
+                    .get("subject_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-");
+                let message = event.get("message").and_then(Value::as_str).unwrap_or("");
+                format!("{ts}  {:<28} {:<12} {message}", kind, subject)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+
     let path = events_current_path();
     if !path.exists() {
         return Ok("(no events yet — tado has not published anything to this log)".to_string());
@@ -572,7 +840,10 @@ fn tado_events_query(args: Value) -> Result<String> {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|d| d.timestamp_millis());
     let type_filter = args.get("type").and_then(Value::as_str).map(str::to_string);
-    let severity_filter = args.get("severity").and_then(Value::as_str).map(str::to_string);
+    let severity_filter = args
+        .get("severity")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let limit = args
         .get("limit")
         .and_then(Value::as_i64)
@@ -644,7 +915,24 @@ fn tado_read(args: Value) -> Result<String> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("tado_read: missing `target`"))?;
     let tail = args.get("tail").and_then(Value::as_u64).map(|n| n as usize);
-    let project = args.get("project").and_then(Value::as_str).map(str::to_lowercase);
+    let project = args
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+
+    if let Some(data) = runtime_a2a_call(
+        "session.read",
+        json!({ "target": target, "limit": tail.unwrap_or(80).min(500) }),
+    )? {
+        let text = data.get("text").and_then(Value::as_str).unwrap_or("");
+        let stripped = strip_ansi(text);
+        if let Some(n) = tail {
+            let lines = stripped.split('\n').collect::<Vec<_>>();
+            let start = lines.len().saturating_sub(n);
+            return Ok(lines[start..].join("\n"));
+        }
+        return Ok(stripped);
+    }
 
     let paths = tado_ipc::IpcPaths::stable();
     let entries = tado_ipc::read_registry(&paths).map_err(|e| anyhow!(e.to_string()))?;
@@ -660,7 +948,10 @@ fn tado_read(args: Value) -> Result<String> {
     let sid_lower = entry.session_id.as_hyphenated().to_string().to_lowercase();
     let log_path = paths.session_log(&sid_lower);
     if !log_path.exists() {
-        return Ok(format!("No log file found for session {}", entry.session_id));
+        return Ok(format!(
+            "No log file found for session {}",
+            entry.session_id
+        ));
     }
 
     let raw = fs::read_to_string(&log_path)?;
@@ -685,11 +976,11 @@ fn strip_ansi(s: &str) -> String {
         // Split the alternatives across multiple concat!() pieces
         // so it's legible. The `x1b` literal is the ESC byte.
         Regex::new(concat!(
-            r"(\x1b\[[0-9;]*[A-Za-z]",              // CSI sequences
-            r"|\x1b\].*?(?:\x07|\x1b\\)",           // OSC, ST-terminated
-            r"|\x1b[()][AB012]",                     // charset select
-            r"|\x1b[>=<]",                           // keypad / app modes
-            r"|\x1b\[\??[0-9;]*[hlm])"               // SGR + mode toggles
+            r"(\x1b\[[0-9;]*[A-Za-z]",    // CSI sequences
+            r"|\x1b\].*?(?:\x07|\x1b\\)", // OSC, ST-terminated
+            r"|\x1b[()][AB012]",          // charset select
+            r"|\x1b[>=<]",                // keypad / app modes
+            r"|\x1b\[\??[0-9;]*[hlm])"    // SGR + mode toggles
         ))
         .expect("strip_ansi regex compiles")
     });
@@ -703,8 +994,33 @@ fn tado_broadcast(args: Value) -> Result<String> {
         .get("message")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("tado_broadcast: missing `message`"))?;
-    let project = args.get("project").and_then(Value::as_str).map(str::to_lowercase);
-    let team = args.get("team").and_then(Value::as_str).map(str::to_lowercase);
+    let project = args
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+    let team = args
+        .get("team")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
+
+    if runtime_a2a_requested() {
+        let data = runtime_a2a_call(
+            "session.broadcast",
+            json!({
+                "message": message,
+                "project_root": args.get("project").and_then(Value::as_str),
+                "team": args.get("team").and_then(Value::as_str),
+                "enter": true,
+            }),
+        )?
+        .unwrap_or_else(|| json!({ "sent": [] }));
+        let sent = data
+            .get("sent")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0);
+        return Ok(format!("Broadcast sent to {sent} runtime session(s)."));
+    }
 
     let paths = tado_ipc::IpcPaths::stable();
     let entries = tado_ipc::read_registry(&paths).map_err(|e| anyhow!(e.to_string()))?;
@@ -741,10 +1057,12 @@ fn tado_broadcast(args: Value) -> Result<String> {
 fn resolve_config_path(scope: &str) -> Result<PathBuf> {
     match scope {
         "global" => Ok(app_support_root().join("settings").join("global.json")),
-        "project" | "project-shared" => project_config_path()
-            .ok_or_else(|| anyhow!("No .tado/ directory found above the current working directory")),
-        "project-local" | "local" => project_local_path()
-            .ok_or_else(|| anyhow!("No .tado/ directory found above the current working directory")),
+        "project" | "project-shared" => project_config_path().ok_or_else(|| {
+            anyhow!("No .tado/ directory found above the current working directory")
+        }),
+        "project-local" | "local" => project_local_path().ok_or_else(|| {
+            anyhow!("No .tado/ directory found above the current working directory")
+        }),
         _ => Err(anyhow!(
             "unknown scope: {scope} (expected: global | project | project-local)"
         )),
@@ -851,7 +1169,10 @@ fn tado_config_set(args: Value) -> Result<String> {
 }
 
 fn tado_config_list(args: Value) -> Result<String> {
-    let scope = args.get("scope").and_then(Value::as_str).unwrap_or("global");
+    let scope = args
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("global");
     let path = resolve_config_path(scope)?;
     let data: Value = tado_settings::read_json(&path)
         .map_err(|e| anyhow!(e.to_string()))?
@@ -897,14 +1218,18 @@ fn set_path(obj: &mut Value, key: &str, value: Value) {
 fn resolve_memory_path(scope: &str) -> Result<PathBuf> {
     match scope {
         "user" => Ok(user_memory_path()),
-        "project" => project_memory_path()
-            .ok_or_else(|| anyhow!("No .tado/ directory found above the current working directory")),
+        "project" => project_memory_path().ok_or_else(|| {
+            anyhow!("No .tado/ directory found above the current working directory")
+        }),
         _ => Err(anyhow!("unknown scope: {scope} (expected: user | project)")),
     }
 }
 
 fn tado_memory_read(args: Value) -> Result<String> {
-    let scope = args.get("scope").and_then(Value::as_str).unwrap_or("project");
+    let scope = args
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("project");
     let path = resolve_memory_path(scope)?;
     if !path.exists() {
         return Ok(format!(
@@ -923,11 +1248,18 @@ fn tado_memory_append(args: Value) -> Result<String> {
     if text.trim().is_empty() {
         return Ok("refusing to append empty note".to_string());
     }
-    let scope = args.get("scope").and_then(Value::as_str).unwrap_or("project");
+    let scope = args
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("project");
     let tags: Vec<String> = args
         .get("tags")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
 
     let path = resolve_memory_path(scope)?;
@@ -947,7 +1279,11 @@ fn tado_memory_append(args: Value) -> Result<String> {
     let entry = format!("\n\n## {iso}{tag_line}\n\n{}\n", text.trim());
     let mut f = fs::OpenOptions::new().append(true).open(&path)?;
     f.write_all(entry.as_bytes())?;
-    Ok(format!("appended {} chars to {}", text.len(), path.display()))
+    Ok(format!(
+        "appended {} chars to {}",
+        text.len(),
+        path.display()
+    ))
 }
 
 fn tado_memory_search(args: Value) -> Result<String> {
@@ -988,12 +1324,7 @@ fn tado_memory_search(args: Value) -> Result<String> {
         };
         for (idx, line) in contents.split('\n').enumerate() {
             if line.to_lowercase().contains(&q_lower) {
-                hits.push(format!(
-                    "{}:{}: {}",
-                    file.display(),
-                    idx + 1,
-                    line.trim()
-                ));
+                hits.push(format!("{}:{}: {}", file.display(), idx + 1, line.trim()));
             }
         }
     }
@@ -1030,9 +1361,18 @@ mod tests {
         let e1 = entry_with("[1, 1]", "alpha", None);
         let e2 = entry_with("[2, 1]", "beta", None);
         let pool: Vec<&tado_ipc::IpcSessionEntry> = vec![&e1, &e2];
-        assert_eq!(resolve_target(&pool, "1,1").map(|e| &e.name), Some(&e1.name));
-        assert_eq!(resolve_target(&pool, "2:1").map(|e| &e.name), Some(&e2.name));
-        assert_eq!(resolve_target(&pool, "[1, 1]").map(|e| &e.name), Some(&e1.name));
+        assert_eq!(
+            resolve_target(&pool, "1,1").map(|e| &e.name),
+            Some(&e1.name)
+        );
+        assert_eq!(
+            resolve_target(&pool, "2:1").map(|e| &e.name),
+            Some(&e2.name)
+        );
+        assert_eq!(
+            resolve_target(&pool, "[1, 1]").map(|e| &e.name),
+            Some(&e1.name)
+        );
     }
 
     #[test]
@@ -1040,7 +1380,10 @@ mod tests {
         let e1 = entry_with("[1, 1]", "alpha", None);
         let pool: Vec<&tado_ipc::IpcSessionEntry> = vec![&e1];
         let id = e1.session_id.as_hyphenated().to_string();
-        assert_eq!(resolve_target(&pool, &id).map(|e| e.session_id), Some(e1.session_id));
+        assert_eq!(
+            resolve_target(&pool, &id).map(|e| e.session_id),
+            Some(e1.session_id)
+        );
     }
 
     #[test]
@@ -1048,7 +1391,10 @@ mod tests {
         let e1 = entry_with("[1, 1]", "auth-service", None);
         let e2 = entry_with("[1, 2]", "cache-warmer", None);
         let pool: Vec<&tado_ipc::IpcSessionEntry> = vec![&e1, &e2];
-        assert_eq!(resolve_target(&pool, "auth").map(|e| &e.name), Some(&e1.name));
+        assert_eq!(
+            resolve_target(&pool, "auth").map(|e| &e.name),
+            Some(&e1.name)
+        );
     }
 
     #[test]

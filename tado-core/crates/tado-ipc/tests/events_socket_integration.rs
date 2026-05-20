@@ -36,9 +36,7 @@ fn subscribe_and_receive_published_event() {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
-    stream
-        .write_all(b"SUBSCRIBE *\n")
-        .expect("send subscribe");
+    stream.write_all(b"SUBSCRIBE *\n").expect("send subscribe");
 
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut ack = String::new();
@@ -59,7 +57,10 @@ fn subscribe_and_receive_published_event() {
 
     let mut event = String::new();
     reader.read_line(&mut event).expect("read event");
-    assert!(event.contains(r#""kind":"terminal.spawned""#), "got: {event}");
+    assert!(
+        event.contains(r#""kind":"terminal.spawned""#),
+        "got: {event}"
+    );
     assert!(event.contains(r#""session":"abc-123""#), "got: {event}");
     assert!(event.contains(r#""pid":999"#), "got: {event}");
 
@@ -84,7 +85,9 @@ fn subscribe_and_receive_published_event() {
     let mut line2 = String::new();
     assert!(reader2.read_line(&mut line2).is_err() || line2.is_empty());
     let mut event_again = String::new();
-    reader.read_line(&mut event_again).expect("reader 1 gets it");
+    reader
+        .read_line(&mut event_again)
+        .expect("reader 1 gets it");
     assert!(event_again.contains(r#""session":"abc-123""#));
 
     let _ = std::fs::remove_dir_all(&dir);

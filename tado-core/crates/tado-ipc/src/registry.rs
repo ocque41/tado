@@ -66,10 +66,7 @@ pub fn read_entries(paths: &IpcPaths) -> Result<Vec<IpcSessionEntry>, RegistryEr
 ///
 /// Writes via the standard atomic dance (tmp file + rename) so a
 /// reader never observes a partially-written file.
-pub fn write_entries(
-    paths: &IpcPaths,
-    entries: &[IpcSessionEntry],
-) -> Result<(), RegistryError> {
+pub fn write_entries(paths: &IpcPaths, entries: &[IpcSessionEntry]) -> Result<(), RegistryError> {
     let path = paths.registry_json();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -269,7 +266,9 @@ mod tests {
         // The JSON contract is case-insensitive for UUIDs (all
         // consumers compare lowercased), so we normalize before
         // comparing. The rest of the bytes are byte-exact.
-        let normalized = bytes.to_uppercase().replace("\"ENGINE\" : \"CLAUDE\"", "\"engine\" : \"claude\"")
+        let normalized = bytes
+            .to_uppercase()
+            .replace("\"ENGINE\" : \"CLAUDE\"", "\"engine\" : \"claude\"")
             .replace("\"GRIDLABEL\" : \"[1, 1]\"", "\"gridLabel\" : \"[1, 1]\"")
             .replace("\"NAME\" : \"X\"", "\"name\" : \"x\"")
             .replace("\"SESSIONID\"", "\"sessionID\"")

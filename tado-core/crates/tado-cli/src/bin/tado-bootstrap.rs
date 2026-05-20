@@ -14,6 +14,7 @@
 use clap::{Parser, Subcommand};
 use serde_json::json;
 use tado_cli::{control_client, print_response, OutputMode};
+use tado_runtime::{ensure_daemon, profile_from_env};
 
 #[derive(Parser)]
 #[command(name = "tado-bootstrap")]
@@ -23,6 +24,8 @@ struct Cli {
     human: bool,
     #[arg(long, global = true)]
     toon: bool,
+    #[arg(long, global = true, default_value = "claude")]
+    engine: String,
     #[command(subcommand)]
     command: Command,
 }
@@ -63,17 +66,61 @@ fn main() {
         Command::Knowledge { project } => ("bootstrap.knowledge", project),
     };
 
+    if runtime_preferred() {
+        let action = kind.strip_prefix("bootstrap.").unwrap_or(kind);
+        let project_root = tado_cli::disk::resolve_project(&project).map(|p| p.root_path);
+        let exit = match ensure_daemon(&profile_from_env(None)).and_then(|client| {
+            client.call(
+                "bootstrap.request",
+                json!({
+                    "action": action,
+                    "project": project,
+                    "project_root": project_root,
+                    "engine": cli.engine,
+                }),
+            )
+        }) {
+            Ok(resp) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&resp.data.unwrap_or_else(|| json!({})))
+                        .unwrap_or_else(|_| "{}".to_string())
+                );
+                0
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        };
+        std::process::exit(exit);
+    }
+
     let result = control_client::call(kind, json!({ "project": project }));
 
     let exit = match result {
         Ok(resp) => print_response(resp, mode),
         Err(e) => {
             eprintln!("{e}");
-            if let control_client::ControlClientError::Server { data: Some(data), .. } = &e {
+            if let control_client::ControlClientError::Server {
+                data: Some(data), ..
+            } = &e
+            {
                 eprintln!("{}", serde_json::to_string(data).unwrap_or_default());
             }
             1
         }
     };
     std::process::exit(exit);
+}
+
+fn runtime_preferred() -> bool {
+    ["TADO_PROFILE", "TADO_RUNTIME_SOCKET", "TADO_RUNTIME_ID"]
+        .iter()
+        .any(|key| {
+            std::env::var_os(key)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        })
+        || !std::path::Path::new("/tmp/tado-ipc/active-pid").exists()
 }

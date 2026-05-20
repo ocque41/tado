@@ -56,24 +56,22 @@ fn main() {
                 .collect::<Vec<_>>();
             print_json(&json!(payload), mode);
         }
-        Command::Resolve { name } => {
-            match tado_cli::disk::resolve_project(&name) {
-                Some(entry) => {
-                    print_json(
-                        &json!({
-                            "id": entry.id,
-                            "name": entry.name,
-                            "rootPath": entry.root_path,
-                            "createdAt": entry.created_at,
-                        }),
-                        mode,
-                    );
-                }
-                None => {
-                    eprintln!("error [no_match]: no project named '{}'", name);
-                    std::process::exit(1);
-                }
+        Command::Resolve { name } => match tado_cli::disk::resolve_project(&name) {
+            Some(entry) => {
+                print_json(
+                    &json!({
+                        "id": entry.id,
+                        "name": entry.name,
+                        "rootPath": entry.root_path,
+                        "createdAt": entry.created_at,
+                    }),
+                    mode,
+                );
             }
-        }
+            None => {
+                eprintln!("error [no_match]: no project named '{}'", name);
+                std::process::exit(1);
+            }
+        },
     }
 }

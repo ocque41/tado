@@ -25,6 +25,7 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tado_cli::{print_json, OutputMode};
+use tado_runtime::{ensure_daemon, profile_from_env};
 
 #[derive(Parser)]
 #[command(name = "tado-kanban")]
@@ -72,6 +73,11 @@ fn main() {
     let cli = Cli::parse();
     let mode = OutputMode::from_flags(cli.human, cli.toon);
 
+    if runtime_selected() {
+        run_runtime_kanban(cli.command, mode);
+        return;
+    }
+
     let project_root = match resolve_project_root(cli.project.as_deref()) {
         Ok(root) => root,
         Err(msg) => {
@@ -82,12 +88,80 @@ fn main() {
 
     match cli.command {
         Command::List => list(&project_root, mode),
-        Command::Move { card_id, column_key } => {
+        Command::Move {
+            card_id,
+            column_key,
+        } => {
             move_card(&project_root, &card_id, &column_key, mode);
         }
         Command::AddColumn { title, key } => {
             add_column(&project_root, &title, key.as_deref(), mode);
         }
+    }
+}
+
+fn run_runtime_kanban(command: Command, mode: OutputMode) {
+    let client = match ensure_daemon(&profile_from_env(None)) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("error [runtime]: {err}");
+            std::process::exit(1);
+        }
+    };
+    let result = match command {
+        Command::List => client.call("kanban.snapshot", json!({})),
+        Command::Move {
+            card_id,
+            column_key,
+        } => client.call(
+            "kanban.move",
+            json!({ "target": card_id, "lane": column_key }),
+        ),
+        Command::AddColumn { title, key } => client.call(
+            "kanban.add_column",
+            json!({
+                "key": key.unwrap_or_else(|| slug(&title)),
+                "title": title,
+            }),
+        ),
+    };
+    match result {
+        Ok(resp) => print_json(&resp.data.unwrap_or_else(|| json!({})), mode),
+        Err(err) => {
+            eprintln!("error [runtime]: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn runtime_selected() -> bool {
+    ["TADO_PROFILE", "TADO_RUNTIME_SOCKET", "TADO_RUNTIME_ID"]
+        .iter()
+        .any(|key| {
+            std::env::var_os(key)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        })
+}
+
+fn slug(title: &str) -> String {
+    let mut out = title
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    while out.contains("--") {
+        out = out.replace("--", "-");
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        format!(
+            "col-{}",
+            uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
+        )
+    } else {
+        out
     }
 }
 
@@ -146,12 +220,7 @@ fn move_card(project_root: &Path, card_id: &str, column_key: &str, mode: OutputM
     print_inbox_result(result, mode, "moved");
 }
 
-fn add_column(
-    project_root: &Path,
-    title: &str,
-    key: Option<&str>,
-    mode: OutputMode,
-) {
+fn add_column(project_root: &Path, title: &str, key: Option<&str>, mode: OutputMode) {
     let envelope = json!({
         "kind": "add-column",
         "title": title,
@@ -191,11 +260,7 @@ fn drop_inbox_file(
     Ok(path)
 }
 
-fn print_inbox_result(
-    result: Result<PathBuf, String>,
-    mode: OutputMode,
-    verb: &str,
-) {
+fn print_inbox_result(result: Result<PathBuf, String>, mode: OutputMode, verb: &str) {
     match result {
         Ok(path) => {
             print_json(
@@ -219,9 +284,7 @@ fn resolve_project_root(arg: Option<&str>) -> Result<PathBuf, String> {
     let name = arg
         .map(|s| s.to_string())
         .or_else(|| std::env::var("TADO_PROJECT").ok())
-        .ok_or_else(|| {
-            "no project: pass --project <name> or set $TADO_PROJECT".to_string()
-        })?;
+        .ok_or_else(|| "no project: pass --project <name> or set $TADO_PROJECT".to_string())?;
     match tado_cli::disk::resolve_project(&name) {
         Some(entry) => Ok(PathBuf::from(entry.root_path)),
         None => Err(format!("no project named '{}'", name)),

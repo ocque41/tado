@@ -125,8 +125,7 @@ mod tests {
     #[test]
     fn absent_file_is_none() {
         let dir = tempdir().unwrap();
-        let result: Option<Payload> =
-            read_json(dir.path().join("missing.json")).unwrap();
+        let result: Option<Payload> = read_json(dir.path().join("missing.json")).unwrap();
         assert!(result.is_none());
     }
 

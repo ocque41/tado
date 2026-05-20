@@ -202,10 +202,7 @@ async fn handle_connection(stream: UnixStream, mut rx: broadcast::Receiver<Strin
         _ => return,
     };
 
-    let ack = format!(
-        "{}\n",
-        json!({ "type": "subscribed", "filter": filter })
-    );
+    let ack = format!("{}\n", json!({ "type": "subscribed", "filter": filter }));
     if writer.write_all(ack.as_bytes()).await.is_err() {
         return;
     }

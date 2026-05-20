@@ -47,10 +47,12 @@ impl SettingsPaths {
             return Some(PathBuf::from(root));
         }
         let home = std::env::var_os("HOME")?;
-        Some(PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("Tado"))
+        Some(
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Tado"),
+        )
     }
 
     pub fn locator_file_at(default_root: impl AsRef<Path>) -> PathBuf {
@@ -71,7 +73,9 @@ impl SettingsPaths {
         let locator = Self::locator_file_at(default_root);
         let raw = std::fs::read_to_string(locator).ok()?;
         let parsed: StorageLocationRecord = serde_json::from_str(&raw).ok()?;
-        parsed.active_root.filter(|path| !path.as_os_str().is_empty())
+        parsed
+            .active_root
+            .filter(|path| !path.as_os_str().is_empty())
     }
 
     /// Explicit root. Intended for tests.

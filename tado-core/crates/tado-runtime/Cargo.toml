@@ -1,0 +1,40 @@
+#
+# tado-runtime — CLI-owned daemon runtime for profile-isolated Tado sessions.
+#
+# This crate is intentionally separate from the Swift desktop app. The
+# desktop path still owns its existing services by default; this daemon is the
+# Rust runtime used by the `tado` CLI and the Agent OS TUI.
+#
+
+[package]
+name = "tado-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Profile-isolated Rust daemon runtime for Tado CLI sessions."
+
+[lib]
+name = "tado_runtime"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tadod"
+path = "src/bin/tadod.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+rusqlite = { version = "0.38.0", features = ["bundled", "chrono", "serde_json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tado-core = { path = "../tado-terminal" }
+tado-settings = { path = "../tado-settings" }
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net", "io-util", "signal", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

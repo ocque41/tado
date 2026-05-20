@@ -39,7 +39,12 @@ pub struct IpcMessage {
 
 impl IpcMessage {
     /// Create a new message envelope stamped with "now".
-    pub fn new(from: Uuid, from_name: impl Into<String>, to: Uuid, body: impl Into<String>) -> Self {
+    pub fn new(
+        from: Uuid,
+        from_name: impl Into<String>,
+        to: Uuid,
+        body: impl Into<String>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             from,

@@ -117,7 +117,10 @@ mod tests {
     fn stable_root_is_classic_path() {
         let p = IpcPaths::stable();
         assert_eq!(p.root, PathBuf::from("/tmp/tado-ipc"));
-        assert_eq!(p.registry_json(), PathBuf::from("/tmp/tado-ipc/registry.json"));
+        assert_eq!(
+            p.registry_json(),
+            PathBuf::from("/tmp/tado-ipc/registry.json")
+        );
         assert_eq!(p.a2a_inbox(), PathBuf::from("/tmp/tado-ipc/a2a-inbox"));
     }
 

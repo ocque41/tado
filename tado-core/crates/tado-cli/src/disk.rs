@@ -57,7 +57,9 @@ pub fn resolve_project(name: &str) -> Option<ProjectIndexEntry> {
     if let Some(exact) = entries.iter().find(|e| e.name.to_lowercase() == lower) {
         return Some(exact.clone());
     }
-    let substring = entries.iter().find(|e| e.name.to_lowercase().contains(&lower));
+    let substring = entries
+        .iter()
+        .find(|e| e.name.to_lowercase().contains(&lower));
     substring.cloned()
 }
 

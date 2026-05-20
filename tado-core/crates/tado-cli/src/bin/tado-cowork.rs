@@ -30,7 +30,7 @@
 //! takes over.
 
 use std::path::Path;
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 
 #[derive(Debug)]
 struct Args {
@@ -52,22 +52,30 @@ fn parse_args() -> Result<Args, String> {
         match a.as_str() {
             "--prompt" => {
                 i += 1;
-                if i >= argv.len() { return Err("--prompt requires a value".into()); }
+                if i >= argv.len() {
+                    return Err("--prompt requires a value".into());
+                }
                 prompt = Some(argv[i].clone());
             }
             "--folder" => {
                 i += 1;
-                if i >= argv.len() { return Err("--folder requires a value".into()); }
+                if i >= argv.len() {
+                    return Err("--folder requires a value".into());
+                }
                 folder = Some(argv[i].clone());
             }
             "--run-id" => {
                 i += 1;
-                if i >= argv.len() { return Err("--run-id requires a value".into()); }
+                if i >= argv.len() {
+                    return Err("--run-id requires a value".into());
+                }
                 run_id = Some(argv[i].clone());
             }
             "--file" => {
                 i += 1;
-                if i >= argv.len() { return Err("--file requires a value".into()); }
+                if i >= argv.len() {
+                    return Err("--file requires a value".into());
+                }
                 files.push(argv[i].clone());
             }
             "--help" | "-h" => {
@@ -93,14 +101,21 @@ fn parse_args() -> Result<Args, String> {
                 .unwrap_or(0)
         )
     });
-    Ok(Args { prompt, folder, run_id, files })
+    Ok(Args {
+        prompt,
+        folder,
+        run_id,
+        files,
+    })
 }
 
 fn print_usage() {
     eprintln!("tado-cowork — fire claude://cowork/new for the Tado app's ProcessSpawner");
     eprintln!();
     eprintln!("Usage:");
-    eprintln!("  tado-cowork --prompt <text> --folder <abs-path> [--run-id <uuid>] [--file <abs-path>]*");
+    eprintln!(
+        "  tado-cowork --prompt <text> --folder <abs-path> [--run-id <uuid>] [--file <abs-path>]*"
+    );
 }
 
 /// RFC 3986 percent-encoding for query components. We can't use a
@@ -113,8 +128,7 @@ fn encode_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for byte in s.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' => {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char);
             }
             _ => {
@@ -157,9 +171,15 @@ fn claude_desktop_installed() -> bool {
     // installs. The CLI doesn't need to LAUNCH the app — `open(1)`
     // does that — but we want a clear error message if the user
     // doesn't have Claude Desktop installed at all.
-    if Path::new("/Applications/Claude.app").exists() { return true; }
+    if Path::new("/Applications/Claude.app").exists() {
+        return true;
+    }
     let out = Command::new("mdfind")
-        .args(["kMDItemCFBundleIdentifier", "==", "com.anthropic.claudefordesktop"])
+        .args([
+            "kMDItemCFBundleIdentifier",
+            "==",
+            "com.anthropic.claudefordesktop",
+        ])
         .output();
     match out {
         Ok(o) if o.status.success() && !o.stdout.is_empty() => true,
@@ -200,9 +220,7 @@ fn main() {
         args.run_id, args.folder, args.run_id
     );
 
-    let status = Command::new("/usr/bin/open")
-        .arg(&url)
-        .status();
+    let status = Command::new("/usr/bin/open").arg(&url).status();
     match status {
         Ok(s) if s.success() => exit(0),
         Ok(s) => {

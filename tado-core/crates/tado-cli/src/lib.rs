@@ -1,9 +1,10 @@
-//! Shared modules for the coordinator-driven Tado CLIs. The five
-//! binaries in this crate all import from this lib for:
+//! Shared modules for the coordinator-driven Tado CLIs and the CLI-first
+//! Agent OS entrypoints. The binaries in this crate import from this lib for:
 //!
 //! - `control_client` — Unix-socket client that talks to the
 //!   running Tado app's `ControlSocketServer`. Length-prefixed
 //!   JSON request/response, byte-compatible with the Swift side.
+//!   The unified `tado` command uses `tado-runtime` instead.
 //! - `disk` — read-only access to the on-disk artifacts the app
 //!   already maintains (`<storage-root>/projects.json`, run-dir
 //!   `state.json` / `crafted.md`). Lets read-only CLI verbs

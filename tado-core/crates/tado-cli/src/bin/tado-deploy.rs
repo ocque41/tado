@@ -1,6 +1,10 @@
-//! tado-deploy — drop a SpawnRequest envelope into the running
-//! Tado app's `<ipcRoot>/spawn-requests/` so the broker spawns a
-//! new agent tile.
+//! tado-deploy — deploy a new agent session.
+//!
+//! In CLI-runtime mode (`TADO_PROFILE`, `TADO_RUNTIME_SOCKET`, or no desktop
+//! IPC root), this talks to `tadod` and spawns the session directly. In desktop
+//! mode it preserves the existing behavior: drop a SpawnRequest envelope into
+//! the running Tado app's `<ipcRoot>/spawn-requests/` so the broker spawns a
+//! visible canvas tile.
 //!
 //! Replaces the legacy 80-line bash + Python heredoc that
 //! `IPCBroker.writeExternalTadoDeploy` used to materialize on
@@ -22,6 +26,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use tado_runtime::{ensure_daemon, profile_from_env};
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -52,7 +57,8 @@ struct Cli {
     #[arg(long)]
     project: Option<String>,
 
-    /// Engine: `claude` or `codex`. Defaults to `$TADO_ENGINE`.
+    /// Engine: `claude`, `codex`, `cowork`, or `shell` in CLI-runtime mode.
+    /// Defaults to `$TADO_ENGINE`, then `claude`.
     #[arg(long)]
     engine: Option<String>,
 
@@ -71,8 +77,42 @@ fn main() -> ExitCode {
     let cwd = cli.cwd.or_else(|| env::var("TADO_PROJECT_ROOT").ok());
     let requested_by = env::var("TADO_SESSION_ID").ok();
 
-    let ipc_root_str =
-        env::var("TADO_IPC_ROOT").unwrap_or_else(|_| "/tmp/tado-ipc".to_string());
+    let ipc_root_str = env::var("TADO_IPC_ROOT").unwrap_or_else(|_| "/tmp/tado-ipc".to_string());
+    let runtime_preferred = env::var_os("TADO_RUNTIME_SOCKET").is_some()
+        || env::var_os("TADO_RUNTIME_ID").is_some()
+        || env::var_os("TADO_PROFILE").is_some();
+    let desktop_ipc_exists = PathBuf::from(&ipc_root_str).exists();
+    if runtime_preferred || !desktop_ipc_exists {
+        match deploy_runtime(
+            &cli.prompt,
+            &project,
+            &team,
+            &engine,
+            &cwd,
+            &requested_by,
+            &cli.agent,
+        ) {
+            Ok(session_id) => {
+                println!("Deploy request submitted to Tado runtime: {}", session_id);
+                if let Some(a) = &cli.agent {
+                    println!("  Agent: {}", a);
+                }
+                if let Some(p) = &project {
+                    println!("  Project: {}", p);
+                }
+                return ExitCode::SUCCESS;
+            }
+            Err(err) if runtime_preferred => {
+                eprintln!("tado-deploy: runtime deploy failed: {err}");
+                return ExitCode::from(1);
+            }
+            Err(_) => {
+                // Fall through to the desktop IPC path when the user did not
+                // explicitly select a runtime profile.
+            }
+        }
+    }
+
     let ipc_root = PathBuf::from(&ipc_root_str);
     let ipc_root_dir = if ipc_root.is_symlink() {
         match fs::read_link(&ipc_root) {
@@ -155,4 +195,52 @@ fn main() -> ExitCode {
         println!("  Project: {}", p);
     }
     ExitCode::SUCCESS
+}
+
+fn deploy_runtime(
+    prompt: &str,
+    project: &Option<String>,
+    team: &Option<String>,
+    engine: &Option<String>,
+    cwd: &Option<String>,
+    requested_by: &Option<String>,
+    agent: &Option<String>,
+) -> Result<String, String> {
+    let profile = profile_from_env(None);
+    let client = ensure_daemon(&profile).map_err(|e| e.to_string())?;
+    let selected_engine = engine.as_deref().unwrap_or("claude");
+    let mut env_pairs = Vec::new();
+    if let Some(project) = project {
+        env_pairs.push(json!(["TADO_PROJECT_NAME", project]));
+    }
+    if let Some(team) = team {
+        env_pairs.push(json!(["TADO_TEAM_NAME", team]));
+    }
+    if let Some(requested_by) = requested_by {
+        env_pairs.push(json!(["TADO_REQUESTED_BY", requested_by]));
+    }
+    if let Some(agent) = agent {
+        env_pairs.push(json!(["TADO_AGENT_NAME", agent]));
+    }
+    let response = client
+        .call(
+            "session.spawn",
+            json!({
+                "engine": selected_engine,
+                "prompt": prompt,
+                "command": prompt,
+                "title": agent.as_deref().unwrap_or(prompt),
+                "cwd": cwd,
+                "project_id": project,
+                "project_root": cwd,
+                "agent_name": agent,
+                "team_name": team,
+                "env": env_pairs,
+            }),
+        )
+        .map_err(|e| e.to_string())?;
+    response
+        .data
+        .and_then(|data| data.get("session")?.get("id")?.as_str().map(str::to_string))
+        .ok_or_else(|| "runtime response did not include session.id".to_string())
 }

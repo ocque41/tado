@@ -62,10 +62,7 @@ async fn code_register(client: &RpcClient, flags: HashMap<String, String>) -> Re
         .cloned()
         .or_else(|| std::env::var("TADO_PROJECT_ROOT").ok())
         .ok_or_else(|| anyhow!("--root <path> is required (or set TADO_PROJECT_ROOT)"))?;
-    let enabled = flags
-        .get("disabled")
-        .map(|_| false)
-        .unwrap_or(true);
+    let enabled = flags.get("disabled").map(|_| false).unwrap_or(true);
     client
         .call(
             "code.project.register",
@@ -171,15 +168,27 @@ async fn wait_for_index(client: &RpcClient, flags: HashMap<String, String>) -> R
             .call("code.index_status", json!({ "project_id": project_id }))
             .await
             .map_err(|e| anyhow!(e.to_string()))?;
-        let running = status.get("running").and_then(Value::as_bool).unwrap_or(false);
+        let running = status
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let err: Option<String> = status
             .get("error")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let files_done = status.get("files_done").and_then(Value::as_i64).unwrap_or(0);
-        let files_total = status.get("files_total").and_then(Value::as_i64).unwrap_or(0);
-        let chunks_done = status.get("chunks_done").and_then(Value::as_i64).unwrap_or(0);
+        let files_done = status
+            .get("files_done")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let files_total = status
+            .get("files_total")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let chunks_done = status
+            .get("chunks_done")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
 
         if !running {
             if toon {
@@ -205,9 +214,7 @@ async fn wait_for_index(client: &RpcClient, flags: HashMap<String, String>) -> R
             std::process::exit(1);
         }
         if !toon {
-            eprint!(
-                "\rwaiting: {files_done}/{files_total} files · {chunks_done} chunks"
-            );
+            eprint!("\rwaiting: {files_done}/{files_total} files · {chunks_done} chunks");
             use std::io::Write as _;
             std::io::stderr().flush().ok();
         }
@@ -478,9 +485,9 @@ fn parse_flags(args: Vec<String>) -> Result<HashMap<String, String>> {
     let mut out = HashMap::new();
     let mut i = 0;
     while i < args.len() {
-        let key = args[i].strip_prefix("--").ok_or_else(|| {
-            anyhow!("expected flag like --title, got `{}`", args[i])
-        })?;
+        let key = args[i]
+            .strip_prefix("--")
+            .ok_or_else(|| anyhow!("expected flag like --title, got `{}`", args[i]))?;
         let value = args
             .get(i + 1)
             .ok_or_else(|| anyhow!("missing value for --{key}"))?;
@@ -529,7 +536,10 @@ fn project_id_for(scope: &str, flags: &HashMap<String, String>) -> Result<Option
 fn default_topic(scope: &str, project_id: Option<&str>) -> String {
     match (scope, project_id) {
         ("project", Some(id)) | ("merged", Some(id)) => {
-            format!("project-{}", id.chars().take(8).collect::<String>().to_lowercase())
+            format!(
+                "project-{}",
+                id.chars().take(8).collect::<String>().to_lowercase()
+            )
         }
         _ => "global".to_string(),
     }

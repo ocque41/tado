@@ -72,10 +72,8 @@ mod tests {
     use uuid::Uuid;
 
     fn tempdir() -> std::path::PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "tado-ipc-test-{}",
-            Uuid::new_v4().as_hyphenated()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("tado-ipc-test-{}", Uuid::new_v4().as_hyphenated()));
         fs::create_dir_all(&base).unwrap();
         fs::create_dir_all(base.join("a2a-inbox")).unwrap();
         base
@@ -86,12 +84,7 @@ mod tests {
         let root = tempdir();
         let paths = IpcPaths::at(&root);
         let to = Uuid::new_v4();
-        let msg = IpcMessage::new(
-            IpcMessage::external_origin_uuid(),
-            "dome test",
-            to,
-            "hello",
-        );
+        let msg = IpcMessage::new(IpcMessage::external_origin_uuid(), "dome test", to, "hello");
         let written = write_external_message(&paths, &msg).unwrap();
         assert!(written.exists());
         // Round-trip the written file through the decoder.

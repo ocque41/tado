@@ -12,8 +12,9 @@
 //!   list [--project <name>] [--state <state>]
 
 use clap::{Parser, Subcommand};
-use serde_json::json;
+use serde_json::{json, Value};
 use tado_cli::{control_client, print_response, OutputMode};
+use tado_runtime::{ensure_daemon, profile_from_env};
 
 #[derive(Parser)]
 #[command(name = "tado-eternal")]
@@ -79,6 +80,26 @@ fn main() {
     let cli = Cli::parse();
     let mode = OutputMode::from_flags(cli.human, cli.toon);
 
+    if runtime_selected() {
+        let exit = match runtime_eternal(cli.command) {
+            Ok(data) => {
+                match mode {
+                    OutputMode::Human => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&data).unwrap_or_default()
+                    ),
+                    _ => println!("{data}"),
+                }
+                0
+            }
+            Err(err) => {
+                eprintln!("{err}");
+                1
+            }
+        };
+        std::process::exit(exit);
+    }
+
     let result = match cli.command {
         Command::Propose {
             project,
@@ -116,7 +137,11 @@ fn main() {
             }
             control_client::call("eternal.accept", payload)
         }
-        Command::Reject { run_id, reason, rebrief } => {
+        Command::Reject {
+            run_id,
+            reason,
+            rebrief,
+        } => {
             let mut payload = json!({ "run_id": run_id, "reason": reason });
             if let Some(r) = rebrief {
                 payload["rebrief"] = json!(r);
@@ -145,11 +170,75 @@ fn main() {
             // Surface server-side error data when present so callers
             // can pattern-match on shape (state_mismatch + actual,
             // no_project + candidates, etc.).
-            if let control_client::ControlClientError::Server { data: Some(data), .. } = &e {
+            if let control_client::ControlClientError::Server {
+                data: Some(data), ..
+            } = &e
+            {
                 eprintln!("{}", serde_json::to_string(data).unwrap_or_default());
             }
             1
         }
     };
     std::process::exit(exit);
+}
+
+fn runtime_eternal(command: Command) -> anyhow::Result<Value> {
+    let client = ensure_daemon(&profile_from_env(None))?;
+    let response = match command {
+        Command::Propose {
+            project,
+            feature,
+            task,
+            mode,
+            engine,
+            coordinator_todo_id,
+            label,
+        } => client.call(
+            "workflow.propose",
+            json!({
+                "kind": "eternal",
+                "project": project,
+                "feature": feature,
+                "task": task,
+                "mode": mode,
+                "engine": engine,
+                "coordinator_todo_id": coordinator_todo_id,
+                "label": label,
+            }),
+        )?,
+        Command::Status { run_id } => {
+            client.call("workflow.status", json!({ "run_id": run_id }))?
+        }
+        Command::Crafted { run_id } => {
+            client.call("workflow.crafted", json!({ "run_id": run_id }))?
+        }
+        Command::Accept { run_id, note } => {
+            client.call("workflow.accept", json!({ "run_id": run_id, "note": note }))?
+        }
+        Command::Reject {
+            run_id,
+            reason,
+            rebrief,
+        } => client.call(
+            "workflow.reject",
+            json!({ "run_id": run_id, "reason": reason, "rebrief": rebrief }),
+        )?,
+        Command::Stop { run_id } => client.call("workflow.stop", json!({ "run_id": run_id }))?,
+        Command::List { project, state } => client.call(
+            "workflow.list",
+            json!({ "kind": "eternal", "project": project, "state": state }),
+        )?,
+    };
+    Ok(response.data.unwrap_or_else(|| json!({})))
+}
+
+fn runtime_selected() -> bool {
+    ["TADO_PROFILE", "TADO_RUNTIME_SOCKET", "TADO_RUNTIME_ID"]
+        .iter()
+        .any(|key| {
+            std::env::var_os(key)
+                .map(|value| !value.is_empty())
+                .unwrap_or(false)
+        })
+        || !std::path::Path::new("/tmp/tado-ipc/active-pid").exists()
 }

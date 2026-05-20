@@ -19,8 +19,12 @@ pub enum OutputMode {
 
 impl OutputMode {
     pub fn from_flags(human: bool, toon: bool) -> Self {
-        if toon { return Self::Toon; }
-        if human { return Self::Human; }
+        if toon {
+            return Self::Toon;
+        }
+        if human {
+            return Self::Human;
+        }
         Self::Json
     }
 }
@@ -31,7 +35,10 @@ pub fn print_json(value: &Value, mode: OutputMode) {
             println!("{}", value);
         }
         OutputMode::Human => {
-            println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(value).unwrap_or_default()
+            );
         }
         OutputMode::Toon => {
             print_toon(value);
