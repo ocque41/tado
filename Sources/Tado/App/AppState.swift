@@ -6,7 +6,7 @@ enum ViewMode: String, CaseIterable, Equatable {
     /// (running agents, queued prompts, aggregate token / cost stats).
     /// Deliberately listed first so `Ctrl+Tab` cycling treats it as
     /// the canonical home; the four contextual workspaces follow.
-    /// Note: `TopNavBar` iterates an explicit list `[.canvas, .projects,
+    /// Note: `RelayTopNavBar` iterates an explicit list `[.todos, .canvas,
     /// .todos, .extensions]` for the four-cell strip — the wordmark is
     /// the affordance for `.details`, not a fifth cell.
     case details
@@ -483,15 +483,14 @@ final class AppState {
         }
         return UUID(uuidString: raw)
     }
-    /// Set to true from the top nav bar's actions menu to ask
-    /// `ProjectDetailView` to expand its inline new-team form. The
-    /// detail view binds its `showNewTeamInProject` flag to this so the
-    /// nav bar can drive a piece of UI it doesn't render itself.
+    /// Set to true by project actions to ask `RelayProjectDetailView`
+    /// to expand its inline new-team form. The detail view binds its
+    /// `showNewTeamInProject` flag to this so project-level controls
+    /// can drive a piece of UI they do not render themselves.
     var showNewTeamForActiveProject: Bool = false
-    /// Drives the New Project sheet. Lifted out of `ProjectListView`
-    /// so the top nav bar can present the sheet from its right-side
-    /// "+ New Project" affordance — and so the sheet keeps working
-    /// regardless of which sub-view of `ProjectsView` is mounted.
+    /// Drives the New Project sheet. Stored centrally so the Relay
+    /// project grid and any project-scoped action can present the same
+    /// sheet without owning separate modal state.
     var showNewProjectSheet: Bool = false
     /// Which `DispatchRun`'s brief-editor modal is open. Non-nil = sheet
     /// presented, nil = dismissed. Set by the "New Dispatch" / "Edit"
@@ -561,13 +560,12 @@ enum CraftedReviewKind: String, Codable {
     case eternal
 }
 
-/// Per-project page-mode toggle on the Projects page. `detail` (default)
-/// renders the existing `ProjectDetailView` with its Dispatch / Eternal
-/// / Add Todo / Todos / Agents zones. `kanban` swaps the body for
-/// `ProjectKanbanView` — a per-project board of user-managed columns
-/// with todos as cards. The toggle lives on `AppState` (not on
-/// `Project`) so it doesn't get persisted to disk; it's a UI affordance,
-/// not durable state. Matches how `ViewMode` is structured.
+/// Per-project page-mode toggle on the Projects page. `detail`
+/// renders `RelayProjectDetailView` with Dispatch / Eternal / Add Todo
+/// / Todos / Agents / Knowledge zones. `kanban` swaps the body for
+/// `ProjectKanbanView`, the per-project board. The toggle lives on
+/// `AppState` (not on `Project`) so it remains a UI affordance rather
+/// than durable project state.
 enum ProjectPageMode: String, CaseIterable, Equatable {
     case detail
     case kanban

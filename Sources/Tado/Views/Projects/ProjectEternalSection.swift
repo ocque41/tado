@@ -63,7 +63,7 @@ struct ProjectEternalSection: View {
     var body: some View {
         // Section header (ETERNAL label + count + "New Mega" /
         // "New Sprint" buttons) is now drawn by the parent
-        // `SectionRail` in `ProjectDetailView`. The body only
+        // Relay section in `RelayProjectDetailView`. The body only
         // renders the runs list + archived disclosure + the
         // empty-state block.
         VStack(alignment: .leading, spacing: 10) {

@@ -107,7 +107,7 @@ struct TadoUsePanel: View {
 
     // MARK: - Header (brand + agent badge + actions)
 
-    /// Brand-aligned header. Mirrors `TopNavBar.brandCell`'s shape:
+    /// Brand-aligned header. Mirrors `RelayTopNavBar`'s brand shape:
     /// terracotta accent dot + Tado wordmark + "Use" sub-label, so
     /// the drawer reads as a first-class Tado surface, not a
     /// bolt-on extension.

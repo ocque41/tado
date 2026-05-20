@@ -283,10 +283,10 @@ struct CanvasView: View {
             .offset(offset)
             // Do NOT wrap with .frame + .clipped here. It was used to
             // prevent a tile near the canvas origin from bleeding into
-            // the TopNavBar's hit region, but clipping also blocks
+            // the RelayTopNavBar's hit region, but clipping also blocks
             // AppKit mouse-event delivery to every child MTKView that
             // extends past the clip rect — which kills scrollback,
-            // tile drag, and resize gestures. The TopNavBar is
+            // tile drag, and resize gestures. The RelayTopNavBar is
             // protected instead by `.zIndex(1)` in ContentView, which
             // wins hit-testing without clipping canvas children.
             .onAppear {

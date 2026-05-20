@@ -1,8 +1,6 @@
 // Relay-redesigned per-project detail view.
 //
-// Replaces ProjectDetailView's legacy DesignKit chrome
-// (PageContainer / PageHeader / MetaStrip / SectionRail /
-// OutlineButton) with Relay primitives. The inner section contents
+// Project detail surface built with Relay primitives. The inner section contents
 // (ProjectDispatchSection / ProjectEternalSection / ProjectTodoInput
 // / ProjectTodosSection / ProjectAgentsSection / ProjectKnowledgeView)
 // keep their existing implementations — only the wrapping shell
@@ -275,7 +273,7 @@ struct RelayProjectDetailView: View {
         return "\(unassigned) unassigned · \(inFlight) in-flight."
     }
 
-    // MARK: - Mutations (mirror ProjectDetailView)
+    // MARK: - Mutations
 
     private func createDispatchAndEdit() {
         let run = DispatchRun(

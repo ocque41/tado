@@ -11,6 +11,7 @@ import SwiftData
 /// Offline state doesn't disable the tabs — each surface handles
 /// nil-returning FFI calls gracefully and shows its own placeholder.
 struct DomeRootView: View {
+    @Environment(\.relayTheme) private var theme
     @Query(sort: \Project.createdAt) private var projects: [Project]
     /// Cross-surface state lives on `DomeAppState`. Per-surface state
     /// (`activeKnowledgePage`, `knowledgeExpanded`) stays local — see the
@@ -44,19 +45,19 @@ struct DomeRootView: View {
                 sidebar(compact: compact)
                     .frame(width: compact ? 52 : 220)
                 Rectangle()
-                    .fill(Palette.rule)
-                    .frame(width: DK.ruleW)
+                    .fill(RelayPalette.hair(for: theme))
+                    .frame(width: 1)
                 VStack(spacing: 0) {
                     domeNavbar(compact: compact)
                     Rectangle()
-                        .fill(Palette.rule)
-                        .frame(height: DK.ruleW)
+                        .fill(RelayPalette.hair(for: theme))
+                        .frame(height: 1)
                     surfaceContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
-        .background(Palette.bgPage)
+        .background(RelayPalette.background(for: theme))
         // Phase 9 — theme inherited from RelayThemeStore at the
         // WindowGroup root; the historical hardcoded `.dark` is
         // dropped so the user's paper/ink choice flows through.
@@ -148,7 +149,7 @@ struct DomeRootView: View {
             .pickerStyle(.menu)
             .frame(minWidth: 100, idealWidth: 220, maxWidth: 220, alignment: .leading)
             .layoutPriority(1)
-            .tint(Palette.ink2)
+            .tint(RelayPalette.foreground2(for: theme))
             .help("Choose Global common knowledge or a project overlay.")
 
             if selectedProject != nil {
@@ -156,12 +157,12 @@ struct DomeRootView: View {
                     if compact {
                         Label("Global", systemImage: "globe")
                             .font(Typography.caption)
-                            .foregroundStyle(Palette.ink2)
+                            .foregroundStyle(RelayPalette.foreground2(for: theme))
                             .labelStyle(.iconOnly)
                     } else {
                         Label("Global", systemImage: "globe")
                             .font(Typography.caption)
-                            .foregroundStyle(Palette.ink2)
+                            .foregroundStyle(RelayPalette.foreground2(for: theme))
                     }
                 }
                 .toggleStyle(.switch)
@@ -173,15 +174,15 @@ struct DomeRootView: View {
 
                 if !compact {
                     Rectangle()
-                        .fill(Palette.rule)
-                        .frame(width: DK.ruleW, height: 18)
+                        .fill(RelayPalette.hair(for: theme))
+                        .frame(width: 1, height: 18)
                 }
             }
 
             if !compact {
                 Text(scopeSubtitle)
                     .font(Typography.monoCaption)
-                    .foregroundStyle(Palette.ink3)
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(0)
@@ -195,7 +196,7 @@ struct DomeRootView: View {
         }
         .padding(.horizontal, compact ? 8 : 16)
         .padding(.vertical, 10)
-        .background(Palette.bgElev)
+        .background(RelayPalette.background(for: theme))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Dome navigation")
     }
@@ -263,8 +264,8 @@ struct DomeRootView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(compact: compact)
             Rectangle()
-                .fill(Palette.rule)
-                .frame(height: DK.ruleW)
+                .fill(RelayPalette.hair(for: theme))
+                .frame(height: 1)
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(DomeSurfaceTab.allCases) { tab in
                     if tab == .knowledge {
@@ -279,7 +280,7 @@ struct DomeRootView: View {
             Spacer()
             statusFooter(compact: compact)
         }
-        .background(Palette.bgElev)
+        .background(RelayPalette.background(for: theme))
     }
 
     /// Sidebar header — Relay brand mark + "DOME" + caption.
@@ -293,14 +294,14 @@ struct DomeRootView: View {
                     Text("DOME")
                         .font(Typography.sans(size: 11, weight: .semibold))
                         .tracking(RelayTracking.brand(11))
-                        .foregroundStyle(Palette.ink)
+                        .foregroundStyle(RelayPalette.foreground(for: theme))
                 }
             }
             if !compact {
                 Text("SECOND BRAIN")
                     .font(Typography.sans(size: 9, weight: .regular))
                     .tracking(RelayTracking.caps(9))
-                    .foregroundStyle(Palette.ink3)
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
             }
         }
         .padding(.horizontal, compact ? 8 : 14)
@@ -336,15 +337,15 @@ struct DomeRootView: View {
                 Spacer(minLength: 0)
             }
         }
-        .foregroundStyle(active ? Palette.ink : Palette.ink2)
+        .foregroundStyle(active ? RelayPalette.foreground(for: theme) : RelayPalette.foreground2(for: theme))
         .padding(.horizontal, compact ? 0 : 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-        .background(active ? Palette.bgRowHi : Color.clear)
+        .background(active ? RelayPalette.wash(for: theme) : Color.clear)
         .overlay(alignment: .leading) {
             if active {
                 Rectangle()
-                    .fill(Palette.accent)
+                    .fill(RelayPalette.terracotta)
                     .frame(width: 2)
             }
         }
@@ -369,18 +370,18 @@ struct DomeRootView: View {
                         Spacer(minLength: 0)
                         Image(systemName: knowledgeExpanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Palette.ink4)
+                            .foregroundStyle(RelayPalette.foreground4(for: theme))
                     }
                 }
-                .foregroundStyle(active ? Palette.ink : Palette.ink2)
+                .foregroundStyle(active ? RelayPalette.foreground(for: theme) : RelayPalette.foreground2(for: theme))
                 .padding(.horizontal, compact ? 0 : 10)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-                .background(active ? Palette.bgRowHi : Color.clear)
+                .background(active ? RelayPalette.wash(for: theme) : Color.clear)
                 .overlay(alignment: .leading) {
                     if active {
                         Rectangle()
-                            .fill(Palette.accent)
+                            .fill(RelayPalette.terracotta)
                             .frame(width: 2)
                     }
                 }
@@ -415,7 +416,7 @@ struct DomeRootView: View {
                     .font(Font.system(size: 11, weight: .regular))
                 Spacer()
             }
-            .foregroundStyle(active ? Palette.ink : Palette.ink3)
+            .foregroundStyle(active ? RelayPalette.foreground(for: theme) : RelayPalette.foreground3(for: theme))
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
@@ -427,7 +428,7 @@ struct DomeRootView: View {
     }
 
     /// Sidebar status footer — small live dot + mono micro label.
-    /// Visually aligned with the `UserChip` in TopNavBar so the
+    /// Visually aligned with the workspace chip in RelayTopNavBar so the
     /// reading is consistent: green = live daemon, amber = work in
     /// flight, ink4 = idle / starting.
     private func statusFooter(compact: Bool) -> some View {
@@ -439,7 +440,7 @@ struct DomeRootView: View {
                 Text(statusLabel.uppercased())
                     .font(Font.system(size: 10, weight: .regular, design: .monospaced))
                     .tracking(0.6)
-                    .foregroundStyle(Palette.ink3)
+                    .foregroundStyle(RelayPalette.foreground3(for: theme))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -447,12 +448,12 @@ struct DomeRootView: View {
         .padding(.horizontal, compact ? 8 : 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: compact ? .center : .leading)
-        .background(Palette.bgPage)
+        .background(RelayPalette.wash(for: theme))
         .help(compact ? statusLabel : "")
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(Palette.rule)
-                .frame(height: DK.ruleW)
+                .fill(RelayPalette.hair(for: theme))
+                .frame(height: 1)
         }
     }
 
@@ -465,10 +466,10 @@ struct DomeRootView: View {
 
     private var statusTint: Color {
         switch latestDomeEvent?.type {
-        case "dome.daemonStarted": return Palette.green
-        case "dome.daemonFailed": return Palette.danger
-        case "dome.modelDownloading": return Palette.warning
-        default: return Palette.ink4
+        case "dome.daemonStarted": return RelayPalette.foreground2(for: theme)
+        case "dome.daemonFailed": return RelayPalette.terracotta
+        case "dome.modelDownloading": return RelayPalette.terracotta.opacity(0.72)
+        default: return RelayPalette.foreground4(for: theme)
         }
     }
 

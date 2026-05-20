@@ -2214,6 +2214,5 @@ private struct KnowledgeSystemSurface: View {
 // v0.11 so AutomationSurface + RecipesSurface (and future
 // surfaces) can share them without copy-paste. The local `empty(…)`
 // callers were renamed to `surfaceEmpty(…)` at the same time.
-// The Knowledge → Graph surface itself moved out to
-// KnowledgeGraphSurface.swift in v0.18.0 and is now a tri-modal
-// editorial surface (Index cover · Orbital · Ledger).
+// The Knowledge graph surface lives in KnowledgeGraphSurface.swift as
+// one native map plus inspector. The old ledger mode was removed.

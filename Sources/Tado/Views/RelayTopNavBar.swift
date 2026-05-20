@@ -86,9 +86,8 @@ struct RelayTopNavBar: View {
     // MARK: - Notifications bell
 
     /// Topbar bell — opens the Notifications extension window.
-    /// Replaces the old SidebarView bell which is no longer the
-    /// default route in. Always visible (no width-collapse) because
-    /// it's the only persistent path to the event ledger.
+    /// Always visible because it is the persistent route to the
+    /// notification history.
     private var notificationsBell: some View {
         Button(action: {
             openWindow(id: ExtensionWindowID.string(for: NotificationsExtension.manifest.id))
@@ -103,7 +102,7 @@ struct RelayTopNavBar: View {
                 )
         }
         .buttonStyle(.plain)
-        .help("Notifications · event log")
+        .help("Notifications · history")
     }
 
     // MARK: - Brand mark
@@ -185,7 +184,7 @@ struct RelayTopNavBar: View {
     }
 
     private var chipLabel: String {
-        // Match TopNavBar's old logic: active project name or "tado · core".
+        // Active project name or the default core workspace.
         if let id = appState.activeProjectID {
             // ContentView injects ModelContext; the workspace name
             // is best read from there. For now show "tado · core".

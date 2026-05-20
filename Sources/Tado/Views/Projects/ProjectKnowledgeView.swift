@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// Per-project knowledge section embedded in `ProjectDetailView`.
+/// Per-project knowledge section embedded in `RelayProjectDetailView`.
 ///
 /// Solves the v1.0 "vault soup" problem: every project's knowledge
 /// piles into one global Dome vault, the **Ingest codebase** /

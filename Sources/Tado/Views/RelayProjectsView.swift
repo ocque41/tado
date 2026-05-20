@@ -1,11 +1,8 @@
 // Relay Projects landing surface per brief section 6.5.
 //
-// Page anatomy + a 2-column grid of project cards. Clicking a card
-// drills into the existing ProjectDetailView (preserved via the
-// .projects route's existing ProjectsView). For Phase 7 the
-// landing replaces the legacy ProjectListView's chrome; the
-// detail view (when a project is selected) still falls through
-// to the legacy ProjectsView.
+// Page anatomy + a 2-column grid of project cards. This is the only
+// Projects route: list, review, detail, and per-project Kanban all
+// flow through this Relay surface.
 
 import SwiftUI
 import SwiftData
@@ -20,9 +17,7 @@ struct RelayProjectsView: View {
 
     var body: some View {
         // Drill-down: when an active project is selected, render
-        // either the Relay-redesigned detail view or the per-
-        // project Kanban board, mirroring the legacy
-        // ProjectsView.body switch.
+        // either the Relay detail view or the per-project Kanban board.
         if let id = appState.activeProjectID,
            let project = projects.first(where: { $0.id == id }) {
             if appState.projectPageMode == .kanban {

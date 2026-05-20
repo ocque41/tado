@@ -9,10 +9,9 @@ import SwiftUI
 ///   remove button (−). Below the agents, a FlowLayout of unassigned
 ///   agents lets the user add members as one-tap chips.
 ///
-/// This replaces the old flat `teamSection` helper in
-/// `ProjectDetailView` — same data, clearer visual hierarchy, and
-/// the destructive "Delete team" action is one click deeper (in the
-/// ••• menu) so it can't be hit accidentally while navigating.
+/// This keeps the project detail team hierarchy compact while making
+/// the destructive "Delete team" action one click deeper, so it cannot
+/// be hit accidentally while navigating.
 struct ProjectTeamDisclosure: View {
     let team: Team
     let agents: [AgentDefinition]

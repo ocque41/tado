@@ -390,6 +390,37 @@ final class TadoCoreSessionTests: XCTestCase {
         XCTAssertTrue(saw, "expected 'hello-from-spawner' to land in the grid")
     }
 
+    func testDesktopSpawnerScrubsCliRuntimeEnvironmentByDefault() throws {
+        setenv("TADO_PROFILE", "cli-profile", 1)
+        setenv("TADO_RUNTIME_SOCKET", "/tmp/tado-runtime-test.sock", 1)
+        setenv("TADO_RUNTIME_ID", "runtime-id", 1)
+        unsetenv("TADO_DESKTOP_ALLOW_RUNTIME_ENV")
+        defer {
+            unsetenv("TADO_PROFILE")
+            unsetenv("TADO_RUNTIME_SOCKET")
+            unsetenv("TADO_RUNTIME_ID")
+            unsetenv("TADO_DESKTOP_ALLOW_RUNTIME_ENV")
+        }
+
+        let tmpIPC = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("tado-ipc-\(UUID().uuidString)")
+        let env = ProcessSpawner.environment(
+            sessionID: UUID(),
+            sessionName: "env",
+            engine: .claude,
+            ipcRoot: tmpIPC
+        )
+        let keys = Set(env.compactMap { entry -> String? in
+            guard let eq = entry.firstIndex(of: "=") else { return nil }
+            return String(entry[entry.startIndex..<eq])
+        })
+
+        XCTAssertFalse(keys.contains("TADO_PROFILE"))
+        XCTAssertFalse(keys.contains("TADO_RUNTIME_SOCKET"))
+        XCTAssertFalse(keys.contains("TADO_RUNTIME_ID"))
+        XCTAssertTrue(keys.contains("TADO_IPC_ROOT"))
+    }
+
     /// Diagnostic for the "letters appear spaced out" symptom in Metal
     /// tiles. Spawns /bin/echo hello and inspects cell attrs. Expects
     /// each letter to occupy exactly one cell with attrs 0 (no

@@ -156,8 +156,7 @@ final class PolishTests: XCTestCase {
         let diffMs = ms(since: t2)
         XCTAssertLessThanOrEqual(diffMs, 25.0)
 
-        // (ForceLayout fallback budget removed: the type was deleted
-        // in v1.0.0 along with the deprecated graph-canvas code path.)
+        // Deprecated graph fallback budget removed with the old graph-canvas code path.
 
         // Together lens — there's no brief-quoted ceiling for this
         // helper since it's a pure scope filter, but it runs on every

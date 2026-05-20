@@ -1,10 +1,10 @@
 import Foundation
 import SwiftData
 
-/// Stateless helper for the project-level actions that used to live
-/// inline in `ProjectListView` and `ProjectDetailView`. Now also called
-/// from `TopNavBar`, so the three call sites share one implementation
-/// instead of drifting copies of bootstrap/delete logic.
+/// Stateless helper for project-level actions shared by
+/// `RelayProjectsView`, `RelayProjectDetailView`, and the per-project
+/// Kanban surface. Keeping the mutations here prevents bootstrap,
+/// dispatch, and delete behavior from drifting across project views.
 @MainActor
 enum ProjectActionsService {
     /// Spawn a tile that bootstraps the Tado A2A CLI tools into the

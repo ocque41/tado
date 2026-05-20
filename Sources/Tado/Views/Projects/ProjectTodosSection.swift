@@ -37,7 +37,7 @@ struct ProjectTodosSection: View {
 
     var body: some View {
         // The "TODOS" overline + count + actions are now drawn by
-        // the parent `SectionRail` in `ProjectDetailView`. The body
+        // the parent Relay section in `RelayProjectDetailView`. The body
         // contributes only the inline new-team form (when armed)
         // and the INBOX + per-team disclosures.
         VStack(alignment: .leading, spacing: 8) {
