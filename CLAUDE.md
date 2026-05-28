@@ -283,6 +283,17 @@ shell-escaped flags including `--model` / `--effort`) → Rust
 `tado-terminal` spawns the PTY via `portable-pty`, parses VT sequences in
 `performer.rs`, and snapshots the cell grid for the renderer to draw.
 
+**Advisor mode:** `global.json` stores `engine.advisor`. When enabled,
+normal todo spawns create two visible tiles: the original slot becomes the
+executioner and the next free grid slot becomes the advisor. Dispatch,
+Eternal, coordinator todos, Tado Use, `tado-deploy`, and explicit TUI
+`/claude` / `/codex` commands keep their existing direct spawn paths. The
+executioner gets a role prompt and waits. The advisor gets the user task,
+the executioner UUID/grid target, and short-step rules. Desktop uses
+`AdvisorRelay` to send deterministic clipped output tails to the advisor;
+the CLI runtime keeps an in-memory `advisor.link` pair and relays compact
+executioner transcript output through `tadod`.
+
 **Metal renderer:** The terminal view is a Metal pipeline
 (`MetalTerminalRenderer` + `GlyphAtlas` + `Shaders.metal`). SwiftTerm was
 removed in v0.7.0; every tile uses the Rust+Metal stack. Wide-char
@@ -880,10 +891,10 @@ TUI contract:
 - Use is the only page that explains controls and commands.
 - Work, Board, Projects, Events, and Mux show user/runtime data, not control help.
 - `/project` and `/projects` both autocomplete.
-- Projects is a selection surface: arrows choose a project, Space activates it, and normal prompt text spawns the configured default agent in that selected project.
+- Projects is a selection surface: arrows choose a project, Space activates it, and normal prompt text spawns the configured default agent in that selected project. If Advisor mode is enabled, that normal prompt spawns an executioner plus an advisor and links them with `advisor.link`.
 - Project paths typed without `/`, `./`, or `../` resolve from `$HOME`; `Documents/foo` means `~/Documents/foo`, not the repo cwd.
 - `Shift+X` kills and deletes the selected runtime session.
-- Settings is an arrow/Space list of toggles and choices, with human-readable runtime status instead of raw JSON. It should expose engine, model, effort, permission, terminal display, board, event, and project prompt behavior where the runtime can honor them.
+- Settings is an arrow/Space list of toggles and choices, with human-readable runtime status instead of raw JSON. It should expose engine, model, effort, permission, Advisor role profiles, terminal display, board, event, and project prompt behavior where the runtime can honor them.
 - Events defaults to human-readable timeline rows, with JSON as an explicit Settings choice.
 
 When `TADO_PROFILE`, `TADO_RUNTIME_SOCKET`, or `TADO_RUNTIME_ID` is set,

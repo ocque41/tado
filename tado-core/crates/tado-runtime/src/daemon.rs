@@ -97,11 +97,19 @@ struct RuntimeState {
     paths: ProfilePaths,
     runtime_id: String,
     db: Mutex<RuntimeDb>,
-    sessions: Mutex<HashMap<String, LiveSession>>,
+    sessions: Arc<Mutex<HashMap<String, LiveSession>>>,
+    advisor_links: Arc<Mutex<HashMap<String, AdvisorLink>>>,
 }
 
+#[derive(Clone)]
 struct LiveSession {
     session: Arc<Session>,
+}
+
+#[derive(Debug, Clone)]
+struct AdvisorLink {
+    advisor_id: String,
+    last_message: String,
 }
 
 impl RuntimeState {
@@ -112,7 +120,8 @@ impl RuntimeState {
             paths,
             runtime_id,
             db: Mutex::new(db),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            advisor_links: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -160,6 +169,7 @@ impl RuntimeState {
             "session.broadcast" => self.broadcast_session(payload),
             "session.kill" => self.kill_session(payload),
             "session.delete" => self.delete_session(payload),
+            "advisor.link" => self.advisor_link(payload),
             "transcript.tail" => self.tail_transcript(payload),
             "transcript.read" => self.read_transcript(payload),
             "transcript.search" => self.search_transcripts(payload),
@@ -274,7 +284,13 @@ impl RuntimeState {
                 Some(&serde_json::to_value(&record)?),
             )?;
         }
-        start_transcript_writer(self.paths.db_path.clone(), id.clone(), rx);
+        start_transcript_writer(
+            self.paths.db_path.clone(),
+            id.clone(),
+            rx,
+            self.sessions.clone(),
+            self.advisor_links.clone(),
+        );
         self.sessions
             .lock()
             .unwrap()
@@ -406,6 +422,42 @@ impl RuntimeState {
         Ok(json!({ "sent": sent }))
     }
 
+    fn advisor_link(&self, payload: Value) -> Result<Value> {
+        let executioner = required_str(&payload, "executioner_id")?;
+        let advisor = required_str(&payload, "advisor_id")?;
+        let executioner_id = self.resolve_session_id(executioner)?;
+        let advisor_id = self.resolve_session_id(advisor)?;
+        if executioner_id == advisor_id {
+            return Err(anyhow!("advisor.link requires two different sessions"));
+        }
+        {
+            let sessions = self.sessions.lock().unwrap();
+            if !sessions.contains_key(&executioner_id) {
+                return Err(anyhow!("executioner session {executioner_id} is not live"));
+            }
+            if !sessions.contains_key(&advisor_id) {
+                return Err(anyhow!("advisor session {advisor_id} is not live"));
+            }
+        }
+        self.advisor_links.lock().unwrap().insert(
+            executioner_id.clone(),
+            AdvisorLink {
+                advisor_id: advisor_id.clone(),
+                last_message: String::new(),
+            },
+        );
+        self.append_event(
+            "advisor.linked",
+            Some(&executioner_id),
+            "advisor linked to executioner",
+            Some(&json!({ "advisor_id": advisor_id })),
+        );
+        Ok(json!({
+            "executioner_id": executioner_id,
+            "advisor_id": advisor_id,
+        }))
+    }
+
     fn kill_session(&self, payload: Value) -> Result<Value> {
         let target = required_str(&payload, "target")?;
         let hard = payload
@@ -417,6 +469,7 @@ impl RuntimeState {
         if let Some(live) = self.sessions.lock().unwrap().remove(&id) {
             live.session.kill(signal);
         }
+        self.remove_advisor_link(&id);
         let status = if hard { "killed" } else { "stopped" };
         {
             let db = self.db.lock().unwrap();
@@ -443,6 +496,7 @@ impl RuntimeState {
         if let Some(live) = self.sessions.lock().unwrap().remove(&id) {
             live.session.kill(signal);
         }
+        self.remove_advisor_link(&id);
         let deleted = {
             let db = self.db.lock().unwrap();
             let deleted = db.delete_session(&id)?;
@@ -1257,6 +1311,13 @@ impl RuntimeState {
         env
     }
 
+    fn remove_advisor_link(&self, id: &str) {
+        let mut links = self.advisor_links.lock().unwrap();
+        links.remove(id);
+        let advisor_owned = id.to_string();
+        links.retain(|_, link| link.advisor_id != advisor_owned);
+    }
+
     fn reconcile_live_statuses(&self) {
         let ids = self
             .sessions
@@ -1274,16 +1335,16 @@ impl RuntimeState {
         if ids.is_empty() {
             return;
         }
-        let mut sessions = self.sessions.lock().unwrap();
-        let db = self.db.lock().unwrap();
         for (id, code) in ids {
-            sessions.remove(&id);
+            self.sessions.lock().unwrap().remove(&id);
+            self.remove_advisor_link(&id);
             let exit_code = if code == i32::MIN { None } else { Some(code) };
             let status = if exit_code == Some(0) {
                 "done"
             } else {
                 "exited"
             };
+            let db = self.db.lock().unwrap();
             let _ = db.update_session_status(&id, status, exit_code);
             let _ = db.append_event(
                 "session.exited",
@@ -1304,6 +1365,7 @@ impl RuntimeState {
         if drained.is_empty() {
             return;
         }
+        self.advisor_links.lock().unwrap().clear();
         for (_, live) in &drained {
             live.session.kill(libc::SIGTERM);
         }
@@ -1855,19 +1917,149 @@ fn start_transcript_writer(
     db_path: std::path::PathBuf,
     session_id: String,
     rx: mpsc::Receiver<Vec<u8>>,
+    sessions: Arc<Mutex<HashMap<String, LiveSession>>>,
+    advisor_links: Arc<Mutex<HashMap<String, AdvisorLink>>>,
 ) {
     thread::spawn(move || {
         let Ok(db) = RuntimeDb::open(&db_path) else {
             return;
         };
-        for bytes in rx {
-            if bytes.is_empty() {
-                continue;
+        let mut pending = String::new();
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_millis(1_200)) {
+                Ok(bytes) => {
+                    if bytes.is_empty() {
+                        continue;
+                    }
+                    let chunk = String::from_utf8_lossy(&bytes).to_string();
+                    let _ = db.append_transcript(&session_id, "stdout", &chunk);
+                    pending.push_str(&chunk);
+                    if pending.len() >= 4_000 {
+                        relay_advisor_output(
+                            &db,
+                            &session_id,
+                            "idle",
+                            &pending,
+                            &sessions,
+                            &advisor_links,
+                        );
+                        pending.clear();
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if !pending.is_empty() {
+                        relay_advisor_output(
+                            &db,
+                            &session_id,
+                            "idle",
+                            &pending,
+                            &sessions,
+                            &advisor_links,
+                        );
+                        pending.clear();
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    relay_advisor_output(
+                        &db,
+                        &session_id,
+                        "completed",
+                        &pending,
+                        &sessions,
+                        &advisor_links,
+                    );
+                    break;
+                }
             }
-            let chunk = String::from_utf8_lossy(&bytes).to_string();
-            let _ = db.append_transcript(&session_id, "stdout", &chunk);
         }
     });
+}
+
+fn relay_advisor_output(
+    db: &RuntimeDb,
+    executioner_id: &str,
+    status: &str,
+    output: &str,
+    sessions: &Arc<Mutex<HashMap<String, LiveSession>>>,
+    advisor_links: &Arc<Mutex<HashMap<String, AdvisorLink>>>,
+) {
+    let compact = compact_advisor_tail(output, 2_800, 80);
+    let body = if compact.trim().is_empty() {
+        "(no visible output)".to_string()
+    } else {
+        compact
+    };
+    let message = format!(
+        "[advisor-relay]\nexecutioner: {executioner_id}\nstatus: {status}\noutput:\n{body}"
+    );
+    let advisor_id = {
+        let mut links = advisor_links.lock().unwrap();
+        let Some(link) = links.get_mut(executioner_id) else {
+            return;
+        };
+        if link.last_message == message {
+            return;
+        }
+        link.last_message = message.clone();
+        link.advisor_id.clone()
+    };
+    let Some(live) = sessions.lock().unwrap().get(&advisor_id).cloned() else {
+        return;
+    };
+    let mut bytes = message.as_bytes().to_vec();
+    bytes.push(b'\n');
+    if live.session.write(&bytes).is_ok() {
+        let _ = db.append_transcript(&advisor_id, "advisor-relay", &message);
+        let _ = db.append_event(
+            "advisor.relayed",
+            Some(executioner_id),
+            "executioner output relayed to advisor",
+            Some(&json!({
+                "advisor_id": advisor_id,
+                "status": status,
+                "chars": message.len(),
+            })),
+        );
+    }
+}
+
+fn compact_advisor_tail(text: &str, max_chars: usize, max_lines: usize) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines = normalized
+        .split('\n')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    while lines
+        .first()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
+        lines.remove(0);
+    }
+    while lines
+        .last()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
+        lines.pop();
+    }
+    if lines.len() > max_lines {
+        lines = lines[lines.len() - max_lines..].to_vec();
+        lines.insert(0, "[clipped earlier lines]".to_string());
+    }
+    let mut out = lines.join("\n");
+    if out.chars().count() > max_chars {
+        let suffix = out
+            .chars()
+            .rev()
+            .take(max_chars)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>();
+        out = format!("[clipped earlier output]\n{suffix}");
+    }
+    out
 }
 
 fn cells_to_lines(cols: u16, cells: &[tado_core::grid::Cell]) -> Vec<String> {
@@ -2007,5 +2199,22 @@ mod tests {
                 "model_reasoning_effort=\"xhigh\"".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn advisor_compact_tail_caps_lines_and_chars() {
+        let text = (0..120)
+            .map(|n| format!("line-{n:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let compact = compact_advisor_tail(&text, 80, 5);
+        assert!(compact.contains("[clipped earlier lines]"));
+        assert!(compact.contains("line-119"));
+        assert!(!compact.contains("line-000"));
+
+        let long = "x".repeat(120);
+        let clipped = compact_advisor_tail(&long, 20, 80);
+        assert!(clipped.starts_with("[clipped earlier output]\n"));
+        assert!(clipped.len() <= "[clipped earlier output]\n".len() + 20);
     }
 }

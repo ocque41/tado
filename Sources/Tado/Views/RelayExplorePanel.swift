@@ -363,7 +363,7 @@ struct RelayExplorePanel: View {
                     .font(Typography.sans(size: 10, weight: .regular))
                     .tracking(RelayTracking.caps(10))
                     .foregroundStyle(RelayPalette.foreground3(for: theme))
-                Text(todo.text)
+                Text(todo.displayName)
                     .font(Typography.sans(size: 13, weight: .regular))
                     .foregroundStyle(RelayPalette.foreground(for: theme))
                     .lineLimit(1)

@@ -419,7 +419,7 @@ struct RelaySessionsView: View {
                 AgentWorkRow(
                     id: AgentWorkRow.idForTodo(todo.id),
                     kind: .todo,
-                    title: todo.text,
+                    title: todo.displayName,
                     subtitle: todo.agentName.map { "Queued for \($0)" } ?? "Active todo without a live tile",
                     status: todo.status.rawValue,
                     projectName: todo.projectID.flatMap { projectByID[$0]?.name },
@@ -513,30 +513,57 @@ struct RelaySessionsView: View {
               let todo = todos.first(where: { $0.id == todoID }) else { return }
         let project = todo.projectID.flatMap { projectByID[$0] }
         let team = todo.teamID.flatMap { teamID in teams.first { $0.id == teamID } }
-        let settingsEngine = settingsRows.first?.engine ?? .claude
-        let engine: TerminalEngine = {
+        let settings = fetchOrCreateSettings()
+        let agentEngine: TerminalEngine? = {
             if let agentName = todo.agentName, let root = project?.rootPath,
                let resolved = AgentDiscoveryService.resolveEngine(agentName: agentName, projectRoot: root) {
                 return resolved
             }
-            return settingsEngine
+            return nil
         }()
+        let engine = agentEngine ?? settings.engine
 
-        terminalManager.spawnAndWire(
+        let activeTodos = todos.filter { $0.listState == .active }
+        let advisorIndex = AdvisorTodoSpawner.nextAvailableGridIndex(
+            usedIndices: activeTodos.map(\.gridIndex),
+            reserving: [todo.gridIndex]
+        )
+        let advisorPosition = CanvasLayout.position(
+            forIndex: advisorIndex,
+            gridColumns: settings.gridColumns
+        )
+        AdvisorTodoSpawner.spawnNormalTodo(
             todo: todo,
-            engine: engine,
+            task: todo.text,
+            settings: settings,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            defaultEngine: engine,
+            advisorGridIndex: advisorIndex,
+            advisorPosition: advisorPosition,
             cwd: project?.rootPath,
-            agentName: todo.agentName,
             projectName: project?.name,
             teamName: team?.name,
             teamID: team?.id,
-            teamAgents: team?.agentNames
+            teamAgents: team?.agentNames,
+            agentName: todo.agentName,
+            agentEngine: agentEngine
         )
         try? modelContext.save()
         selectedRowID = AgentWorkRow.idForTile(todo.id)
         notice = "Spawned tile."
         errorText = nil
         promptFocused = true
+    }
+
+    private func fetchOrCreateSettings() -> AppSettings {
+        if let settings = settingsRows.first {
+            return settings
+        }
+        let settings = AppSettings()
+        modelContext.insert(settings)
+        try? modelContext.save()
+        return settings
     }
 
     private func openSelected() {

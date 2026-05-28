@@ -122,7 +122,33 @@ struct TrashListView: View {
 
         let project = todo.projectID.flatMap { pid in projects.first { $0.id == pid } }
         let team = todo.teamID.flatMap { tid in teams.first { $0.id == tid } }
-        terminalManager.spawnAndWire(todo: todo, engine: settings.engine, cwd: project?.rootPath, agentName: todo.agentName, projectName: project?.name, teamName: team?.name, teamID: team?.id, teamAgents: team?.agentNames)
+        let agentEngine = todo.agentName.flatMap { name in
+            project?.rootPath.flatMap { root in
+                AgentDiscoveryService.resolveEngine(agentName: name, projectRoot: root)
+            }
+        }
+        let advisorIndex = AdvisorTodoSpawner.nextAvailableGridIndex(
+            usedIndices: Array(usedIndices),
+            reserving: [index]
+        )
+        let advisorPosition = CanvasLayout.position(forIndex: advisorIndex, gridColumns: settings.gridColumns)
+        AdvisorTodoSpawner.spawnNormalTodo(
+            todo: todo,
+            task: todo.text,
+            settings: settings,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            defaultEngine: agentEngine ?? settings.engine,
+            advisorGridIndex: advisorIndex,
+            advisorPosition: advisorPosition,
+            cwd: project?.rootPath,
+            projectName: project?.name,
+            teamName: team?.name,
+            teamID: team?.id,
+            teamAgents: team?.agentNames,
+            agentName: todo.agentName,
+            agentEngine: agentEngine
+        )
         try? modelContext.save()
     }
 

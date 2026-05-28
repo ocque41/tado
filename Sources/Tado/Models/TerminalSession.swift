@@ -118,6 +118,9 @@ final class TerminalSession: Identifiable {
     /// phase agents can run Haiku at max effort or Opus at high effort without
     /// the user having to touch Settings.
     @ObservationIgnored var effortFlagsOverride: [String]?
+    /// Optional prompt body used for the actual CLI spawn while keeping
+    /// `todoText` as the human-readable tile/list title.
+    @ObservationIgnored var spawnPromptOverride: String?
 
     /// When true, this session is an Eternal worker. The exact spawn
     /// path depends on `eternalLoopKind`:

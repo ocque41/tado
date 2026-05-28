@@ -29,6 +29,12 @@ final class TerminalManager {
     /// never create entries here. Keyed by `TerminalSession.id` so
     /// multiple concurrent Cowork tiles don't interfere.
     private var coworkPollers: [UUID: CoworkOutputPoller] = [:]
+    private struct AdvisorSessionLink {
+        var advisorID: UUID
+        var lastRelayMessage: String?
+    }
+    private var advisorLinksByExecutioner: [UUID: AdvisorSessionLink] = [:]
+    private var advisorExecutionerByAdvisor: [UUID: UUID] = [:]
 
     func spawnSession(
         todoID: UUID,
@@ -39,6 +45,7 @@ final class TerminalManager {
         modeFlagsOverride: [String]? = nil,
         modelFlagsOverride: [String]? = nil,
         effortFlagsOverride: [String]? = nil,
+        spawnPromptOverride: String? = nil,
         isEternalWorker: Bool = false,
         eternalLoopKind: String? = nil,
         eternalMode: String? = nil,
@@ -78,6 +85,7 @@ final class TerminalManager {
         session.modeFlagsOverride = modeFlagsOverride
         session.modelFlagsOverride = modelFlagsOverride
         session.effortFlagsOverride = effortFlagsOverride
+        session.spawnPromptOverride = spawnPromptOverride
         session.isEternalWorker = isEternalWorker
         session.eternalLoopKind = eternalLoopKind
         session.eternalMode = eternalMode
@@ -126,6 +134,7 @@ final class TerminalManager {
         // Cancel any active Cowork output poller. Idempotent.
         coworkPollers[id]?.cancel()
         coworkPollers[id] = nil
+        removeAdvisorLink(forSessionID: id)
         sessions.removeAll { $0.id == id }
     }
 
@@ -136,6 +145,7 @@ final class TerminalManager {
             ipcBroker?.unregisterSession(session.id)
             coworkPollers[session.id]?.cancel()
             coworkPollers[session.id] = nil
+            removeAdvisorLink(forSessionID: session.id)
             sessions.removeAll { $0.id == session.id }
         }
     }
@@ -169,6 +179,8 @@ final class TerminalManager {
         // file-system observers in a now-zombie process.
         for poller in coworkPollers.values { poller.cancel() }
         coworkPollers.removeAll()
+        advisorLinksByExecutioner.removeAll()
+        advisorExecutionerByAdvisor.removeAll()
         sessions.removeAll()
     }
 
@@ -181,6 +193,7 @@ final class TerminalManager {
         session.enqueueOrSend(text)
     }
 
+    @discardableResult
     func spawnAndWire(
         todo: TodoItem,
         engine: TerminalEngine,
@@ -193,6 +206,7 @@ final class TerminalManager {
         modeFlagsOverride: [String]? = nil,
         modelFlagsOverride: [String]? = nil,
         effortFlagsOverride: [String]? = nil,
+        spawnPromptOverride: String? = nil,
         isEternalWorker: Bool = false,
         eternalLoopKind: String? = nil,
         eternalMode: String? = nil,
@@ -208,7 +222,7 @@ final class TerminalManager {
         eternalRunID: UUID? = nil,
         dispatchRunID: UUID? = nil,
         runRole: String? = nil
-    ) {
+    ) -> TerminalSession {
         // Common entry point for every spawn that wires a `TerminalSession`
         // to a `TodoItem` (architect, worker, interventor, panel-driven,
         // canvas-driven). The interval brackets the @MainActor work
@@ -226,6 +240,7 @@ final class TerminalManager {
             modeFlagsOverride: modeFlagsOverride,
             modelFlagsOverride: modelFlagsOverride,
             effortFlagsOverride: effortFlagsOverride,
+            spawnPromptOverride: spawnPromptOverride,
             isEternalWorker: isEternalWorker,
             eternalLoopKind: eternalLoopKind,
             eternalMode: eternalMode,
@@ -275,8 +290,11 @@ final class TerminalManager {
         todo.terminalSessionID = session.id
         todo.status = .running
 
-        session.onStatusChange = { [weak todo] newStatus in
+        session.onStatusChange = { [weak self, weak todo, weak session] newStatus in
             todo?.status = newStatus
+            if let session {
+                self?.relayAdvisorOutputIfNeeded(from: session, status: newStatus)
+            }
         }
         session.onCwdChange = { [weak todo] dir in
             todo?.cwd = dir
@@ -304,7 +322,9 @@ final class TerminalManager {
                 projectName: projectName,
                 teamName: teamName,
                 teamID: teamID,
-                teamAgents: teamAgents
+                teamAgents: teamAgents,
+                spawnPromptOverride: dead.spawnPromptOverride,
+                runRole: dead.runRole
             )
         }
 
@@ -348,6 +368,40 @@ final class TerminalManager {
             )
         }
         SpawnSignposts.event("terminalManager.spawnAndWire.exit")
+        return session
+    }
+
+    func linkAdvisor(executionerID: UUID, advisorID: UUID) {
+        advisorLinksByExecutioner[executionerID] = AdvisorSessionLink(
+            advisorID: advisorID,
+            lastRelayMessage: nil
+        )
+        advisorExecutionerByAdvisor[advisorID] = executionerID
+    }
+
+    private func removeAdvisorLink(forSessionID id: UUID) {
+        if let link = advisorLinksByExecutioner.removeValue(forKey: id) {
+            advisorExecutionerByAdvisor.removeValue(forKey: link.advisorID)
+        }
+        if let executionerID = advisorExecutionerByAdvisor.removeValue(forKey: id) {
+            advisorLinksByExecutioner.removeValue(forKey: executionerID)
+        }
+    }
+
+    private func relayAdvisorOutputIfNeeded(from executioner: TerminalSession, status: SessionStatus) {
+        guard var link = advisorLinksByExecutioner[executioner.id],
+              let advisor = sessions.first(where: { $0.id == link.advisorID })
+        else { return }
+        switch status {
+        case .needsInput, .awaitingResponse, .completed, .failed:
+            let message = AdvisorRelay.relayMessage(for: executioner, status: status)
+            guard message != link.lastRelayMessage else { return }
+            link.lastRelayMessage = message
+            advisorLinksByExecutioner[executioner.id] = link
+            advisor.enqueueOrSend(message)
+        case .pending, .running:
+            break
+        }
     }
 
     /// Start a CoworkOutputPoller for a freshly-spawned Cowork
@@ -437,7 +491,9 @@ final class TerminalManager {
         projectName: String?,
         teamName: String?,
         teamID: UUID?,
-        teamAgents: [String]?
+        teamAgents: [String]?,
+        spawnPromptOverride: String? = nil,
+        runRole: String? = nil
     ) {
         guard deadSession.isEligibleForSpawnFallback else { return }
         guard let kind = deadSession.spawnRejection else { return }
@@ -564,10 +620,13 @@ final class TerminalManager {
         // IPC registry. The respawn produces a fresh TerminalSession
         // with a new UUID; the todo's `terminalSessionID` gets re-stamped
         // by spawnAndWire.
+        let advisorIDForRespawn = advisorLinksByExecutioner[deadSession.id]?.advisorID
+        let executionerIDForRespawn = advisorExecutionerByAdvisor[deadSession.id]
+        removeAdvisorLink(forSessionID: deadSession.id)
         ipcBroker?.unregisterSession(deadSession.id)
         sessions.removeAll { $0.id == deadSession.id }
 
-        spawnAndWire(
+        let replacement = spawnAndWire(
             todo: todo,
             engine: engineOverride,
             cwd: cwd,
@@ -578,8 +637,23 @@ final class TerminalManager {
             teamAgents: teamAgents,
             modeFlagsOverride: modeOverride.isEmpty ? nil : modeOverride,
             modelFlagsOverride: modelOverride.isEmpty ? nil : modelOverride,
-            effortFlagsOverride: effortOverride.isEmpty ? nil : effortOverride
+            effortFlagsOverride: effortOverride.isEmpty ? nil : effortOverride,
+            spawnPromptOverride: spawnPromptOverride,
+            runRole: runRole
         )
+        if let advisorIDForRespawn,
+           let advisor = sessions.first(where: { $0.id == advisorIDForRespawn }) {
+            linkAdvisor(executionerID: replacement.id, advisorID: advisorIDForRespawn)
+            advisor.enqueueOrSend("""
+            [advisor-relay]
+            executioner respawned after spawn fallback.
+            new UUID: \(replacement.id.uuidString.lowercased())
+            Use this UUID for tado-send/tado-read.
+            """)
+        } else if let executionerIDForRespawn,
+                  sessions.contains(where: { $0.id == executionerIDForRespawn }) {
+            linkAdvisor(executionerID: executionerIDForRespawn, advisorID: replacement.id)
+        }
     }
 
     // MARK: - Picker reverse-lookup helpers

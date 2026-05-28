@@ -134,6 +134,22 @@ struct UiSettings {
     cowork_mode: usize,
     cowork_model: usize,
     cowork_effort: usize,
+    advisor_enabled: bool,
+    advisor_defaults_initialized: bool,
+    advisor_executioner_engine: usize,
+    advisor_executioner_claude_mode: usize,
+    advisor_executioner_claude_model: usize,
+    advisor_executioner_claude_effort: usize,
+    advisor_executioner_codex_mode: usize,
+    advisor_executioner_codex_model: usize,
+    advisor_executioner_codex_effort: usize,
+    advisor_advisor_engine: usize,
+    advisor_advisor_claude_mode: usize,
+    advisor_advisor_claude_model: usize,
+    advisor_advisor_claude_effort: usize,
+    advisor_advisor_codex_mode: usize,
+    advisor_advisor_codex_model: usize,
+    advisor_advisor_codex_effort: usize,
     random_tile_color: bool,
     default_theme: usize,
     terminal_font_size: u8,
@@ -165,6 +181,22 @@ impl Default for UiSettings {
             cowork_mode: 0,
             cowork_model: 0,
             cowork_effort: 0,
+            advisor_enabled: false,
+            advisor_defaults_initialized: false,
+            advisor_executioner_engine: 0,
+            advisor_executioner_claude_mode: 0,
+            advisor_executioner_claude_model: 2,
+            advisor_executioner_claude_effort: 0,
+            advisor_executioner_codex_mode: 0,
+            advisor_executioner_codex_model: 1,
+            advisor_executioner_codex_effort: 0,
+            advisor_advisor_engine: 0,
+            advisor_advisor_claude_mode: 0,
+            advisor_advisor_claude_model: 0,
+            advisor_advisor_claude_effort: 3,
+            advisor_advisor_codex_mode: 0,
+            advisor_advisor_codex_model: 0,
+            advisor_advisor_codex_effort: 3,
             random_tile_color: false,
             default_theme: 0,
             terminal_font_size: 13,
@@ -183,6 +215,8 @@ impl Default for UiSettings {
 
 const DEFAULT_ENGINES: &[&str] = &["shell", "claude", "codex", "cowork"];
 const ENGINE_LABELS: &[&str] = &["Shell", "Claude Code", "Codex", "Claude Cowork"];
+const ADVISOR_ENGINES: &[&str] = &["claude", "codex"];
+const ADVISOR_ENGINE_LABELS: &[&str] = &["Claude Code", "Codex"];
 const CLAUDE_MODES: &[(&str, &[&str])] = &[
     ("Ask permissions", &["--permission-mode", "default"]),
     ("Plan mode", &["--permission-mode", "plan"]),
@@ -250,6 +284,12 @@ const THEMES: &[&str] = &[
     "Gruvbox",
 ];
 const BELL_MODES: &[&str] = &["Off", "Audible", "Visual", "Audible + visual"];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdvisorRole {
+    Executioner,
+    Advisor,
+}
 
 #[derive(Clone, Copy)]
 struct CommandSpec {
@@ -1665,6 +1705,48 @@ fn clamp_settings(settings: &mut UiSettings) {
     settings.cowork_mode = settings.cowork_mode.min(COWORK_MODES.len() - 1);
     settings.cowork_model = settings.cowork_model.min(COWORK_MODELS.len() - 1);
     settings.cowork_effort = settings.cowork_effort.min(COWORK_EFFORTS.len() - 1);
+    settings.advisor_executioner_engine = settings
+        .advisor_executioner_engine
+        .min(ADVISOR_ENGINES.len() - 1);
+    settings.advisor_executioner_claude_mode = settings
+        .advisor_executioner_claude_mode
+        .min(CLAUDE_MODES.len() - 1);
+    settings.advisor_executioner_claude_model = settings
+        .advisor_executioner_claude_model
+        .min(CLAUDE_MODELS.len() - 1);
+    settings.advisor_executioner_claude_effort = settings
+        .advisor_executioner_claude_effort
+        .min(CLAUDE_EFFORTS.len() - 1);
+    settings.advisor_executioner_codex_mode = settings
+        .advisor_executioner_codex_mode
+        .min(CODEX_MODES.len() - 1);
+    settings.advisor_executioner_codex_model = settings
+        .advisor_executioner_codex_model
+        .min(CODEX_MODELS.len() - 1);
+    settings.advisor_executioner_codex_effort = settings
+        .advisor_executioner_codex_effort
+        .min(CODEX_EFFORTS.len() - 1);
+    settings.advisor_advisor_engine = settings
+        .advisor_advisor_engine
+        .min(ADVISOR_ENGINES.len() - 1);
+    settings.advisor_advisor_claude_mode = settings
+        .advisor_advisor_claude_mode
+        .min(CLAUDE_MODES.len() - 1);
+    settings.advisor_advisor_claude_model = settings
+        .advisor_advisor_claude_model
+        .min(CLAUDE_MODELS.len() - 1);
+    settings.advisor_advisor_claude_effort = settings
+        .advisor_advisor_claude_effort
+        .min(CLAUDE_EFFORTS.len() - 1);
+    settings.advisor_advisor_codex_mode = settings
+        .advisor_advisor_codex_mode
+        .min(CODEX_MODES.len() - 1);
+    settings.advisor_advisor_codex_model = settings
+        .advisor_advisor_codex_model
+        .min(CODEX_MODELS.len() - 1);
+    settings.advisor_advisor_codex_effort = settings
+        .advisor_advisor_codex_effort
+        .min(CODEX_EFFORTS.len() - 1);
     settings.default_theme = settings.default_theme.min(THEMES.len() - 1);
     settings.terminal_font_size = settings.terminal_font_size.clamp(9, 24);
     settings.bell_mode = settings.bell_mode.min(BELL_MODES.len() - 1);
@@ -1721,6 +1803,75 @@ fn spawn_flags_for_engine(settings: &UiSettings, engine: &str) -> Vec<String> {
     }
 }
 
+fn advisor_engine(settings: &UiSettings, role: AdvisorRole) -> &'static str {
+    let index = match role {
+        AdvisorRole::Executioner => settings.advisor_executioner_engine,
+        AdvisorRole::Advisor => settings.advisor_advisor_engine,
+    };
+    ADVISOR_ENGINES.get(index).copied().unwrap_or("claude")
+}
+
+fn spawn_flags_for_advisor_role(settings: &UiSettings, role: AdvisorRole) -> Vec<String> {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "claude") => claude_flags(
+            settings.advisor_executioner_claude_mode,
+            settings.advisor_executioner_claude_model,
+            settings.advisor_executioner_claude_effort,
+        ),
+        (AdvisorRole::Advisor, "claude") => claude_flags(
+            settings.advisor_advisor_claude_mode,
+            settings.advisor_advisor_claude_model,
+            settings.advisor_advisor_claude_effort,
+        ),
+        (AdvisorRole::Executioner, "codex") => codex_flags(
+            settings.codex_alternate_screen,
+            settings.advisor_executioner_codex_mode,
+            settings.advisor_executioner_codex_model,
+            settings.advisor_executioner_codex_effort,
+        ),
+        (AdvisorRole::Advisor, "codex") => codex_flags(
+            settings.codex_alternate_screen,
+            settings.advisor_advisor_codex_mode,
+            settings.advisor_advisor_codex_model,
+            settings.advisor_advisor_codex_effort,
+        ),
+        _ => Vec::new(),
+    }
+}
+
+fn claude_flags(mode: usize, model: usize, effort: usize) -> Vec<String> {
+    let mut flags = Vec::new();
+    flags.extend(CLAUDE_MODES[mode].1.iter().map(|value| value.to_string()));
+    flags.extend(["--model".to_string(), CLAUDE_MODELS[model].1.to_string()]);
+    if let Some(effort) = CLAUDE_EFFORTS[effort].1 {
+        flags.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    flags
+}
+
+fn codex_flags(alternate_screen: bool, mode: usize, model: usize, effort: usize) -> Vec<String> {
+    let mut flags = Vec::new();
+    if !alternate_screen {
+        flags.push("--no-alt-screen".to_string());
+    }
+    flags.extend([
+        "-c".to_string(),
+        "shell_environment_policy.inherit=all".to_string(),
+    ]);
+    flags.extend(CODEX_MODES[mode].1.iter().map(|value| value.to_string()));
+    flags.extend([
+        "-c".to_string(),
+        format!("model=\"{}\"", CODEX_MODELS[model].1),
+    ]);
+    if let Some(effort) = CODEX_EFFORTS[effort].1 {
+        flags.extend([
+            "-c".to_string(),
+            format!("model_reasoning_effort=\"{effort}\""),
+        ]);
+    }
+    flags
+}
+
 fn spawn_env_for_engine(settings: &UiSettings, engine: &str) -> Vec<(String, String)> {
     match engine {
         "claude" => {
@@ -1756,6 +1907,38 @@ fn spawn_env_for_engine(settings: &UiSettings, engine: &str) -> Vec<(String, Str
         ],
         _ => Vec::new(),
     }
+}
+
+fn initialize_advisor_defaults(settings: &mut UiSettings) {
+    if settings.advisor_defaults_initialized {
+        return;
+    }
+    match DEFAULT_ENGINES
+        .get(settings.default_engine)
+        .copied()
+        .unwrap_or("claude")
+    {
+        "codex" => {
+            settings.advisor_executioner_engine = 1;
+            settings.advisor_executioner_codex_mode = settings.codex_mode;
+            settings.advisor_executioner_codex_model = settings.codex_model;
+            settings.advisor_executioner_codex_effort = settings.codex_effort;
+        }
+        _ => {
+            settings.advisor_executioner_engine = 0;
+            settings.advisor_executioner_claude_mode = settings.claude_mode;
+            settings.advisor_executioner_claude_model = settings.claude_model;
+            settings.advisor_executioner_claude_effort = settings.claude_effort;
+        }
+    }
+    settings.advisor_advisor_engine = 0;
+    settings.advisor_advisor_claude_mode = 0;
+    settings.advisor_advisor_claude_model = 0;
+    settings.advisor_advisor_claude_effort = 3;
+    settings.advisor_advisor_codex_mode = 0;
+    settings.advisor_advisor_codex_model = 0;
+    settings.advisor_advisor_codex_effort = 3;
+    settings.advisor_defaults_initialized = true;
 }
 
 fn move_project_selection(state: &mut AgentOsState, delta: isize) {
@@ -1797,6 +1980,61 @@ fn spawn_selected_project_prompt(state: &mut AgentOsState, text: &str) -> Result
         .get(state.settings.default_engine)
         .copied()
         .unwrap_or("claude");
+    if state.settings.advisor_enabled {
+        initialize_advisor_defaults(&mut state.settings);
+        save_settings(state)?;
+        let executioner_engine = advisor_engine(&state.settings, AdvisorRole::Executioner);
+        let executioner = state.client.call(
+            "session.spawn",
+            json!({
+                "engine": executioner_engine,
+                "prompt": advisor_executioner_prompt(text),
+                "command": text,
+                "cwd": project.root.clone(),
+                "project_id": project.id.clone(),
+                "project_root": project.root.clone(),
+                "title": prompt_title(executioner_engine, text),
+                "flags": spawn_flags_for_advisor_role(&state.settings, AdvisorRole::Executioner),
+                "env": spawn_env_for_engine(&state.settings, executioner_engine),
+            }),
+        )?;
+        let executioner_id = response_session_id(&executioner.data).ok_or_else(|| {
+            anyhow::anyhow!("executioner spawn response did not include a session id")
+        })?;
+        let executioner_grid =
+            response_grid(&executioner.data).unwrap_or_else(|| executioner_id.clone());
+        let advisor_engine = advisor_engine(&state.settings, AdvisorRole::Advisor);
+        let advisor = state.client.call(
+            "session.spawn",
+            json!({
+                "engine": advisor_engine,
+                "prompt": advisor_prompt(text, &executioner_id, &executioner_grid),
+                "command": text,
+                "cwd": project.root.clone(),
+                "project_id": project.id.clone(),
+                "project_root": project.root.clone(),
+                "title": format!("Advisor: {}", text.chars().take(72).collect::<String>()),
+                "flags": spawn_flags_for_advisor_role(&state.settings, AdvisorRole::Advisor),
+                "env": spawn_env_for_engine(&state.settings, advisor_engine),
+            }),
+        )?;
+        let advisor_id = response_session_id(&advisor.data).ok_or_else(|| {
+            anyhow::anyhow!("advisor spawn response did not include a session id")
+        })?;
+        state.client.call(
+            "advisor.link",
+            json!({
+                "executioner_id": executioner_id,
+                "advisor_id": advisor_id,
+            }),
+        )?;
+        return Ok(format!(
+            "Spawned advisor pair {} + {} in {}",
+            response_id(&executioner.data),
+            response_id(&advisor.data),
+            project.name
+        ));
+    }
     let response = state.client.call(
         "session.spawn",
         json!({
@@ -1901,6 +2139,35 @@ fn response_id(data: &Option<Value>) -> String {
         .and_then(Value::as_str)
         .map(short_id)
         .unwrap_or_else(|| "session".to_string())
+}
+
+fn response_session_id(data: &Option<Value>) -> Option<String> {
+    data.as_ref()
+        .and_then(|d| {
+            d.get("session_id")
+                .or_else(|| d.get("session").and_then(|s| s.get("id")))
+        })
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn response_grid(data: &Option<Value>) -> Option<String> {
+    let session = data.as_ref()?.get("session")?;
+    let row = session.get("grid_row")?.as_i64()?;
+    let col = session.get("grid_col")?.as_i64()?;
+    Some(format!("[{row}, {col}]"))
+}
+
+fn advisor_executioner_prompt(task: &str) -> String {
+    format!(
+        "You are the executioner in Tado Advisor mode.\n\nUser task:\n{task}\n\nRules:\n- Do not plan the whole task.\n- Wait for the advisor.\n- Execute exactly one advisor step at a time.\n- Keep replies short: result, key output, blocker.\n- Do not ask the user unless the advisor tells you to.\n\nReply with: READY"
+    )
+}
+
+fn advisor_prompt(task: &str, executioner_id: &str, executioner_grid: &str) -> String {
+    format!(
+        "You are the advisor in Tado Advisor mode.\n\nUser task:\n{task}\n\nExecutioner:\n- UUID: {executioner_id}\n- Grid: {executioner_grid}\n\nWorkflow:\n- You decide the plan.\n- The executioner does the work.\n- Send one tiny step at a time.\n- Prefer under 240 characters.\n- Wait for relay output before the next step.\n- Prefer `tado_send` / `tado_read` MCP tools if available.\n- Otherwise use `tado-send {executioner_id} \"<step>\"` and `tado-read {executioner_id} --tail 80`.\n- Do not edit files, run tests, or execute project commands yourself.\n- If relay output is clipped, ask with `tado-read {executioner_id} --tail 160`.\n\nFirst step: tell the executioner the smallest useful action."
+    )
 }
 
 fn response_run_id(data: &Option<Value>) -> String {
@@ -2068,6 +2335,8 @@ fn event_kind_label(kind: &str) -> String {
         "project.added" => "Added project",
         "project.selected" => "Selected project",
         "settings.updated" => "Settings updated",
+        "advisor.linked" => "Advisor linked",
+        "advisor.relayed" => "Advisor relay",
         "kanban.moved" => "Moved card",
         "kanban.column_added" => "Added lane",
         "bootstrap.requested" => "Bootstrap requested",
@@ -2132,7 +2401,7 @@ fn format_runtime_status(data: &Value) -> String {
 }
 
 fn use_text() -> &'static str {
-    "Operator commands:\n\n/spawn <shell command>\n/claude <prompt>\n/codex <prompt>\n/cowork <prompt>\n/project or /projects status|list|add|create|use\n/bootstrap <action> [engine]\n/dispatch start --type wave --layout grid <brief>\n/dispatch list|status|crafted|accept|reject\n/move [session] <lane>\n/lane <key> <title>\n/broadcast <message>\n/notify <title>\n/stop [session]\n/hard-kill [session]\n/delete [session]\n/search <text>\n/power tado-power\n/shutdown\n/help\n\nPages:\nShift+1..7 jumps to a page. Tab and Shift-Tab move through pages.\nType / to open commands. Up/Down chooses a command. Enter completes it.\nPgUp/PgDn and Ctrl-U/Ctrl-D scroll. End follows the selected transcript.\nShift+X deletes the selected runtime session.\n\nProject workflow:\nOn Projects, Up/Down selects a project. Space makes it active.\nTyping normal prompt text on Projects spawns the default agent directly in the selected project.\nPlain paths like Documents/app, downloads/app, or my-app resolve from your home folder.\n\nSettings:\nUp/Down selects a setting. Space or Right advances it. Left moves backward.\nEngine, model, effort, permission mode, terminal display, board, events, and project prompt behavior are all changed here.\n\nPrompt behavior:\nOn Work and Mux, normal prompt text goes to the selected live PTY.\nOn a Dispatch or Eternal row, normal prompt text accepts or continues that workflow."
+    "Operator commands:\n\n/spawn <shell command>\n/claude <prompt>\n/codex <prompt>\n/cowork <prompt>\n/project or /projects status|list|add|create|use\n/bootstrap <action> [engine]\n/dispatch start --type wave --layout grid <brief>\n/dispatch list|status|crafted|accept|reject\n/move [session] <lane>\n/lane <key> <title>\n/broadcast <message>\n/notify <title>\n/stop [session]\n/hard-kill [session]\n/delete [session]\n/search <text>\n/power tado-power\n/shutdown\n/help\n\nPages:\nShift+1..7 jumps to a page. Tab and Shift-Tab move through pages.\nType / to open commands. Up/Down chooses a command. Enter completes it.\nPgUp/PgDn and Ctrl-U/Ctrl-D scroll. End follows the selected transcript.\nShift+X deletes the selected runtime session.\n\nProject workflow:\nOn Projects, Up/Down selects a project. Space makes it active.\nTyping normal prompt text on Projects spawns the default agent directly in the selected project. If Advisor mode is on, it spawns an executioner plus an advisor instead.\nPlain paths like Documents/app, downloads/app, or my-app resolve from your home folder.\n\nSettings:\nUp/Down selects a setting. Space or Right advances it. Left moves backward.\nEngine, model, effort, permission mode, Advisor role profiles, terminal display, board, events, and project prompt behavior are all changed here.\n\nPrompt behavior:\nOn Work and Mux, normal prompt text goes to the selected live PTY.\nOn a Dispatch or Eternal row, normal prompt text accepts or continues that workflow."
 }
 
 fn format_projects(data: &Value) -> String {
@@ -2173,7 +2442,7 @@ fn format_projects(data: &Value) -> String {
 }
 
 fn setting_count() -> usize {
-    25
+    34
 }
 
 fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
@@ -2210,6 +2479,39 @@ fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
         setting_line(
             "Cowork effort",
             option_label(COWORK_EFFORTS, settings.cowork_effort),
+        ),
+        setting_line("Advisor mode", on_off(settings.advisor_enabled)),
+        setting_line(
+            "Executioner engine",
+            option_label(ADVISOR_ENGINE_LABELS, settings.advisor_executioner_engine),
+        ),
+        setting_line(
+            "Executioner permission",
+            advisor_permission_label(settings, AdvisorRole::Executioner),
+        ),
+        setting_line(
+            "Executioner model",
+            advisor_model_label(settings, AdvisorRole::Executioner),
+        ),
+        setting_line(
+            "Executioner effort",
+            advisor_effort_label(settings, AdvisorRole::Executioner),
+        ),
+        setting_line(
+            "Advisor engine",
+            option_label(ADVISOR_ENGINE_LABELS, settings.advisor_advisor_engine),
+        ),
+        setting_line(
+            "Advisor permission",
+            advisor_permission_label(settings, AdvisorRole::Advisor),
+        ),
+        setting_line(
+            "Advisor model",
+            advisor_model_label(settings, AdvisorRole::Advisor),
+        ),
+        setting_line(
+            "Advisor effort",
+            advisor_effort_label(settings, AdvisorRole::Advisor),
         ),
         setting_line("Random tile color", on_off(settings.random_tile_color)),
         setting_line(
@@ -2258,6 +2560,59 @@ fn option_label(options: &[&str], selected: usize) -> String {
         .copied()
         .unwrap_or_else(|| options.first().copied().unwrap_or(""))
         .to_string()
+}
+
+fn advisor_permission_label(settings: &UiSettings, role: AdvisorRole) -> String {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "codex") => CODEX_MODES[settings.advisor_executioner_codex_mode]
+            .0
+            .to_string(),
+        (AdvisorRole::Advisor, "codex") => CODEX_MODES[settings.advisor_advisor_codex_mode]
+            .0
+            .to_string(),
+        (AdvisorRole::Executioner, _) => CLAUDE_MODES[settings.advisor_executioner_claude_mode]
+            .0
+            .to_string(),
+        (AdvisorRole::Advisor, _) => CLAUDE_MODES[settings.advisor_advisor_claude_mode]
+            .0
+            .to_string(),
+    }
+}
+
+fn advisor_model_label(settings: &UiSettings, role: AdvisorRole) -> String {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "codex") => CODEX_MODELS
+            [settings.advisor_executioner_codex_model]
+            .0
+            .to_string(),
+        (AdvisorRole::Advisor, "codex") => CODEX_MODELS[settings.advisor_advisor_codex_model]
+            .0
+            .to_string(),
+        (AdvisorRole::Executioner, _) => CLAUDE_MODELS[settings.advisor_executioner_claude_model]
+            .0
+            .to_string(),
+        (AdvisorRole::Advisor, _) => CLAUDE_MODELS[settings.advisor_advisor_claude_model]
+            .0
+            .to_string(),
+    }
+}
+
+fn advisor_effort_label(settings: &UiSettings, role: AdvisorRole) -> String {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "codex") => CODEX_EFFORTS
+            [settings.advisor_executioner_codex_effort]
+            .0
+            .to_string(),
+        (AdvisorRole::Advisor, "codex") => CODEX_EFFORTS[settings.advisor_advisor_codex_effort]
+            .0
+            .to_string(),
+        (AdvisorRole::Executioner, _) => CLAUDE_EFFORTS[settings.advisor_executioner_claude_effort]
+            .0
+            .to_string(),
+        (AdvisorRole::Advisor, _) => CLAUDE_EFFORTS[settings.advisor_advisor_claude_effort]
+            .0
+            .to_string(),
+    }
 }
 
 fn on_off(value: bool) -> &'static str {
@@ -2324,26 +2679,52 @@ fn adjust_setting(state: &mut AgentOsState, delta: isize) {
             state.settings.cowork_effort =
                 cycle_index(state.settings.cowork_effort, COWORK_EFFORTS.len(), delta);
         }
-        14 => state.settings.random_tile_color = !state.settings.random_tile_color,
+        14 => {
+            state.settings.advisor_enabled = !state.settings.advisor_enabled;
+            if state.settings.advisor_enabled {
+                initialize_advisor_defaults(&mut state.settings);
+            }
+        }
         15 => {
+            state.settings.advisor_executioner_engine = cycle_index(
+                state.settings.advisor_executioner_engine,
+                ADVISOR_ENGINES.len(),
+                delta,
+            );
+        }
+        16 => adjust_advisor_permission(&mut state.settings, AdvisorRole::Executioner, delta),
+        17 => adjust_advisor_model(&mut state.settings, AdvisorRole::Executioner, delta),
+        18 => adjust_advisor_effort(&mut state.settings, AdvisorRole::Executioner, delta),
+        19 => {
+            state.settings.advisor_advisor_engine = cycle_index(
+                state.settings.advisor_advisor_engine,
+                ADVISOR_ENGINES.len(),
+                delta,
+            );
+        }
+        20 => adjust_advisor_permission(&mut state.settings, AdvisorRole::Advisor, delta),
+        21 => adjust_advisor_model(&mut state.settings, AdvisorRole::Advisor, delta),
+        22 => adjust_advisor_effort(&mut state.settings, AdvisorRole::Advisor, delta),
+        23 => state.settings.random_tile_color = !state.settings.random_tile_color,
+        24 => {
             state.settings.default_theme =
                 cycle_index(state.settings.default_theme, THEMES.len(), delta);
         }
-        16 => adjust_u8(&mut state.settings.terminal_font_size, delta, 9, 24),
-        17 => state.settings.cursor_blink = !state.settings.cursor_blink,
-        18 => {
+        25 => adjust_u8(&mut state.settings.terminal_font_size, delta, 9, 24),
+        26 => state.settings.cursor_blink = !state.settings.cursor_blink,
+        27 => {
             state.settings.bell_mode =
                 cycle_index(state.settings.bell_mode, BELL_MODES.len(), delta)
         }
-        19 => adjust_u8(&mut state.settings.grid_columns, delta, 1, 8),
-        20 => state.settings.code_indexing_enabled = !state.settings.code_indexing_enabled,
-        21 => state.settings.auto_activate_project = !state.settings.auto_activate_project,
-        22 => {
+        28 => adjust_u8(&mut state.settings.grid_columns, delta, 1, 8),
+        29 => state.settings.code_indexing_enabled = !state.settings.code_indexing_enabled,
+        30 => state.settings.auto_activate_project = !state.settings.auto_activate_project,
+        31 => {
             state.settings.follow_transcript = !state.settings.follow_transcript;
             state.follow_output = state.settings.follow_transcript;
         }
-        23 => state.settings.compact_board = !state.settings.compact_board,
-        24 => state.settings.human_events = !state.settings.human_events,
+        32 => state.settings.compact_board = !state.settings.compact_board,
+        33 => state.settings.human_events = !state.settings.human_events,
         _ => {}
     }
     let line = setting_lines(state)
@@ -2358,6 +2739,105 @@ fn adjust_setting(state: &mut AgentOsState, delta: isize) {
     state.tui.status = Some(line);
     if let Err(err) = save_settings(state) {
         state.tui.status = Some(format!("Settings changed but not saved: {err}"));
+    }
+}
+
+fn adjust_advisor_permission(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "codex") => {
+            settings.advisor_executioner_codex_mode = cycle_index(
+                settings.advisor_executioner_codex_mode,
+                CODEX_MODES.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Advisor, "codex") => {
+            settings.advisor_advisor_codex_mode = cycle_index(
+                settings.advisor_advisor_codex_mode,
+                CODEX_MODES.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Executioner, _) => {
+            settings.advisor_executioner_claude_mode = cycle_index(
+                settings.advisor_executioner_claude_mode,
+                CLAUDE_MODES.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Advisor, _) => {
+            settings.advisor_advisor_claude_mode = cycle_index(
+                settings.advisor_advisor_claude_mode,
+                CLAUDE_MODES.len(),
+                delta,
+            );
+        }
+    }
+}
+
+fn adjust_advisor_model(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "codex") => {
+            settings.advisor_executioner_codex_model = cycle_index(
+                settings.advisor_executioner_codex_model,
+                CODEX_MODELS.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Advisor, "codex") => {
+            settings.advisor_advisor_codex_model = cycle_index(
+                settings.advisor_advisor_codex_model,
+                CODEX_MODELS.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Executioner, _) => {
+            settings.advisor_executioner_claude_model = cycle_index(
+                settings.advisor_executioner_claude_model,
+                CLAUDE_MODELS.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Advisor, _) => {
+            settings.advisor_advisor_claude_model = cycle_index(
+                settings.advisor_advisor_claude_model,
+                CLAUDE_MODELS.len(),
+                delta,
+            );
+        }
+    }
+}
+
+fn adjust_advisor_effort(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
+    match (role, advisor_engine(settings, role)) {
+        (AdvisorRole::Executioner, "codex") => {
+            settings.advisor_executioner_codex_effort = cycle_index(
+                settings.advisor_executioner_codex_effort,
+                CODEX_EFFORTS.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Advisor, "codex") => {
+            settings.advisor_advisor_codex_effort = cycle_index(
+                settings.advisor_advisor_codex_effort,
+                CODEX_EFFORTS.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Executioner, _) => {
+            settings.advisor_executioner_claude_effort = cycle_index(
+                settings.advisor_executioner_claude_effort,
+                CLAUDE_EFFORTS.len(),
+                delta,
+            );
+        }
+        (AdvisorRole::Advisor, _) => {
+            settings.advisor_advisor_claude_effort = cycle_index(
+                settings.advisor_advisor_claude_effort,
+                CLAUDE_EFFORTS.len(),
+                delta,
+            );
+        }
     }
 }
 
@@ -2678,5 +3158,62 @@ mod tests {
         assert!(text.contains("Selected project"));
         assert!(text.contains("active project App"));
         assert!(!text.trim_start().starts_with('{'));
+    }
+
+    #[test]
+    fn advisor_defaults_copy_current_codex_profile() {
+        let mut settings = UiSettings {
+            default_engine: 2,
+            codex_mode: 1,
+            codex_model: 2,
+            codex_effort: 3,
+            ..UiSettings::default()
+        };
+        initialize_advisor_defaults(&mut settings);
+        assert!(settings.advisor_defaults_initialized);
+        assert_eq!(advisor_engine(&settings, AdvisorRole::Executioner), "codex");
+        assert_eq!(settings.advisor_executioner_codex_mode, 1);
+        assert_eq!(settings.advisor_executioner_codex_model, 2);
+        assert_eq!(settings.advisor_executioner_codex_effort, 3);
+        assert_eq!(advisor_engine(&settings, AdvisorRole::Advisor), "claude");
+    }
+
+    #[test]
+    fn advisor_role_flags_use_role_profile() {
+        let settings = UiSettings {
+            advisor_executioner_engine: 1,
+            advisor_executioner_codex_model: 0,
+            advisor_executioner_codex_effort: 3,
+            advisor_advisor_engine: 0,
+            advisor_advisor_claude_model: 0,
+            advisor_advisor_claude_effort: 3,
+            ..UiSettings::default()
+        };
+        let exec_flags = spawn_flags_for_advisor_role(&settings, AdvisorRole::Executioner);
+        assert!(exec_flags.contains(&"shell_environment_policy.inherit=all".to_string()));
+        assert!(exec_flags.contains(&"model=\"gpt-5.5\"".to_string()));
+        assert!(exec_flags.contains(&"model_reasoning_effort=\"high\"".to_string()));
+
+        let advisor_flags = spawn_flags_for_advisor_role(&settings, AdvisorRole::Advisor);
+        assert_eq!(
+            advisor_flags,
+            vec![
+                "--permission-mode".to_string(),
+                "default".to_string(),
+                "--model".to_string(),
+                "claude-opus-4-7".to_string(),
+                "--effort".to_string(),
+                "high".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn advisor_prompts_include_target_and_short_step_rules() {
+        let prompt = advisor_prompt("ship auth", "session-123", "[1, 2]");
+        assert!(prompt.contains("session-123"));
+        assert!(prompt.contains("[1, 2]"));
+        assert!(prompt.contains("Prefer under 240 characters"));
+        assert!(prompt.contains("Do not edit files"));
     }
 }

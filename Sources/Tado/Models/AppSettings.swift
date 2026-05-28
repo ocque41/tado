@@ -16,6 +16,26 @@ final class AppSettings {
     var coworkEffortRaw: String = CoworkEffort.auto.rawValue
     var coworkModelRaw: String = CoworkModel.auto.rawValue
 
+    // Advisor mode spawns two normal todo tiles: an executioner that only
+    // executes short directed steps, and an advisor that decides the next step.
+    // It is off by default and limited to CLI engines with PTY/tool support.
+    var advisorEnabled: Bool = false
+    var advisorDefaultsInitialized: Bool = false
+    var advisorExecutionerEngineRaw: String = AdvisorRoleEngine.claude.rawValue
+    var advisorExecutionerClaudeModeRaw: String = ClaudeMode.askPermissions.rawValue
+    var advisorExecutionerClaudeModelRaw: String = ClaudeModel.sonnet46.rawValue
+    var advisorExecutionerClaudeEffortRaw: String = ClaudeEffort.auto.rawValue
+    var advisorExecutionerCodexModeRaw: String = CodexMode.defaultPermissions.rawValue
+    var advisorExecutionerCodexModelRaw: String = CodexModel.gpt54.rawValue
+    var advisorExecutionerCodexEffortRaw: String = CodexEffort.auto.rawValue
+    var advisorAdvisorEngineRaw: String = AdvisorRoleEngine.claude.rawValue
+    var advisorAdvisorClaudeModeRaw: String = ClaudeMode.askPermissions.rawValue
+    var advisorAdvisorClaudeModelRaw: String = ClaudeModel.opus47.rawValue
+    var advisorAdvisorClaudeEffortRaw: String = ClaudeEffort.high.rawValue
+    var advisorAdvisorCodexModeRaw: String = CodexMode.defaultPermissions.rawValue
+    var advisorAdvisorCodexModelRaw: String = CodexModel.gpt55.rawValue
+    var advisorAdvisorCodexEffortRaw: String = CodexEffort.high.rawValue
+
     // Display / harness UI. Off by default because the fullscreen ("no flicker")
     // UI runs in alt-screen mode — every frame Claude Code paints replaces the
     // previous one, so nothing lands in the tile's scrollback buffer and
@@ -166,6 +186,147 @@ final class AppSettings {
     var coworkModel: CoworkModel {
         get { CoworkModel(rawValue: CoworkModel.normalizedRawValue(coworkModelRaw)) ?? .auto }
         set { coworkModelRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerEngine: AdvisorRoleEngine {
+        get { AdvisorRoleEngine(rawValue: advisorExecutionerEngineRaw) ?? .claude }
+        set { advisorExecutionerEngineRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorEngine: AdvisorRoleEngine {
+        get { AdvisorRoleEngine(rawValue: advisorAdvisorEngineRaw) ?? .claude }
+        set { advisorAdvisorEngineRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerClaudeMode: ClaudeMode {
+        get { ClaudeMode(rawValue: advisorExecutionerClaudeModeRaw) ?? .askPermissions }
+        set { advisorExecutionerClaudeModeRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerClaudeModel: ClaudeModel {
+        get { ClaudeModel(rawValue: ClaudeModel.normalizedRawValue(advisorExecutionerClaudeModelRaw)) ?? .sonnet46 }
+        set { advisorExecutionerClaudeModelRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerClaudeEffort: ClaudeEffort {
+        get { ClaudeEffort(rawValue: advisorExecutionerClaudeEffortRaw) ?? .auto }
+        set { advisorExecutionerClaudeEffortRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerCodexMode: CodexMode {
+        get { CodexMode(rawValue: advisorExecutionerCodexModeRaw) ?? .defaultPermissions }
+        set { advisorExecutionerCodexModeRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerCodexModel: CodexModel {
+        get { CodexModel(rawValue: CodexModel.normalizedRawValue(advisorExecutionerCodexModelRaw)) ?? .gpt54 }
+        set { advisorExecutionerCodexModelRaw = newValue.rawValue }
+    }
+
+    var advisorExecutionerCodexEffort: CodexEffort {
+        get { CodexEffort(rawValue: advisorExecutionerCodexEffortRaw) ?? .auto }
+        set { advisorExecutionerCodexEffortRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorClaudeMode: ClaudeMode {
+        get { ClaudeMode(rawValue: advisorAdvisorClaudeModeRaw) ?? .askPermissions }
+        set { advisorAdvisorClaudeModeRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorClaudeModel: ClaudeModel {
+        get { ClaudeModel(rawValue: ClaudeModel.normalizedRawValue(advisorAdvisorClaudeModelRaw)) ?? .opus47 }
+        set { advisorAdvisorClaudeModelRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorClaudeEffort: ClaudeEffort {
+        get { ClaudeEffort(rawValue: advisorAdvisorClaudeEffortRaw) ?? .high }
+        set { advisorAdvisorClaudeEffortRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorCodexMode: CodexMode {
+        get { CodexMode(rawValue: advisorAdvisorCodexModeRaw) ?? .defaultPermissions }
+        set { advisorAdvisorCodexModeRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorCodexModel: CodexModel {
+        get { CodexModel(rawValue: CodexModel.normalizedRawValue(advisorAdvisorCodexModelRaw)) ?? .gpt55 }
+        set { advisorAdvisorCodexModelRaw = newValue.rawValue }
+    }
+
+    var advisorAdvisorCodexEffort: CodexEffort {
+        get { CodexEffort(rawValue: advisorAdvisorCodexEffortRaw) ?? .high }
+        set { advisorAdvisorCodexEffortRaw = newValue.rawValue }
+    }
+
+    func initializeAdvisorDefaultsIfNeeded() {
+        guard !advisorDefaultsInitialized else { return }
+        let copiedEngine = AdvisorRoleEngine(terminalEngine: engine)
+        advisorExecutionerEngine = copiedEngine
+        switch copiedEngine {
+        case .claude:
+            advisorExecutionerClaudeMode = claudeMode
+            advisorExecutionerClaudeModel = claudeModel
+            advisorExecutionerClaudeEffort = claudeEffort
+        case .codex:
+            advisorExecutionerCodexMode = codexMode
+            advisorExecutionerCodexModel = codexModel
+            advisorExecutionerCodexEffort = codexEffort
+        }
+        advisorAdvisorEngine = .claude
+        advisorAdvisorClaudeMode = .askPermissions
+        advisorAdvisorClaudeModel = .opus47
+        advisorAdvisorClaudeEffort = .high
+        advisorAdvisorCodexMode = .defaultPermissions
+        advisorAdvisorCodexModel = .gpt55
+        advisorAdvisorCodexEffort = .high
+        advisorDefaultsInitialized = true
+    }
+
+    func advisorEngine(for role: AdvisorRole) -> TerminalEngine {
+        switch role {
+        case .executioner:
+            return advisorExecutionerEngine.terminalEngine
+        case .advisor:
+            return advisorAdvisorEngine.terminalEngine
+        }
+    }
+
+    func advisorModeFlags(for role: AdvisorRole) -> [String] {
+        let engine = advisorEngine(for: role)
+        switch (role, engine) {
+        case (.executioner, .claude):
+            return advisorExecutionerClaudeMode.cliFlags
+        case (.advisor, .claude):
+            return advisorAdvisorClaudeMode.cliFlags
+        case (.executioner, .codex):
+            return ProcessSpawner.codexEmbedShim(allowAlternateScreen: codexAlternateScreen)
+                + advisorExecutionerCodexMode.cliFlags
+        case (.advisor, .codex):
+            return ProcessSpawner.codexEmbedShim(allowAlternateScreen: codexAlternateScreen)
+                + advisorAdvisorCodexMode.cliFlags
+        case (_, .cowork):
+            return []
+        }
+    }
+
+    func advisorModelFlags(for role: AdvisorRole) -> [String] {
+        switch (role, advisorEngine(for: role)) {
+        case (.executioner, .claude): return advisorExecutionerClaudeModel.cliFlags
+        case (.advisor, .claude): return advisorAdvisorClaudeModel.cliFlags
+        case (.executioner, .codex): return advisorExecutionerCodexModel.cliFlags
+        case (.advisor, .codex): return advisorAdvisorCodexModel.cliFlags
+        case (_, .cowork): return []
+        }
+    }
+
+    func advisorEffortFlags(for role: AdvisorRole) -> [String] {
+        switch (role, advisorEngine(for: role)) {
+        case (.executioner, .claude): return advisorExecutionerClaudeEffort.cliFlags
+        case (.advisor, .claude): return advisorAdvisorClaudeEffort.cliFlags
+        case (.executioner, .codex): return advisorExecutionerCodexEffort.cliFlags
+        case (.advisor, .codex): return advisorAdvisorCodexEffort.cliFlags
+        case (_, .cowork): return []
+        }
     }
 }
 

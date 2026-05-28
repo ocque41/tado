@@ -93,6 +93,39 @@ enum TerminalEngine: String, Codable, CaseIterable {
     }
 }
 
+enum AdvisorRoleEngine: String, Codable, CaseIterable {
+    case claude
+    case codex
+
+    var displayName: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        }
+    }
+
+    var terminalEngine: TerminalEngine {
+        switch self {
+        case .claude: .claude
+        case .codex: .codex
+        }
+    }
+
+    init(terminalEngine: TerminalEngine) {
+        switch terminalEngine {
+        case .codex:
+            self = .codex
+        case .claude, .cowork:
+            self = .claude
+        }
+    }
+}
+
+enum AdvisorRole {
+    case executioner
+    case advisor
+}
+
 /// Mirrors Claude Code's own Mode picker (Shift+⌘+M). Order matches the
 /// in-app menu so Tado's picker reads the same top-to-bottom.
 ///

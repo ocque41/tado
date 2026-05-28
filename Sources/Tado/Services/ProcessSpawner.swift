@@ -636,6 +636,15 @@ enum ProcessSpawner {
         a Unix domain socket and fail fast with a clear "Tado is not running" message \
         when the app isn't up.
 
+        **Advisor mode**: When the user enables Advisor for normal todos, Tado spawns \
+        two visible terminals: an executioner and an advisor. The advisor sends one \
+        short step at a time to the executioner with `tado_send` / `tado_read` MCP tools \
+        or `tado-send` / `tado-read` CLI fallback. Advisor messages should be tiny \
+        (prefer under 240 chars). The advisor should wait for relay output before the \
+        next step and should not edit files or run commands directly. Dispatch, Eternal, \
+        Tado Use, `tado-deploy`, and explicit `/claude` or `/codex` runtime commands do \
+        not use Advisor mode.
+
         ═══════════════════════════════════════════════════════════
         CRITICAL RULES — copy these verbatim into the target docs
         ═══════════════════════════════════════════════════════════

@@ -201,6 +201,29 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Advisor") {
+                    Toggle(isOn: Binding(
+                        get: { settings.advisorEnabled },
+                        set: { enabled in
+                            if enabled {
+                                settings.initializeAdvisorDefaultsIfNeeded()
+                            }
+                            settings.advisorEnabled = enabled
+                            try? modelContext.save()
+                        }
+                    )) {
+                        labelWithTip(
+                            "Advisor mode",
+                            "Normal todos spawn an executioner tile and an advisor tile. Dispatch, Eternal, Tado Use, and explicit spawns stay unchanged."
+                        )
+                    }
+
+                    if settings.advisorEnabled {
+                        advisorRoleProfile("Executioner", role: .executioner)
+                        advisorRoleProfile("Advisor", role: .advisor)
+                    }
+                }
+
                 Section {
                     if settings.engine == .claude {
                         Toggle(isOn: Binding(
@@ -438,6 +461,191 @@ struct SettingsView: View {
             Text(label)
             InfoTip(text: tip)
         }
+    }
+
+    private func advisorRoleProfile(_ title: String, role: AdvisorRole) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+
+            Picker("Engine", selection: advisorEngineBinding(role)) {
+                ForEach(AdvisorRoleEngine.allCases, id: \.self) { engine in
+                    Text(engine.displayName).tag(engine)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if settings.advisorEngine(for: role) == .claude {
+                Picker("Permission", selection: advisorClaudeModeBinding(role)) {
+                    ForEach(ClaudeMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Picker("Model", selection: advisorClaudeModelBinding(role)) {
+                    ForEach(ClaudeModel.allCases, id: \.self) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Picker("Effort", selection: advisorClaudeEffortBinding(role)) {
+                    ForEach(ClaudeEffort.allCases, id: \.self) { effort in
+                        Text(effort.displayName).tag(effort)
+                    }
+                }
+                .pickerStyle(.menu)
+            } else {
+                Picker("Permission", selection: advisorCodexModeBinding(role)) {
+                    ForEach(CodexMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Picker("Model", selection: advisorCodexModelBinding(role)) {
+                    ForEach(CodexModel.allCases, id: \.self) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Picker("Effort", selection: advisorCodexEffortBinding(role)) {
+                    ForEach(CodexEffort.allCases, id: \.self) { effort in
+                        Text(effort.displayName).tag(effort)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func advisorEngineBinding(_ role: AdvisorRole) -> Binding<AdvisorRoleEngine> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerEngine
+                case .advisor: settings.advisorAdvisorEngine
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerEngine = value
+                case .advisor: settings.advisorAdvisorEngine = value
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func advisorClaudeModeBinding(_ role: AdvisorRole) -> Binding<ClaudeMode> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerClaudeMode
+                case .advisor: settings.advisorAdvisorClaudeMode
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerClaudeMode = value
+                case .advisor: settings.advisorAdvisorClaudeMode = value
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func advisorClaudeModelBinding(_ role: AdvisorRole) -> Binding<ClaudeModel> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerClaudeModel
+                case .advisor: settings.advisorAdvisorClaudeModel
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerClaudeModel = value
+                case .advisor: settings.advisorAdvisorClaudeModel = value
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func advisorClaudeEffortBinding(_ role: AdvisorRole) -> Binding<ClaudeEffort> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerClaudeEffort
+                case .advisor: settings.advisorAdvisorClaudeEffort
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerClaudeEffort = value
+                case .advisor: settings.advisorAdvisorClaudeEffort = value
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func advisorCodexModeBinding(_ role: AdvisorRole) -> Binding<CodexMode> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerCodexMode
+                case .advisor: settings.advisorAdvisorCodexMode
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerCodexMode = value
+                case .advisor: settings.advisorAdvisorCodexMode = value
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func advisorCodexModelBinding(_ role: AdvisorRole) -> Binding<CodexModel> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerCodexModel
+                case .advisor: settings.advisorAdvisorCodexModel
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerCodexModel = value
+                case .advisor: settings.advisorAdvisorCodexModel = value
+                }
+                try? modelContext.save()
+            }
+        )
+    }
+
+    private func advisorCodexEffortBinding(_ role: AdvisorRole) -> Binding<CodexEffort> {
+        Binding(
+            get: {
+                switch role {
+                case .executioner: settings.advisorExecutionerCodexEffort
+                case .advisor: settings.advisorAdvisorCodexEffort
+                }
+            },
+            set: { value in
+                switch role {
+                case .executioner: settings.advisorExecutionerCodexEffort = value
+                case .advisor: settings.advisorAdvisorCodexEffort = value
+                }
+                try? modelContext.save()
+            }
+        )
     }
 
     /// Phase 12 — Relay page head for the Settings sheet. Replaces

@@ -78,6 +78,57 @@ final class AppSettingsSync {
         if row.codexModelRaw      != codexModel                   { row.codexModelRaw = codexModel }
         if row.codexAlternateScreen != s.engine.codex.alternateScreen { row.codexAlternateScreen = s.engine.codex.alternateScreen }
 
+        if row.advisorEnabled != s.engine.advisor.enabled { row.advisorEnabled = s.engine.advisor.enabled }
+        if row.advisorDefaultsInitialized != s.engine.advisor.defaultsInitialized {
+            row.advisorDefaultsInitialized = s.engine.advisor.defaultsInitialized
+        }
+        if row.advisorExecutionerEngineRaw != s.engine.advisor.executioner.engine {
+            row.advisorExecutionerEngineRaw = s.engine.advisor.executioner.engine
+        }
+        if row.advisorExecutionerClaudeModeRaw != s.engine.advisor.executioner.claude.mode {
+            row.advisorExecutionerClaudeModeRaw = s.engine.advisor.executioner.claude.mode
+        }
+        let execClaudeModel = ClaudeModel.normalizedRawValue(s.engine.advisor.executioner.claude.model)
+        if row.advisorExecutionerClaudeModelRaw != execClaudeModel {
+            row.advisorExecutionerClaudeModelRaw = execClaudeModel
+        }
+        if row.advisorExecutionerClaudeEffortRaw != s.engine.advisor.executioner.claude.effort {
+            row.advisorExecutionerClaudeEffortRaw = s.engine.advisor.executioner.claude.effort
+        }
+        if row.advisorExecutionerCodexModeRaw != s.engine.advisor.executioner.codex.mode {
+            row.advisorExecutionerCodexModeRaw = s.engine.advisor.executioner.codex.mode
+        }
+        let execCodexModel = CodexModel.normalizedRawValue(s.engine.advisor.executioner.codex.model)
+        if row.advisorExecutionerCodexModelRaw != execCodexModel {
+            row.advisorExecutionerCodexModelRaw = execCodexModel
+        }
+        if row.advisorExecutionerCodexEffortRaw != s.engine.advisor.executioner.codex.effort {
+            row.advisorExecutionerCodexEffortRaw = s.engine.advisor.executioner.codex.effort
+        }
+        if row.advisorAdvisorEngineRaw != s.engine.advisor.advisor.engine {
+            row.advisorAdvisorEngineRaw = s.engine.advisor.advisor.engine
+        }
+        if row.advisorAdvisorClaudeModeRaw != s.engine.advisor.advisor.claude.mode {
+            row.advisorAdvisorClaudeModeRaw = s.engine.advisor.advisor.claude.mode
+        }
+        let advisorClaudeModel = ClaudeModel.normalizedRawValue(s.engine.advisor.advisor.claude.model)
+        if row.advisorAdvisorClaudeModelRaw != advisorClaudeModel {
+            row.advisorAdvisorClaudeModelRaw = advisorClaudeModel
+        }
+        if row.advisorAdvisorClaudeEffortRaw != s.engine.advisor.advisor.claude.effort {
+            row.advisorAdvisorClaudeEffortRaw = s.engine.advisor.advisor.claude.effort
+        }
+        if row.advisorAdvisorCodexModeRaw != s.engine.advisor.advisor.codex.mode {
+            row.advisorAdvisorCodexModeRaw = s.engine.advisor.advisor.codex.mode
+        }
+        let advisorCodexModel = CodexModel.normalizedRawValue(s.engine.advisor.advisor.codex.model)
+        if row.advisorAdvisorCodexModelRaw != advisorCodexModel {
+            row.advisorAdvisorCodexModelRaw = advisorCodexModel
+        }
+        if row.advisorAdvisorCodexEffortRaw != s.engine.advisor.advisor.codex.effort {
+            row.advisorAdvisorCodexEffortRaw = s.engine.advisor.advisor.codex.effort
+        }
+
         if row.gridColumns        != s.canvas.gridColumns { row.gridColumns = s.canvas.gridColumns }
 
         try? context.save()
@@ -119,6 +170,22 @@ final class AppSettingsSync {
         next.engine.codex.effort        = row.codexEffortRaw
         next.engine.codex.model         = row.codexModel.rawValue
         next.engine.codex.alternateScreen = row.codexAlternateScreen
+        next.engine.advisor.enabled = row.advisorEnabled
+        next.engine.advisor.defaultsInitialized = row.advisorDefaultsInitialized
+        next.engine.advisor.executioner.engine = row.advisorExecutionerEngine.rawValue
+        next.engine.advisor.executioner.claude.mode = row.advisorExecutionerClaudeModeRaw
+        next.engine.advisor.executioner.claude.model = row.advisorExecutionerClaudeModel.rawValue
+        next.engine.advisor.executioner.claude.effort = row.advisorExecutionerClaudeEffortRaw
+        next.engine.advisor.executioner.codex.mode = row.advisorExecutionerCodexModeRaw
+        next.engine.advisor.executioner.codex.model = row.advisorExecutionerCodexModel.rawValue
+        next.engine.advisor.executioner.codex.effort = row.advisorExecutionerCodexEffortRaw
+        next.engine.advisor.advisor.engine = row.advisorAdvisorEngine.rawValue
+        next.engine.advisor.advisor.claude.mode = row.advisorAdvisorClaudeModeRaw
+        next.engine.advisor.advisor.claude.model = row.advisorAdvisorClaudeModel.rawValue
+        next.engine.advisor.advisor.claude.effort = row.advisorAdvisorClaudeEffortRaw
+        next.engine.advisor.advisor.codex.mode = row.advisorAdvisorCodexModeRaw
+        next.engine.advisor.advisor.codex.model = row.advisorAdvisorCodexModel.rawValue
+        next.engine.advisor.advisor.codex.effort = row.advisorAdvisorCodexEffortRaw
 
         next.canvas.gridColumns = row.gridColumns
 

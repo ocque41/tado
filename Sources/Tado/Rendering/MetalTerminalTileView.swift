@@ -253,7 +253,7 @@ struct MetalTerminalTileView: View {
             teammates: session.teamAgents ?? [],
             scopeIsolation: session.scopeIsolation
         )
-        let userPrompt = session.todoText
+        let userPrompt = session.spawnPromptOverride ?? session.todoText
         let modeFlagsRaw = modeFlags
         let effortFlagsRaw = effortFlags
         let modelFlagsRaw = modelFlags

@@ -228,10 +228,10 @@ CLI Agent OS behavior:
 - `tado` is the public TUI entrypoint. `tadod` is the daemon entrypoint.
 - The Use page is the command/control reference. Work, Board, Projects, Events, and Mux should stay data-first.
 - `/project` and `/projects` are both valid command-palette verbs.
-- On Projects, arrow keys select a project, Space activates it, and normal prompt text spawns the configured default agent in the selected project.
+- On Projects, arrow keys select a project, Space activates it, and normal prompt text spawns the configured default agent in the selected project. If Advisor mode is enabled, normal prompt text spawns an executioner plus an advisor and links them with runtime `advisor.link`.
 - Project paths typed without `/`, `./`, or `../` resolve from `$HOME`; `Documents/foo` means `~/Documents/foo`, not the repo cwd.
 - `Shift+X` in the TUI kills and deletes the selected runtime session.
-- Settings is an interactive list controlled with arrows and Space; do not regress it to raw JSON. It should expose engine, model, effort, permission, terminal display, board, event, and project prompt behavior where the runtime can honor them.
+- Settings is an interactive list controlled with arrows and Space; do not regress it to raw JSON. It should expose engine, model, effort, permission, Advisor role profiles, terminal display, board, event, and project prompt behavior where the runtime can honor them.
 - Events defaults to a human-readable timeline; JSON remains an explicit settings mode.
 
 SwiftData is a cache:
@@ -522,6 +522,10 @@ Important constraints:
 - shell-escape model flags because some model names contain brackets.
 - `sanitizeFlags` protects auto-mode sentinels.
 - fallback is bounded and user-visible; it is not a watchdog.
+- Advisor mode is for normal todos only. It uses Claude/Codex role profiles,
+  excludes Cowork, spawns an executioner in the original todo slot plus an
+  advisor in the next free slot, and communicates through existing Tado
+  A2A CLI/MCP tools. Advisor instructions must stay small and one-step.
 - new A2A tools or agent instructions must be added to bootstrap prompt functions:
   - `bootstrapPrompt`
   - `bootstrapTeamPrompt`

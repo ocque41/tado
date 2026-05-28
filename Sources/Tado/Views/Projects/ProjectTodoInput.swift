@@ -336,23 +336,39 @@ struct ProjectTodoInput: View {
         // Smart engine resolution: agent's parent directory determines harness.
         // .claude/agents/<name>.md → claude, .codex/agents/<name>.md → codex.
         // Falls back to user's default engine when agent is not found or not selected.
-        let resolvedEngine: TerminalEngine
+        let selectedAgentEngine: TerminalEngine?
         if let agentName = selectedAgentName {
-            resolvedEngine = AgentDiscoveryService.resolveEngine(agentName: agentName, projectRoot: project.rootPath) ?? settings.engine
+            selectedAgentEngine = AgentDiscoveryService.resolveEngine(agentName: agentName, projectRoot: project.rootPath)
         } else {
-            resolvedEngine = settings.engine
+            selectedAgentEngine = nil
         }
+        let resolvedEngine = selectedAgentEngine ?? settings.engine
 
         let team = effectiveTeamID.flatMap { tid in teams.first { $0.id == tid } }
-        terminalManager.spawnAndWire(
+        let advisorIndex = AdvisorTodoSpawner.nextAvailableGridIndex(
+            usedIndices: activeTodos.map(\.gridIndex),
+            reserving: [index]
+        )
+        let advisorPosition = CanvasLayout.position(
+            forIndex: advisorIndex,
+            gridColumns: settings.gridColumns
+        )
+        AdvisorTodoSpawner.spawnNormalTodo(
             todo: todo,
-            engine: resolvedEngine,
+            task: text,
+            settings: settings,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            defaultEngine: resolvedEngine,
+            advisorGridIndex: advisorIndex,
+            advisorPosition: advisorPosition,
             cwd: project.rootPath,
-            agentName: selectedAgentName,
             projectName: project.name,
             teamName: team?.name,
             teamID: team?.id,
-            teamAgents: team?.agentNames
+            teamAgents: team?.agentNames,
+            agentName: selectedAgentName,
+            agentEngine: selectedAgentEngine
         )
 
         try? modelContext.save()

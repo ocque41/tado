@@ -53,7 +53,7 @@ struct RelayTodoListView: View {
 
     private var forwardTargetText: String? {
         guard let targetID = appState.forwardTargetTodoID else { return nil }
-        return activeTodos.first(where: { $0.id == targetID })?.text
+        return activeTodos.first(where: { $0.id == targetID })?.displayName
     }
 
     var body: some View {
@@ -256,9 +256,23 @@ struct RelayTodoListView: View {
             todo.projectID = activeProject.id
         }
         modelContext.insert(todo)
-        terminalManager.spawnAndWire(
+        let advisorIndex = AdvisorTodoSpawner.nextAvailableGridIndex(
+            usedIndices: activeTodos.map(\.gridIndex),
+            reserving: [index]
+        )
+        let advisorPosition = CanvasLayout.position(
+            forIndex: advisorIndex,
+            gridColumns: settings.gridColumns
+        )
+        AdvisorTodoSpawner.spawnNormalTodo(
             todo: todo,
-            engine: settings.engine,
+            task: text,
+            settings: settings,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            defaultEngine: settings.engine,
+            advisorGridIndex: advisorIndex,
+            advisorPosition: advisorPosition,
             cwd: activeProject?.rootPath,
             projectName: activeProject?.name
         )
@@ -337,7 +351,7 @@ struct RelayTodoRow: View {
 
                 statusDot
 
-                Text(todo.text)
+                Text(todo.displayName)
                     .font(Typography.sans(size: 15, weight: .regular))
                     .foregroundStyle(RelayPalette.foreground(for: theme))
                     .lineLimit(1)

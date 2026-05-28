@@ -1029,9 +1029,23 @@ struct ProjectKanbanView: View {
             todo.kanbanColumnKey = firstCol.columnKey
         }
         modelContext.insert(todo)
-        terminalManager.spawnAndWire(
+        let advisorIndex = AdvisorTodoSpawner.nextAvailableGridIndex(
+            usedIndices: allTodos.filter { $0.listState == .active }.map(\.gridIndex),
+            reserving: [index]
+        )
+        let advisorPosition = CanvasLayout.position(
+            forIndex: advisorIndex,
+            gridColumns: settings.gridColumns
+        )
+        AdvisorTodoSpawner.spawnNormalTodo(
             todo: todo,
-            engine: settings.engine,
+            task: brief,
+            settings: settings,
+            modelContext: modelContext,
+            terminalManager: terminalManager,
+            defaultEngine: settings.engine,
+            advisorGridIndex: advisorIndex,
+            advisorPosition: advisorPosition,
             cwd: project.rootPath,
             projectName: project.name
         )
