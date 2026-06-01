@@ -50,7 +50,20 @@ jobs:
           npm install --prefix "$prefix" -g "./$tarball"
           "$prefix/bin/tado" --help
           "$prefix/bin/tadod" --help
-          "$prefix/bin/tado-mcp" --help || true
+          mcp_out="$(mktemp)"
+          printf '%s\n%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | "$prefix/bin/tado-mcp" > "$mcp_out"
+          node - "$mcp_out" <<'NODE'
+          const fs = require("fs");
+          const lines = fs.readFileSync(process.argv[2], "utf8").trim().split(/\n+/).map(JSON.parse);
+          if (lines.length !== 2) throw new Error(`expected 2 MCP responses, got ${lines.length}`);
+          if (lines[0].result?.serverInfo?.name !== "tado") throw new Error("bad MCP initialize response");
+          if (!Array.isArray(lines[1].result?.tools) || lines[1].result.tools.length === 0) {
+            throw new Error("bad MCP tools/list response");
+          }
+          NODE
           storage="$(mktemp -d)"
           TADO_STORAGE_ROOT="$storage" "$prefix/bin/tado" --profile ci daemon start
           TADO_STORAGE_ROOT="$storage" "$prefix/bin/tado" --profile ci daemon status

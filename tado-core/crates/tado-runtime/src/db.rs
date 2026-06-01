@@ -29,6 +29,7 @@ pub struct SessionRecord {
     pub created_at: String,
     pub updated_at: String,
     pub exit_code: Option<i32>,
+    #[serde(skip_serializing)]
     pub cowork_result_path: Option<String>,
 }
 
@@ -967,6 +968,34 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode.to_ascii_lowercase(), "wal");
+    }
+
+    #[test]
+    fn session_record_json_hides_legacy_cowork_path() {
+        let now = Utc::now().to_rfc3339();
+        let value = serde_json::to_value(SessionRecord {
+            id: "s1".into(),
+            title: "test".into(),
+            kind: "pty".into(),
+            status: "running".into(),
+            engine: Some("codex".into()),
+            command: "/bin/zsh".into(),
+            args: Vec::new(),
+            cwd: None,
+            project_id: None,
+            project_root: None,
+            agent_name: None,
+            team_name: None,
+            grid_row: None,
+            grid_col: None,
+            pid: None,
+            created_at: now.clone(),
+            updated_at: now,
+            exit_code: None,
+            cowork_result_path: Some("/tmp/legacy-cowork.md".into()),
+        })
+        .unwrap();
+        assert!(value.get("cowork_result_path").is_none());
     }
 
     #[test]

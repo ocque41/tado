@@ -53,7 +53,6 @@ pub struct SpawnPlan {
     pub env: Vec<(String, String)>,
     pub cols: u16,
     pub rows: u16,
-    pub cowork_result_path: Option<String>,
 }
 
 pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
@@ -68,13 +67,13 @@ pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
         .or_else(|| request.command.clone())
         .unwrap_or_else(|| "Tado session".to_string());
 
-    let (executable, args, cowork_result_path) = match request.engine {
+    let (executable, args) = match request.engine {
         Engine::Raw => {
             let cmd = request
                 .command
                 .clone()
                 .ok_or_else(|| anyhow!("raw spawn requires command"))?;
-            (cmd, request.args.clone(), None)
+            (cmd, request.args.clone())
         }
         Engine::Shell => {
             let command = request.command.clone().unwrap_or_else(|| prompt.clone());
@@ -84,7 +83,6 @@ pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
             (
                 "/bin/zsh".to_string(),
                 vec!["-l".into(), "-c".into(), command],
-                None,
             )
         }
         Engine::Codex => {
@@ -101,7 +99,6 @@ pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
             (
                 "/bin/zsh".to_string(),
                 vec!["-l".into(), "-c".into(), parts.join(" ")],
-                None,
             )
         }
     };
@@ -119,7 +116,6 @@ pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
         env: request.env,
         cols,
         rows,
-        cowork_result_path,
     })
 }
 

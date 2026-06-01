@@ -1,10 +1,9 @@
 #
-# tado-mcp — stdio MCP bridge to Tado's in-app services.
+# tado-mcp — stdio MCP bridge to Tado runtime services.
 #
-# Port of the Node-based `tado-mcp/` server at the repo root. The
-# two ship side-by-side for one release: the Node one stays as
-# reference, the Rust one is what Tado auto-registers at launch
-# via `claude mcp add tado`.
+# Port of the Node-based `tado-mcp/` server at the repo root. The Node
+# package is private/reference-only; this Rust binary is the public release
+# MCP surface for the terminal Agent OS and desktop bundle.
 #
 # Why Rust
 # --------

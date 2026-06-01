@@ -20,8 +20,10 @@
 
 pub mod control_client;
 pub mod disk;
+pub mod engine;
 pub mod output;
 pub mod tui;
+pub mod tui_settings;
 
 pub use control_client::{call, ControlClientError};
 pub use disk::{read_projects_index, ProjectIndexEntry};

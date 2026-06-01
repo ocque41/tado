@@ -19,9 +19,17 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tado_cli::tui::{SendTarget, TuiState, WorkKind, WorkRow};
+use tado_cli::{
+    tui::{SendTarget, TuiState, WorkKind, WorkRow},
+    tui_settings::{
+        adjust_advisor_effort, adjust_advisor_model, adjust_advisor_permission,
+        advisor_effort_label, advisor_engine, advisor_model_label, advisor_permission_label,
+        clamp_settings, cycle_index, initialize_advisor_defaults, spawn_env_for_engine,
+        spawn_flags_for_advisor_role, spawn_flags_for_engine, AdvisorRole, UiSettings, BELL_MODES,
+        CODEX_EFFORTS, CODEX_MODELS, CODEX_MODES, DEFAULT_ENGINES, ENGINE_LABELS, THEMES,
+    },
+};
 use tado_runtime::{ensure_daemon, profile_from_env, RuntimeClient};
 
 #[derive(Parser, Debug)]
@@ -115,123 +123,6 @@ struct ProjectView {
     id: String,
     name: String,
     root: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-struct UiSettings {
-    default_engine: usize,
-    codex_mode: usize,
-    codex_model: usize,
-    codex_effort: usize,
-    codex_alternate_screen: bool,
-    codex_account_label: String,
-    advisor_enabled: bool,
-    advisor_defaults_initialized: bool,
-    advisor_executioner_engine: usize,
-    advisor_executioner_codex_mode: usize,
-    advisor_executioner_codex_model: usize,
-    advisor_executioner_codex_effort: usize,
-    advisor_advisor_engine: usize,
-    advisor_advisor_codex_mode: usize,
-    advisor_advisor_codex_model: usize,
-    advisor_advisor_codex_effort: usize,
-    random_tile_color: bool,
-    default_theme: usize,
-    terminal_font_size: u8,
-    cursor_blink: bool,
-    bell_mode: usize,
-    grid_columns: u8,
-    code_indexing_enabled: bool,
-    auto_activate_project: bool,
-    follow_transcript: bool,
-    compact_board: bool,
-    show_done_cards: bool,
-    human_events: bool,
-}
-
-impl Default for UiSettings {
-    fn default() -> Self {
-        Self {
-            default_engine: 1,
-            codex_mode: 0,
-            codex_model: 0,
-            codex_effort: 0,
-            codex_alternate_screen: false,
-            codex_account_label: "default".to_string(),
-            advisor_enabled: false,
-            advisor_defaults_initialized: false,
-            advisor_executioner_engine: 0,
-            advisor_executioner_codex_mode: 0,
-            advisor_executioner_codex_model: 1,
-            advisor_executioner_codex_effort: 0,
-            advisor_advisor_engine: 0,
-            advisor_advisor_codex_mode: 0,
-            advisor_advisor_codex_model: 0,
-            advisor_advisor_codex_effort: 3,
-            random_tile_color: false,
-            default_theme: 0,
-            terminal_font_size: 13,
-            cursor_blink: true,
-            bell_mode: 1,
-            grid_columns: 3,
-            code_indexing_enabled: true,
-            auto_activate_project: true,
-            follow_transcript: true,
-            compact_board: false,
-            show_done_cards: true,
-            human_events: true,
-        }
-    }
-}
-
-const DEFAULT_ENGINES: &[&str] = &["shell", "codex"];
-const ENGINE_LABELS: &[&str] = &["Shell", "Codex"];
-const CODEX_MODES: &[(&str, &[&str])] = &[
-    ("Default permissions", &[]),
-    (
-        "Full access",
-        &[
-            "--ask-for-approval",
-            "never",
-            "--sandbox",
-            "danger-full-access",
-        ],
-    ),
-    ("Custom config", &[]),
-];
-const CODEX_MODELS: &[(&str, &str)] = &[
-    ("GPT-5.5", "gpt-5.5"),
-    ("GPT-5.4", "gpt-5.4"),
-    ("GPT-5.4-Mini", "gpt-5.4-mini"),
-    ("GPT-5.3-Codex", "gpt-5.3-codex"),
-    ("GPT-5.2", "gpt-5.2"),
-];
-const CODEX_EFFORTS: &[(&str, Option<&str>)] = &[
-    ("Auto", None),
-    ("Low", Some("low")),
-    ("Medium", Some("medium")),
-    ("High", Some("high")),
-    ("Extra high", Some("xhigh")),
-];
-const THEMES: &[&str] = &[
-    "Ember",
-    "Tado Dark",
-    "Copper",
-    "Mac Pro",
-    "Solarized Dark",
-    "Dracula",
-    "Nord",
-    "Monokai",
-    "Tokyo Night",
-    "Gruvbox",
-];
-const BELL_MODES: &[&str] = &["Off", "Audible", "Visual", "Audible + visual"];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AdvisorRole {
-    Executioner,
-    Advisor,
 }
 
 #[derive(Clone, Copy)]
@@ -1622,115 +1513,6 @@ fn save_settings(state: &AgentOsState) -> Result<()> {
     Ok(())
 }
 
-fn clamp_settings(settings: &mut UiSettings) {
-    settings.default_engine = if settings.default_engine == 0 { 0 } else { 1 };
-    settings.codex_mode = settings.codex_mode.min(CODEX_MODES.len() - 1);
-    settings.codex_model = settings.codex_model.min(CODEX_MODELS.len() - 1);
-    settings.codex_effort = settings.codex_effort.min(CODEX_EFFORTS.len() - 1);
-    if settings.codex_account_label.trim().is_empty() {
-        settings.codex_account_label = "default".to_string();
-    }
-    settings.advisor_executioner_engine = 0;
-    settings.advisor_executioner_codex_mode = settings
-        .advisor_executioner_codex_mode
-        .min(CODEX_MODES.len() - 1);
-    settings.advisor_executioner_codex_model = settings
-        .advisor_executioner_codex_model
-        .min(CODEX_MODELS.len() - 1);
-    settings.advisor_executioner_codex_effort = settings
-        .advisor_executioner_codex_effort
-        .min(CODEX_EFFORTS.len() - 1);
-    settings.advisor_advisor_engine = 0;
-    settings.advisor_advisor_codex_mode = settings
-        .advisor_advisor_codex_mode
-        .min(CODEX_MODES.len() - 1);
-    settings.advisor_advisor_codex_model = settings
-        .advisor_advisor_codex_model
-        .min(CODEX_MODELS.len() - 1);
-    settings.advisor_advisor_codex_effort = settings
-        .advisor_advisor_codex_effort
-        .min(CODEX_EFFORTS.len() - 1);
-    settings.default_theme = settings.default_theme.min(THEMES.len() - 1);
-    settings.terminal_font_size = settings.terminal_font_size.clamp(9, 24);
-    settings.bell_mode = settings.bell_mode.min(BELL_MODES.len() - 1);
-    settings.grid_columns = settings.grid_columns.clamp(1, 8);
-}
-
-fn spawn_flags_for_engine(settings: &UiSettings, engine: &str) -> Vec<String> {
-    match engine {
-        "codex" => codex_flags(
-            settings.codex_alternate_screen,
-            settings.codex_mode,
-            settings.codex_model,
-            settings.codex_effort,
-        ),
-        _ => Vec::new(),
-    }
-}
-
-fn advisor_engine(_settings: &UiSettings, _role: AdvisorRole) -> &'static str {
-    "codex"
-}
-
-fn spawn_flags_for_advisor_role(settings: &UiSettings, role: AdvisorRole) -> Vec<String> {
-    match role {
-        AdvisorRole::Executioner => codex_flags(
-            settings.codex_alternate_screen,
-            settings.advisor_executioner_codex_mode,
-            settings.advisor_executioner_codex_model,
-            settings.advisor_executioner_codex_effort,
-        ),
-        AdvisorRole::Advisor => codex_flags(
-            settings.codex_alternate_screen,
-            settings.advisor_advisor_codex_mode,
-            settings.advisor_advisor_codex_model,
-            settings.advisor_advisor_codex_effort,
-        ),
-    }
-}
-
-fn codex_flags(alternate_screen: bool, mode: usize, model: usize, effort: usize) -> Vec<String> {
-    let mut flags = Vec::new();
-    if !alternate_screen {
-        flags.push("--no-alt-screen".to_string());
-    }
-    flags.extend([
-        "-c".to_string(),
-        "shell_environment_policy.inherit=all".to_string(),
-    ]);
-    flags.extend(CODEX_MODES[mode].1.iter().map(|value| value.to_string()));
-    flags.extend([
-        "-c".to_string(),
-        format!("model=\"{}\"", CODEX_MODELS[model].1),
-    ]);
-    if let Some(effort) = CODEX_EFFORTS[effort].1 {
-        flags.extend([
-            "-c".to_string(),
-            format!("model_reasoning_effort=\"{effort}\""),
-        ]);
-    }
-    flags
-}
-
-fn spawn_env_for_engine(_settings: &UiSettings, _engine: &str) -> Vec<(String, String)> {
-    Vec::new()
-}
-
-fn initialize_advisor_defaults(settings: &mut UiSettings) {
-    if settings.advisor_defaults_initialized {
-        return;
-    }
-    settings.advisor_executioner_engine = 0;
-    settings.advisor_executioner_codex_mode = settings.codex_mode;
-    settings.advisor_executioner_codex_model = settings.codex_model;
-    settings.advisor_executioner_codex_effort = settings.codex_effort;
-    settings.advisor_advisor_engine = 0;
-    settings.advisor_advisor_codex_mode = 0;
-    settings.advisor_advisor_codex_model = 0;
-    settings.advisor_advisor_codex_effort = 3;
-    settings.advisor_defaults_initialized = true;
-}
-
 fn move_project_selection(state: &mut AgentOsState, delta: isize) {
     let len = state.projects.len();
     if len == 0 {
@@ -2191,7 +1973,7 @@ fn format_runtime_status(data: &Value) -> String {
 }
 
 fn use_text() -> &'static str {
-    "Operator commands:\n\n/spawn <shell command>\n/codex <prompt>\n/project or /projects status|list|add|create|use\n/bootstrap <action> [engine]\n/dispatch start --type wave --layout grid <brief>\n/dispatch list|status|crafted|accept|reject\n/move [session] <lane>\n/lane <key> <title>\n/broadcast <message>\n/notify <title>\n/stop [session]\n/hard-kill [session]\n/delete [session]\n/search <text>\n/power tado-power\n/shutdown\n/help\n\nPages:\nShift+1..7 jumps to a page. Tab and Shift-Tab move through pages.\nType / to open commands. Up/Down chooses a command. Enter completes it.\nPgUp/PgDn and Ctrl-U/Ctrl-D scroll. End follows the selected transcript.\nShift+X deletes the selected runtime session.\n\nProject workflow:\nOn Projects, Up/Down selects a project. Space makes it active.\nTyping normal prompt text on Projects spawns the default Codex agent directly in the selected project. If Advisor mode is on, it spawns a Codex executioner plus a Codex advisor instead.\nPlain paths like Documents/app, downloads/app, or my-app resolve from your home folder.\n\nSettings:\nUp/Down selects a setting. Space or Right advances it. Left moves backward.\nCodex model, effort, permission mode, account label, Advisor role profiles, terminal display, board, events, and project prompt behavior are all changed here.\n\nPrompt behavior:\nOn Work and Mux, normal prompt text goes to the selected live PTY.\nOn a Dispatch or Eternal row, normal prompt text accepts or continues that workflow."
+    "Operator commands:\n\n/spawn <shell command>\n/codex <prompt>\n/project or /projects status|list|add|create|use\n/bootstrap <action> [engine]\n/dispatch start --type wave --layout grid <brief>\n/dispatch list|status|crafted|accept|reject\n/move [session] <lane>\n/lane <key> <title>\n/broadcast <message>\n/notify <title>\n/stop [session]\n/hard-kill [session]\n/delete [session]\n/search <text>\n/power tado-power\n/shutdown\n/help\n\nPages:\nShift+1..7 jumps to a page. Tab and Shift-Tab move through pages.\nType / to open commands. Up/Down chooses a command. Enter completes it.\nPgUp/PgDn and Ctrl-U/Ctrl-D scroll. End follows the selected transcript.\nShift+X deletes the selected runtime session.\n\nProject workflow:\nOn Projects, Up/Down selects a project. Space makes it active.\nTyping normal prompt text on Projects spawns the default Codex agent directly in the selected project. If Advisor mode is on, it spawns a Codex executioner plus a Codex advisor instead.\nPlain paths like Documents/app, downloads/app, or my-app resolve from your home folder.\n\nSettings:\nUp/Down selects a setting. Space or Right advances it. Left moves backward.\nCodex model, effort, permission mode, Advisor role profiles, terminal display, board, events, and project prompt behavior are all changed here. Codex account is fixed to the non-secret `default` label backed by Codex CLI auth.\n\nPrompt behavior:\nOn Work and Mux, normal prompt text goes to the selected live PTY.\nOn a Dispatch or Eternal row, normal prompt text accepts or continues that workflow."
 }
 
 fn format_projects(data: &Value) -> String {
@@ -2249,7 +2031,10 @@ fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
             "Codex alternate screen",
             on_off(settings.codex_alternate_screen),
         ),
-        setting_line("Codex account", settings.codex_account_label.clone()),
+        setting_line(
+            "Codex account (fixed)",
+            format!("{} via Codex CLI", settings.codex_account_label),
+        ),
         setting_line("Advisor mode", on_off(settings.advisor_enabled)),
         setting_line(
             "Executioner permission",
@@ -2323,39 +2108,6 @@ fn option_label(options: &[&str], selected: usize) -> String {
         .copied()
         .unwrap_or_else(|| options.first().copied().unwrap_or(""))
         .to_string()
-}
-
-fn advisor_permission_label(settings: &UiSettings, role: AdvisorRole) -> String {
-    match role {
-        AdvisorRole::Executioner => CODEX_MODES[settings.advisor_executioner_codex_mode]
-            .0
-            .to_string(),
-        AdvisorRole::Advisor => CODEX_MODES[settings.advisor_advisor_codex_mode]
-            .0
-            .to_string(),
-    }
-}
-
-fn advisor_model_label(settings: &UiSettings, role: AdvisorRole) -> String {
-    match role {
-        AdvisorRole::Executioner => CODEX_MODELS[settings.advisor_executioner_codex_model]
-            .0
-            .to_string(),
-        AdvisorRole::Advisor => CODEX_MODELS[settings.advisor_advisor_codex_model]
-            .0
-            .to_string(),
-    }
-}
-
-fn advisor_effort_label(settings: &UiSettings, role: AdvisorRole) -> String {
-    match role {
-        AdvisorRole::Executioner => CODEX_EFFORTS[settings.advisor_executioner_codex_effort]
-            .0
-            .to_string(),
-        AdvisorRole::Advisor => CODEX_EFFORTS[settings.advisor_advisor_codex_effort]
-            .0
-            .to_string(),
-    }
 }
 
 fn on_off(value: bool) -> &'static str {
@@ -2440,70 +2192,6 @@ fn adjust_setting(state: &mut AgentOsState, delta: isize) {
     if let Err(err) = save_settings(state) {
         state.tui.status = Some(format!("Settings changed but not saved: {err}"));
     }
-}
-
-fn adjust_advisor_permission(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
-    match role {
-        AdvisorRole::Executioner => {
-            settings.advisor_executioner_codex_mode = cycle_index(
-                settings.advisor_executioner_codex_mode,
-                CODEX_MODES.len(),
-                delta,
-            );
-        }
-        AdvisorRole::Advisor => {
-            settings.advisor_advisor_codex_mode = cycle_index(
-                settings.advisor_advisor_codex_mode,
-                CODEX_MODES.len(),
-                delta,
-            );
-        }
-    }
-}
-
-fn adjust_advisor_model(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
-    match role {
-        AdvisorRole::Executioner => {
-            settings.advisor_executioner_codex_model = cycle_index(
-                settings.advisor_executioner_codex_model,
-                CODEX_MODELS.len(),
-                delta,
-            );
-        }
-        AdvisorRole::Advisor => {
-            settings.advisor_advisor_codex_model = cycle_index(
-                settings.advisor_advisor_codex_model,
-                CODEX_MODELS.len(),
-                delta,
-            );
-        }
-    }
-}
-
-fn adjust_advisor_effort(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
-    match role {
-        AdvisorRole::Executioner => {
-            settings.advisor_executioner_codex_effort = cycle_index(
-                settings.advisor_executioner_codex_effort,
-                CODEX_EFFORTS.len(),
-                delta,
-            );
-        }
-        AdvisorRole::Advisor => {
-            settings.advisor_advisor_codex_effort = cycle_index(
-                settings.advisor_advisor_codex_effort,
-                CODEX_EFFORTS.len(),
-                delta,
-            );
-        }
-    }
-}
-
-fn cycle_index(current: usize, len: usize, delta: isize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    (current.min(len - 1) as isize + delta).rem_euclid(len as isize) as usize
 }
 
 fn adjust_u8(value: &mut u8, delta: isize, min: u8, max: u8) {

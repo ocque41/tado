@@ -13,7 +13,7 @@
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
-use tado_cli::{control_client, print_response, OutputMode};
+use tado_cli::{control_client, engine::normalize_workflow_engine, print_response, OutputMode};
 use tado_runtime::{ensure_daemon, profile_from_env};
 
 #[derive(Parser)]
@@ -79,6 +79,10 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let mode = OutputMode::from_flags(cli.human, cli.toon);
+    if let Err(err) = validate_eternal_engines(&cli.command) {
+        eprintln!("tado-eternal: {err}");
+        std::process::exit(1);
+    }
 
     if runtime_selected() {
         let exit = match runtime_eternal(cli.command) {
@@ -110,6 +114,7 @@ fn main() {
             coordinator_todo_id,
             label,
         } => {
+            let engine = normalize_workflow_engine(&engine).unwrap_or("codex");
             let mut payload = json!({
                 "project": project,
                 "feature": feature,
@@ -193,19 +198,22 @@ fn runtime_eternal(command: Command) -> anyhow::Result<Value> {
             engine,
             coordinator_todo_id,
             label,
-        } => client.call(
-            "workflow.propose",
-            json!({
-                "kind": "eternal",
-                "project": project,
-                "feature": feature,
-                "task": task,
-                "mode": mode,
-                "engine": engine,
-                "coordinator_todo_id": coordinator_todo_id,
-                "label": label,
-            }),
-        )?,
+        } => {
+            let engine = normalize_workflow_engine(&engine)?;
+            client.call(
+                "workflow.propose",
+                json!({
+                    "kind": "eternal",
+                    "project": project,
+                    "feature": feature,
+                    "task": task,
+                    "mode": mode,
+                    "engine": engine,
+                    "coordinator_todo_id": coordinator_todo_id,
+                    "label": label,
+                }),
+            )?
+        }
         Command::Status { run_id } => {
             client.call("workflow.status", json!({ "run_id": run_id }))?
         }
@@ -230,6 +238,15 @@ fn runtime_eternal(command: Command) -> anyhow::Result<Value> {
         )?,
     };
     Ok(response.data.unwrap_or_else(|| json!({})))
+}
+
+fn validate_eternal_engines(command: &Command) -> Result<(), String> {
+    if let Command::Propose { engine, .. } = command {
+        normalize_workflow_engine(engine)
+            .map(|_| ())
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn runtime_selected() -> bool {

@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
+use tado_cli::engine::{normalize_session_engine, normalize_workflow_engine};
 use tado_runtime::profile::profile_from_env;
-use tado_runtime::spawn::Engine;
 use tado_runtime::{ensure_daemon, RuntimeClient};
 
 #[derive(Parser, Debug)]
@@ -192,8 +192,9 @@ fn main() -> Result<()> {
         Some(Command::Daemon(cmd)) => daemon_command(&profile, cmd)?,
         Some(Command::Project(cmd)) => project_command(&profile, cmd)?,
         Some(Command::Spawn(args)) => {
+            let payload = spawn_payload(args)?;
             let client = ensure_daemon(&profile)?;
-            print_response(client.call("session.spawn", spawn_payload(args)?)?)?;
+            print_response(client.call("session.spawn", payload)?)?;
         }
         Some(Command::List) => {
             let client = ensure_daemon(&profile)?;
@@ -262,13 +263,14 @@ fn main() -> Result<()> {
             print_response(client.call(kind, payload)?)?;
         }
         Some(Command::Bootstrap(args)) => {
+            let engine = normalize_workflow_engine(&args.engine)?;
             let client = ensure_daemon(&profile)?;
             print_response(client.call(
                 "bootstrap.request",
                 json!({
                     "action": args.action,
                     "project_root": args.project_root,
-                    "engine": args.engine,
+                    "engine": engine,
                 }),
             )?)?;
         }
@@ -417,15 +419,15 @@ fn project_command(profile: &str, cmd: ProjectCommand) -> Result<()> {
 }
 
 fn spawn_payload(args: SpawnArgs) -> Result<Value> {
-    let engine = parse_engine(&args.engine)?;
+    let engine = normalize_session_engine(Some(args.engine.clone()))?;
     let text = args.text.join(" ");
     let cwd = args.cwd.or_else(|| {
         std::env::current_dir()
             .ok()
             .map(|p| p.display().to_string())
     });
-    let payload = match engine {
-        Engine::Raw => json!({
+    let payload = match engine.as_str() {
+        "raw" => json!({
             "engine": "raw",
             "command": text,
             "args": [],
@@ -437,7 +439,7 @@ fn spawn_payload(args: SpawnArgs) -> Result<Value> {
             "team_name": args.team,
             "flags": args.flags,
         }),
-        Engine::Shell => json!({
+        "shell" => json!({
             "engine": "shell",
             "command": text,
             "title": args.title,
@@ -448,7 +450,7 @@ fn spawn_payload(args: SpawnArgs) -> Result<Value> {
             "team_name": args.team,
             "flags": args.flags,
         }),
-        Engine::Codex => json!({
+        "codex" => json!({
             "engine": "codex",
             "prompt": text,
             "title": args.title,
@@ -459,22 +461,9 @@ fn spawn_payload(args: SpawnArgs) -> Result<Value> {
             "team_name": args.team,
             "flags": args.flags,
         }),
+        _ => unreachable!("normalize_session_engine only returns known session kinds"),
     };
     Ok(payload)
-}
-
-fn parse_engine(value: &str) -> Result<Engine> {
-    match value.to_ascii_lowercase().as_str() {
-        "raw" => Ok(Engine::Raw),
-        "shell" => Ok(Engine::Shell),
-        "codex" => Ok(Engine::Codex),
-        "claude" | "cowork" => Err(anyhow!(
-            "unsupported AI provider {value:?}; terminal Agent OS supports codex"
-        )),
-        other => Err(anyhow!(
-            "unknown session kind {other:?}; expected codex, shell, or raw"
-        )),
-    }
 }
 
 fn print_response(response: tado_runtime::RuntimeResponse) -> Result<()> {

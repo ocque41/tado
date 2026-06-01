@@ -13,7 +13,7 @@
 
 use clap::{Parser, Subcommand};
 use serde_json::json;
-use tado_cli::{control_client, print_response, OutputMode};
+use tado_cli::{control_client, engine::normalize_workflow_engine, print_response, OutputMode};
 use tado_runtime::{ensure_daemon, profile_from_env};
 
 #[derive(Parser)]
@@ -57,6 +57,13 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     let mode = OutputMode::from_flags(cli.human, cli.toon);
+    let engine = match normalize_workflow_engine(&cli.engine) {
+        Ok(engine) => engine,
+        Err(err) => {
+            eprintln!("tado-bootstrap: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let (kind, project) = match cli.command {
         Command::A2a { project } => ("bootstrap.a2a", project),
@@ -75,7 +82,7 @@ fn main() {
                     "action": action,
                     "project": project,
                     "project_root": project_root,
-                    "engine": cli.engine,
+                    "engine": engine,
                 }),
             )
         }) {
