@@ -123,8 +123,8 @@ struct DoneListView: View {
         let project = todo.projectID.flatMap { pid in projects.first { $0.id == pid } }
         let team = todo.teamID.flatMap { tid in teams.first { $0.id == tid } }
         let agentEngine = todo.agentName.flatMap { name in
-            project?.rootPath.flatMap { root in
-                AgentDiscoveryService.resolveEngine(agentName: name, projectRoot: root)
+            project.flatMap { project in
+                AgentDiscoveryService.resolveEngine(agentName: name, projectRoot: project.rootPath)
             }
         }
         let advisorIndex = AdvisorTodoSpawner.nextAvailableGridIndex(

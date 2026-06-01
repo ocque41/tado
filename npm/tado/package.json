@@ -1,5 +1,5 @@
 {
-  "name": "@cumulus_cloud/tado",
+  "name": "tado",
   "version": "0.2.5",
   "description": "CLI-first Tado runtime and Agent OS terminal UI.",
   "license": "MIT",

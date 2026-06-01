@@ -1706,7 +1706,7 @@ this list is the at-a-glance "what changed at this version" reference
 that lets you orient before reading the full diff.
 
 - **v1.1.0** (2026-05-14) — *Tado TUI + Agent View.* Adds the
-  npm-distributed `@cumulus_cloud/tado@0.1.0` package, whose
+  npm-distributed `tado` package, whose
   installed `tado` command launches the new Rust `tado-tui`
   terminal interface with prebuilt macOS arm64 and x64 binaries.
   Promotes the Sessions slot into Agent View, a keyboard-first

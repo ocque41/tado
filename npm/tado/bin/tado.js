@@ -26,7 +26,8 @@ if (!target) {
 
 const prebuiltDir = path.join(__dirname, "..", "prebuilt", target);
 const override = process.env.TADO_BINARY;
-const invoked = path.basename(process.argv[1] || "tado");
+const invokedName = path.basename(process.argv[1] || "tado");
+const invoked = invokedName === "tado.js" ? "tado" : invokedName;
 const requested = path.join(prebuiltDir, invoked);
 const preferred = path.join(prebuiltDir, "tado");
 let binary = override;

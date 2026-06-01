@@ -1,11 +1,11 @@
-# @cumulus_cloud/tado
+# tado
 
 CLI-first Tado runtime and Agent OS terminal UI.
 
 ```bash
-npx @cumulus_cloud/tado
+npx tado
 # or
-npm install -g @cumulus_cloud/tado
+npm install -g tado
 tado
 ```
 

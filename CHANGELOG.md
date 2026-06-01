@@ -22,7 +22,7 @@ Eternal runs, and Dispatch runs without leaving the current flow.
   opening a modal, and the bottom prompt bar sends follow-ups to the
   selected live target.
 - **Terminal `tado` command** — adds a Rust `tado-tui` binary and the
-  public npm package `@cumulus_cloud/tado@0.1.0`. Installing the package
+  public npm package `tado`. Installing the package
   gives users the `tado` command, with prebuilt macOS arm64 and x64
   binaries bundled in the package.
 - **Tado Use interventions** — adds `tado_use.dispatch_intervene`,
