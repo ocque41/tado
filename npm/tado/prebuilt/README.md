@@ -1,33 +1,40 @@
-Prebuilt `tado` runtime binaries are copied here before packaging:
+# Prebuilt Binaries
 
-- `darwin-arm64/tado`
-- `darwin-arm64/tadod`
-- `darwin-arm64/tado-tui`
-- `darwin-arm64/tado-list`
-- `darwin-arm64/tado-read`
-- `darwin-arm64/tado-send`
-- `darwin-arm64/tado-events`
-- `darwin-arm64/tado-deploy`
-- `darwin-arm64/tado-bootstrap`
-- `darwin-arm64/tado-kanban`
-- `darwin-arm64/tado-eternal`
-- `darwin-arm64/tado-dispatch`
-- `darwin-arm64/tado-mcp`
-- `darwin-x64/tado`
-- `darwin-x64/tadod`
-- `darwin-x64/tado-tui`
-- `darwin-x64/tado-list`
-- `darwin-x64/tado-read`
-- `darwin-x64/tado-send`
-- `darwin-x64/tado-events`
-- `darwin-x64/tado-deploy`
-- `darwin-x64/tado-bootstrap`
-- `darwin-x64/tado-kanban`
-- `darwin-x64/tado-eternal`
-- `darwin-x64/tado-dispatch`
-- `darwin-x64/tado-mcp`
+`@tt0/tado` ships macOS prebuilt Rust binaries under:
 
-The npm wrapper invokes the binary matching the installed command name. `tado`
-is the public TUI entrypoint and launches the internal `tado-tui` prebuilt.
-`tadod` is the public daemon entrypoint. Aliases fail loudly if their matching
-prebuilt is missing.
+- `darwin-arm64/`
+- `darwin-x64/`
+
+Each target directory must contain executable `755` files for:
+
+- `tado`
+- `tadod`
+- `tado-list`
+- `tado-read`
+- `tado-send`
+- `tado-events`
+- `tado-deploy`
+- `tado-bootstrap`
+- `tado-kanban`
+- `tado-eternal`
+- `tado-dispatch`
+- `tado-mcp`
+- `tado-projects`
+- `tado-system`
+
+`tado-cowork` is intentionally not shipped. The terminal Agent OS release is
+Codex-only; `shell` and `raw` are utility session kinds, not AI providers.
+
+Build from the workspace root:
+
+```bash
+cd tado-core
+cargo build --release -p tado-runtime --bin tadod -p tado-cli --bins -p tado-mcp --bin tado-mcp
+cargo build --release --target x86_64-apple-darwin -p tado-runtime --bin tadod -p tado-cli --bins -p tado-mcp --bin tado-mcp
+```
+
+Then copy the binaries into the matching target directories and run:
+
+```bash
+chmod 755 npm/tado/prebuilt/darwin-*/*
+```

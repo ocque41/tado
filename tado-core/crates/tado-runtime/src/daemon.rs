@@ -23,7 +23,7 @@ use crate::protocol::{
     read_json_frame_async, write_json_frame_async, RuntimeRequest, RuntimeResponse,
     PROTOCOL_VERSION,
 };
-use crate::spawn::{plan_spawn, Engine, SpawnRequest};
+use crate::spawn::{plan_spawn, SpawnRequest};
 
 #[derive(Debug, Clone)]
 pub struct DaemonOptions {
@@ -211,6 +211,21 @@ impl RuntimeState {
     }
 
     fn spawn(&self, payload: Value) -> Result<Value> {
+        if let Some(engine) = payload.get("engine").and_then(Value::as_str) {
+            match engine.trim().to_ascii_lowercase().as_str() {
+                "codex" | "shell" | "raw" => {}
+                "claude" | "cowork" => {
+                    return Err(anyhow!(
+                        "unsupported AI provider {engine:?}; terminal Agent OS supports codex"
+                    ));
+                }
+                other => {
+                    return Err(anyhow!(
+                        "unknown session kind {other:?}; expected codex, shell, or raw"
+                    ));
+                }
+            }
+        }
         let mut request: SpawnRequest = serde_json::from_value(payload)?;
         if request.project_root.is_none() {
             if let Some(project) = self.db.lock().unwrap().active_project()? {
@@ -241,20 +256,12 @@ impl RuntimeState {
         .with_context(|| format!("spawn {}", plan.executable))?;
 
         let pid = session.process_id();
-        let status = if matches!(plan.engine, Engine::Cowork) {
-            "waiting"
-        } else {
-            "running"
-        };
+        let status = "running";
         let (grid_row, grid_col) = self.db.lock().unwrap().next_grid_position()?;
         let record = SessionRecord {
             id: id.clone(),
             title: plan.title.clone(),
-            kind: if matches!(plan.engine, Engine::Cowork) {
-                "cowork".into()
-            } else {
-                "pty".into()
-            },
+            kind: "pty".into(),
             status: status.into(),
             engine: Some(format!("{:?}", plan.engine).to_ascii_lowercase()),
             command: plan.executable.clone(),
@@ -270,7 +277,7 @@ impl RuntimeState {
             created_at: now.clone(),
             updated_at: now,
             exit_code: None,
-            cowork_result_path: plan.cowork_result_path.clone(),
+            cowork_result_path: None,
         };
 
         {
@@ -325,22 +332,6 @@ impl RuntimeState {
                     .lock()
                     .unwrap()
                     .append_transcript(&id, "screen", &text);
-            }
-        }
-
-        if text.trim().is_empty() {
-            if let Some(record) = self.db.lock().unwrap().get_session(&id)? {
-                if record.kind == "cowork" {
-                    if let Some(path) = record.cowork_result_path.as_deref() {
-                        if let Ok(result) = std::fs::read_to_string(path) {
-                            text = result;
-                            source = "cowork-result";
-                        } else {
-                            text = format!("Cowork result is not ready yet.\nExpected: {path}");
-                            source = "cowork-status";
-                        }
-                    }
-                }
             }
         }
 
@@ -817,7 +808,12 @@ impl RuntimeState {
         let engine = payload
             .get("engine")
             .and_then(Value::as_str)
-            .unwrap_or("claude");
+            .unwrap_or("codex");
+        if engine != "codex" {
+            return Err(anyhow!(
+                "unsupported bootstrap engine {engine:?}; terminal Agent OS supports codex"
+            ));
+        }
         let project_root = payload
             .get("project_root")
             .and_then(Value::as_str)
@@ -828,25 +824,14 @@ impl RuntimeState {
                     .map(|p| p.display().to_string())
             });
         let prompt = bootstrap_prompt(action, project_root.as_deref());
-        let spawn_payload = if engine == "shell" {
-            json!({
-                "engine": "shell",
-                "command": format!("printf '%s\\n' {}", crate::spawn::shell_escape(&format!("bootstrap requested: {action}"))),
-                "title": format!("bootstrap {action}"),
-                "cwd": project_root.as_deref(),
-                "project_root": project_root.as_deref(),
-                "agent_name": "bootstrap",
-            })
-        } else {
-            json!({
-                "engine": engine,
-                "prompt": prompt,
-                "title": format!("bootstrap {action}"),
-                "cwd": project_root.as_deref(),
-                "project_root": project_root.as_deref(),
-                "agent_name": "bootstrap",
-            })
-        };
+        let spawn_payload = json!({
+            "engine": engine,
+            "prompt": prompt,
+            "title": format!("bootstrap {action}"),
+            "cwd": project_root.as_deref(),
+            "project_root": project_root.as_deref(),
+            "agent_name": "bootstrap",
+        });
         let session = self.spawn(spawn_payload)?;
         self.append_event(
             "bootstrap.requested",
@@ -867,7 +852,8 @@ impl RuntimeState {
         let engine = payload
             .get("engine")
             .and_then(Value::as_str)
-            .unwrap_or("claude");
+            .unwrap_or("codex");
+        let engine = normalized_dispatch_engine(engine)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let project = payload
@@ -908,7 +894,7 @@ impl RuntimeState {
             task: task.to_string(),
             mode: mode.clone(),
             layout: layout.clone(),
-            engine: Some(engine.to_string()),
+            engine: Some(engine.clone()),
             state: "drafting".into(),
             coordinator_todo_id: payload
                 .get("coordinator_todo_id")
@@ -937,7 +923,7 @@ impl RuntimeState {
             project_root.as_deref(),
         );
         let spawn = self.spawn(workflow_spawn_payload(
-            engine,
+            &engine,
             &prompt,
             &format!("{kind} architect {feature}"),
             project_id.as_deref(),
@@ -1033,7 +1019,8 @@ impl RuntimeState {
                 return Ok(value);
             }
         }
-        let engine = record.engine.as_deref().unwrap_or("claude");
+        let engine = record.engine.as_deref().unwrap_or("codex");
+        let engine = normalized_dispatch_engine(engine)?;
         let (project_id, project_root) =
             self.workflow_project_context(record.project.as_deref())?;
         let prompt = format!(
@@ -1045,7 +1032,7 @@ impl RuntimeState {
             note.unwrap_or("(none)")
         );
         let spawn = self.spawn(workflow_spawn_payload(
-            engine,
+            &engine,
             &prompt,
             &format!("{} worker {}", record.kind, record.feature),
             project_id.as_deref(),
@@ -1110,8 +1097,8 @@ impl RuntimeState {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .or(record.engine.as_deref())
-                    .unwrap_or("claude"),
-            );
+                    .unwrap_or("codex"),
+            )?;
             let phase_id = if phase.id.trim().is_empty() {
                 format!("phase-{}", phase.order.max(1))
             } else {
@@ -1555,11 +1542,10 @@ fn target_matches_grid(target: &str, row: Option<i64>, col: Option<i64>) -> bool
 fn bootstrap_prompt(action: &str, project_root: Option<&str>) -> String {
     let root = project_root.unwrap_or("(current project)");
     let directive = match action {
-        "a2a" => "Add or refresh Tado A2A tool instructions in CLAUDE.md and AGENTS.md.",
+        "a2a" => "Add or refresh Tado A2A tool instructions in AGENTS.md.",
         "team" => "Add or refresh team-awareness instructions for coordinated Tado agents.",
         "auto-mode" => "Add or refresh trusted auto-mode operating instructions.",
         "knowledge" => "Add or refresh Dome knowledge, memory, and retrieval instructions.",
-        "cowork" => "Install or refresh the Tado Cowork plugin instructions and lifecycle notes.",
         "index" => "Index project code and Dome docs where available, then report what is searchable.",
         other => return format!("Run Tado bootstrap action `{other}` for project `{root}` and report the exact changes."),
     };
@@ -1701,42 +1687,18 @@ fn workflow_architect_prompt(
 }
 
 fn dispatch_agent_flags(project_root: &str, agent: &str, engine: &str) -> Result<Vec<String>> {
-    let agent_root = match engine {
-        "claude" => ".claude",
-        "codex" => ".codex",
-        _ => return Ok(Vec::new()),
-    };
+    if engine != "codex" {
+        return Ok(Vec::new());
+    }
     let path = PathBuf::from(project_root)
-        .join(agent_root)
+        .join(".codex")
         .join("agents")
         .join(format!("{agent}.md"));
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(Vec::new());
     };
     let frontmatter = parse_frontmatter_fields(&text);
-    match engine {
-        "claude" => claude_agent_flags(&frontmatter),
-        "codex" => codex_agent_flags(&frontmatter),
-        _ => Ok(Vec::new()),
-    }
-}
-
-fn claude_agent_flags(frontmatter: &HashMap<String, String>) -> Result<Vec<String>> {
-    let mut flags = Vec::new();
-    if let Some(model) = frontmatter
-        .get("model")
-        .and_then(|value| claude_model_id(value))
-    {
-        flags.extend(["--model".to_string(), model.to_string()]);
-    }
-    if let Some(effort) = frontmatter
-        .get("effort")
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| matches!(value.as_str(), "low" | "medium" | "high" | "max"))
-    {
-        flags.extend(["--effort".to_string(), effort]);
-    }
-    Ok(flags)
+    codex_agent_flags(&frontmatter)
 }
 
 fn codex_agent_flags(frontmatter: &HashMap<String, String>) -> Result<Vec<String>> {
@@ -1787,15 +1749,6 @@ fn clean_frontmatter_value(value: &str) -> String {
         .to_string()
 }
 
-fn claude_model_id(short: &str) -> Option<&'static str> {
-    match short.trim().to_ascii_lowercase().as_str() {
-        "haiku" | "haiku45" | "haiku-4-5" | "haiku4.5" => Some("claude-haiku-4-5"),
-        "sonnet" | "sonnet46" | "sonnet-4-6" | "sonnet4.6" => Some("claude-sonnet-4-6"),
-        "opus" | "opus47" | "opus-4-7" | "opus4.7" => Some("claude-opus-4-7"),
-        _ => None,
-    }
-}
-
 fn codex_model_id(short: &str) -> Option<&'static str> {
     match short.trim().to_ascii_lowercase().as_str() {
         "gpt-5.5" | "5.5" => Some("gpt-5.5"),
@@ -1817,12 +1770,18 @@ fn codex_effort_id(value: &str) -> Option<&'static str> {
     }
 }
 
-fn normalized_dispatch_engine(value: &str) -> String {
+fn normalized_dispatch_engine(value: &str) -> Result<String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "codex" => "codex".to_string(),
-        "shell" => "shell".to_string(),
-        "raw" => "raw".to_string(),
-        _ => "claude".to_string(),
+        "" | "codex" => Ok("codex".to_string()),
+        "claude" | "cowork" => Err(anyhow!(
+            "unsupported AI provider {value:?}; terminal Agent OS supports codex"
+        )),
+        "shell" | "raw" => Err(anyhow!(
+            "{value:?} is a terminal utility session kind, not a workflow AI provider"
+        )),
+        other => Err(anyhow!(
+            "unknown workflow engine {other:?}; terminal Agent OS supports codex"
+        )),
     }
 }
 
@@ -2158,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_agent_flags_reads_claude_frontmatter() {
+    fn dispatch_agent_flags_ignores_legacy_claude_agents() {
         let root = tempfile::tempdir().unwrap();
         let agents_dir = root.path().join(".claude").join("agents");
         std::fs::create_dir_all(&agents_dir).unwrap();
@@ -2169,13 +2128,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            dispatch_agent_flags(root.path().to_str().unwrap(), "phase-one", "claude").unwrap(),
-            vec![
-                "--model".to_string(),
-                "claude-sonnet-4-6".to_string(),
-                "--effort".to_string(),
-                "max".to_string(),
-            ]
+            dispatch_agent_flags(root.path().to_str().unwrap(), "phase-one", "codex").unwrap(),
+            Vec::<String>::new()
         );
     }
 

@@ -16,6 +16,8 @@ swift run Tado
 ```
 
 **Requirements**: macOS 14+, Swift 5.10+ / Xcode 15.3+
+Node.js 18+ is required for npm package smoke tests. Rust stable is required
+for the terminal runtime crates.
 
 No Xcode project is included. You can open `Package.swift` directly in Xcode, or build from the command line with SPM.
 
@@ -29,12 +31,21 @@ Sources/Tado/
   Views/        ContentView, TodoListView, CanvasView, TerminalTileView, SidebarView, SettingsView
 ```
 
+The terminal Agent OS release lives mainly under:
+
+```text
+npm/tado/
+tado-core/crates/tado-runtime/
+tado-core/crates/tado-cli/
+tado-core/crates/tado-mcp/
+```
+
 ## How to Contribute
 
 1. **Open an issue first** for non-trivial changes so we can discuss the approach
 2. Fork the repository and create a feature branch from `master`
 3. Make your changes, keeping PRs focused (one concern per PR)
-4. Ensure `swift build` succeeds
+4. Run the relevant checks before opening the PR
 5. Submit a pull request with a description of what changed and why
 
 ## Code Style
@@ -46,7 +57,19 @@ Sources/Tado/
 
 ## Testing
 
-No test suite exists yet. Contributions adding tests are especially welcome! If you add tests, use Swift Testing or XCTest and ensure they pass with `swift test`.
+Use the smallest check that proves the change, then widen when touching shared
+runtime contracts:
+
+```bash
+cd tado-core && cargo fmt --all --check
+cd tado-core && cargo test -p tado-runtime -p tado-cli -p tado-mcp
+swift build
+swift test
+cd npm/tado && npm pack --dry-run --json
+```
+
+Terminal package changes should also install the generated tarball into a temp
+npm prefix and run `tado --help` plus `tadod --help`.
 
 ## Questions?
 

@@ -43,9 +43,7 @@ struct Cli {
     /// positional argument; quote it so the shell doesn't split it.
     prompt: String,
 
-    /// Agent definition name (from `.claude/agents/<name>.md` or
-    /// `.codex/agents/<name>.md`). Determines which engine fires
-    /// when `--engine` is unset.
+    /// Agent definition name from `.codex/agents/<name>.md`.
     #[arg(long)]
     agent: Option<String>,
 
@@ -57,8 +55,8 @@ struct Cli {
     #[arg(long)]
     project: Option<String>,
 
-    /// Engine: `claude`, `codex`, `cowork`, or `shell` in CLI-runtime mode.
-    /// Defaults to `$TADO_ENGINE`, then `claude`.
+    /// Session kind in CLI-runtime mode: `codex`, `shell`, or `raw`.
+    /// Defaults to `$TADO_ENGINE`, then `codex`.
     #[arg(long)]
     engine: Option<String>,
 
@@ -73,7 +71,13 @@ fn main() -> ExitCode {
 
     let team = cli.team.or_else(|| env::var("TADO_TEAM_NAME").ok());
     let project = cli.project.or_else(|| env::var("TADO_PROJECT_NAME").ok());
-    let engine = cli.engine.or_else(|| env::var("TADO_ENGINE").ok());
+    let engine = match normalize_engine(cli.engine.or_else(|| env::var("TADO_ENGINE").ok())) {
+        Ok(engine) => Some(engine),
+        Err(err) => {
+            eprintln!("tado-deploy: {err}");
+            return ExitCode::from(1);
+        }
+    };
     let cwd = cli.cwd.or_else(|| env::var("TADO_PROJECT_ROOT").ok());
     let requested_by = env::var("TADO_SESSION_ID").ok();
 
@@ -208,7 +212,7 @@ fn deploy_runtime(
 ) -> Result<String, String> {
     let profile = profile_from_env(None);
     let client = ensure_daemon(&profile).map_err(|e| e.to_string())?;
-    let selected_engine = engine.as_deref().unwrap_or("claude");
+    let selected_engine = engine.as_deref().unwrap_or("codex");
     let mut env_pairs = Vec::new();
     if let Some(project) = project {
         env_pairs.push(json!(["TADO_PROJECT_NAME", project]));
@@ -243,4 +247,23 @@ fn deploy_runtime(
         .data
         .and_then(|data| data.get("session")?.get("id")?.as_str().map(str::to_string))
         .ok_or_else(|| "runtime response did not include session.id".to_string())
+}
+
+fn normalize_engine(engine: Option<String>) -> Result<String, String> {
+    match engine
+        .unwrap_or_else(|| "codex".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "codex" => Ok("codex".to_string()),
+        "shell" => Ok("shell".to_string()),
+        "raw" => Ok("raw".to_string()),
+        "claude" | "cowork" => {
+            Err("unsupported AI provider; terminal Agent OS supports codex".to_string())
+        }
+        other => Err(format!(
+            "unknown session kind {other:?}; expected codex, shell, or raw"
+        )),
+    }
 }

@@ -1033,7 +1033,7 @@ mod tests {
             task: "Task".into(),
             mode: Some("wave".into()),
             layout: Some("kanban".into()),
-            engine: Some("claude".into()),
+            engine: Some("codex".into()),
             state: "drafting".into(),
             coordinator_todo_id: Some("todo".into()),
             label: Some("Label".into()),

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code (claude.ai/code) when working in this repository.
+Canonical architecture and release contract for agents working in this repository.
 
 This file is the canonical map of Tado as of v1.1.0. It
 is grouped so you can navigate by purpose rather than by feature: build
@@ -14,6 +14,26 @@ This file is **the contract**, not the docs. If you find a section that
 contradicts the code, the code is right and this file is stale — fix it
 in the same PR as the code change. The smooth-software pass (see below)
 exists in part to keep this file honest.
+
+## Terminal Agent OS Release Contract
+
+The public terminal Agent OS package is `@tt0/tado`.
+
+- `master` is the release branch.
+- The terminal package is Codex-only. `codex` is the only public AI provider.
+- `shell` and `raw` are utility session kinds, not AI providers.
+- Runtime-backed spawn/bootstrap/Dispatch/Eternal requests for `claude` or
+  `cowork` must fail visibly with a clear unsupported-provider error.
+- Agent definitions for terminal runtime flows come from `.codex/agents/`.
+- Runtime profile settings store non-secret Codex preferences: model,
+  reasoning effort, permission mode, alternate-screen behavior, and account
+  label. The `default` account uses the user's existing Codex CLI auth.
+- Do not store tokens or credentials in Tado state.
+- The Rust `tado-mcp` crate is the release MCP surface. The legacy Node
+  `tado-mcp/` package is private/reference-only.
+- `tado-cowork` is not part of the terminal package build or npm release.
+- Rust crates remain internal for this pass and ship through npm prebuilts, not
+  crates.io.
 
 ## Table of Contents
 
@@ -129,10 +149,10 @@ freeze fix per CLAUDE.md rule 9),
 `bt-core` (the trusted-mutator notes/automation/JSON-RPC crate fused from Dome),
 `dome-mcp` and `tado-mcp` (the two stdio MCP bridges, both Rust `[[bin]]`s),
 `tado-dome` (CLI for canvas agents to register/query scoped Dome knowledge),
-`tado-cli` (the canvas-agent CLI surface — hosts fourteen binaries: `tado`,
+`tado-cli` (the canvas-agent CLI surface — hosts thirteen binaries: `tado`,
 `tado-bootstrap`,
 `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-projects`, `tado-system`,
-`tado-cowork`, `tado-deploy`, `tado-list`, `tado-read`, `tado-send`,
+`tado-deploy`, `tado-list`, `tado-read`, `tado-send`,
 `tado-events`, `tado-tui` — all auto-installed under
 `~/.local/bin/` on first launch),
 `dome-eval` (Rust [[bin]] + [[lib]] for measurable retrieval evaluation —
@@ -154,10 +174,11 @@ Package.swift consumes — there are no .dylib runtime hops.
 
 ## What This Is
 
-Tado is a macOS SwiftUI app that turns a todo list into a terminal multiplexer
-for AI coding agents. Each todo item spawns a terminal running either `claude`
-(Claude Code) or `codex` CLI with the todo text as the prompt. Terminals are
-displayed as tiles on a pannable/zoomable canvas.
+Tado is a macOS SwiftUI app and Codex-first terminal Agent OS. The public npm
+terminal package runs Codex as its only AI provider; shell/raw sessions remain
+terminal utilities. The desktop app source still contains broader historical
+surfaces, but runtime-backed terminal OS flows must follow the Codex-only
+release contract above.
 
 Around that core sits a small platform: a persistence subsystem with atomic
 file IO, a typed event bus, a knowledge graph (Dome), a real-time A2A bus
@@ -278,8 +299,8 @@ switches between them.
 created (SwiftData) → `TerminalManager.spawnSession()` creates a
 `TerminalSession` → `MetalTerminalTileView` mounts the Metal tile and
 prepends the Dome context preamble to the prompt → `ProcessSpawner`
-builds the shell command (`/bin/zsh -l -c "claude 'todo text'"` with
-shell-escaped flags including `--model` / `--effort`) → Rust
+builds the shell command (Codex in terminal runtime flows, with
+shell-escaped model/reasoning flags) → Rust
 `tado-terminal` spawns the PTY via `portable-pty`, parses VT sequences in
 `performer.rs`, and snapshots the cell grid for the renderer to draw.
 
@@ -287,7 +308,7 @@ shell-escaped flags including `--model` / `--effort`) → Rust
 normal todo spawns create two visible tiles: the original slot becomes the
 executioner and the next free grid slot becomes the advisor. Dispatch,
 Eternal, coordinator todos, Tado Use, `tado-deploy`, and explicit TUI
-`/claude` / `/codex` commands keep their existing direct spawn paths. The
+`/codex` commands keep their existing direct spawn paths. The
 executioner gets a role prompt and waits. The advisor gets the user task,
 the executioner UUID/grid target, and short-step rules. Desktop uses
 `AdvisorRelay` to send deterministic clipped output tails to the advisor;
@@ -823,7 +844,7 @@ tado-list                                         # Active sessions (UUID, engin
 tado-list --toon                                  # AXI-style compact output (~45% fewer tokens)
 tado-read <target> [--tail N] [--follow] [--raw]  # Read terminal output from a session
 tado-send <target> <message>                      # Send typed input to a terminal session
-tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine codex|shell|raw] [--cwd <path>]
 tado-events [filter]                              # Subscribe to /tmp/tado-ipc/events.sock; filter = "*", "topic:foo", "session:<id>", or kind prefix
 tado-config {get,set,list,path,export,import} [scope] [key] [value]
 tado-notify {send "<title>", tail}
@@ -832,7 +853,7 @@ tado-dome {register,query,...}                    # Scoped Dome knowledge from c
 ```
 
 **`tado-cli` workspace binaries** (built from
-`tado-core/crates/tado-cli/`, fourteen [[bin]] targets — these are
+`tado-core/crates/tado-cli/`, thirteen [[bin]] targets — these are
 typed-Rust drop-ins that operate on the same on-disk state the
 Swift app reads):
 
@@ -852,7 +873,6 @@ tado-eternal …                                    # Runtime workflow state whe
 tado-kanban {list,move,add-column}                # Runtime Agent View board when a profile is selected; project Kanban fallback otherwise
 tado-projects …                                   # Project CRUD across the storage root
 tado-system …                                     # Storage-root introspection / health checks
-tado-cowork …                                     # Cowork URL-scheme launcher
 tado-deploy …                                     # Spawn visible canvas agents from the CLI
 tado-tui …                                        # Runtime-backed Agent OS TUI
 ```
@@ -894,7 +914,7 @@ TUI contract:
 - Projects is a selection surface: arrows choose a project, Space activates it, and normal prompt text spawns the configured default agent in that selected project. If Advisor mode is enabled, that normal prompt spawns an executioner plus an advisor and links them with `advisor.link`.
 - Project paths typed without `/`, `./`, or `../` resolve from `$HOME`; `Documents/foo` means `~/Documents/foo`, not the repo cwd.
 - `Shift+X` kills and deletes the selected runtime session.
-- Settings is an arrow/Space list of toggles and choices, with human-readable runtime status instead of raw JSON. It should expose engine, model, effort, permission, Advisor role profiles, terminal display, board, event, and project prompt behavior where the runtime can honor them.
+- Settings is an arrow/Space list of toggles and choices, with human-readable runtime status instead of raw JSON. It should expose Codex provider settings, Advisor role profiles, terminal display, board, event, and project prompt behavior where the runtime can honor them.
 - Events defaults to human-readable timeline rows, with JSON as an explicit Settings choice.
 
 When `TADO_PROFILE`, `TADO_RUNTIME_SOCKET`, or `TADO_RUNTIME_ID` is set,
@@ -932,9 +952,9 @@ see what it output, then `tado-send 1,1 "your response"` to reply.
 a new terminal tile on the Tado canvas — it is NOT your built-in
 subagent or background agent tool. Use it to deploy a new agent session
 that gets its own tile, grid position, and IPC registration. Defaults
-(project, team, engine, cwd) are inherited from the calling session's
+(project, team, session kind, cwd) are inherited from the calling session's
 environment. The agent name corresponds to definitions at
-`.claude/agents/<name>.md`.
+`.codex/agents/<name>.md`.
 
 **Fire-and-forget pattern:** When deploying, include in the deployed
 agent's prompt instructions to deliver results back via `tado-send
@@ -958,7 +978,7 @@ answer in your own terminal; send it back to them.
 
 **Working in a team:** When you are part of a team, you share a project
 with other specialized agents. Know your teammates — read their agent
-definitions at `.claude/agents/<name>.md` to understand their roles.
+definitions at `.codex/agents/<name>.md` to understand their roles.
 Use `tado-list` to find running teammates. When a teammate asks you for
 something, deliver it back to them via `tado-send`. When you need
 something from a teammate, send a request and they will deliver back to
@@ -966,10 +986,9 @@ you.
 
 ### MCP bridges (Rust `[[bin]]`s, auto-registered)
 
-Both bridges are stdio Rust binaries inside the bundled `.app` — no
-Node runtime, no separate install. They auto-register into Claude Code
-at user scope on first launch (silent fallback if `claude` CLI is
-missing).
+Both bridges are stdio Rust binaries inside the bundled `.app` and npm
+terminal package. The Rust `tado-mcp` bridge is the public release surface; the
+legacy Node bridge is private/reference-only.
 
 - **`tado-mcp`** exposes: `tado_config_{get,set,list}`,
   `tado_memory_{read,append,search}`, `tado_notify`,
@@ -1234,9 +1253,9 @@ every project's perf brief uses the same vocabulary.
 ## Bootstrapping a project (the four `Bootstrap …` actions)
 
 Every project gets a `⋯` menu (in `ProjectCard` and `TopNavBar`) with
-four bootstrap actions. Each one spawns a one-shot agent tile that
-edits the target project's `CLAUDE.md` / `AGENTS.md` / `.claude/`
-configuration. None of them mutate code; they all stop after writing.
+four bootstrap actions. Runtime-backed terminal bootstraps spawn Codex and
+target `AGENTS.md` plus `.codex/` agent/profile surfaces. None of them mutate
+code; they all stop after writing.
 Prompts are authored in
 [ProcessSpawner.swift](Sources/Tado/Services/ProcessSpawner.swift) so
 they version-bump alongside the rest of the codebase, and they're
@@ -1245,10 +1264,10 @@ glued to the menu via
 
 | Action | Spawned cwd | Targets | When to run |
 | --- | --- | --- | --- |
-| **Bootstrap A2A tools** | Tado repo | project's `CLAUDE.md` + `AGENTS.md` | Once per new project — installs Tado A2A docs (CLI tools, MCP bridges, real-time events, broadcast). |
-| **Bootstrap team awareness** | project root | project's `CLAUDE.md` + `AGENTS.md` | After teams or roster change — re-injects roster + coordination patterns + Dome team-topic search. Disabled when no teams. |
-| **Bootstrap Claude auto mode** | project root | `~/.claude/settings.json` + `<project>/.claude/settings.local.json` | When configuring a project for Continuous Eternal runs — installs `permissions.defaultMode = auto` plus the `autoMode.environment` trust prose. Pinned to Opus 4.7 + skip-permissions because subtle JSON merge mistakes break everything. |
-| **Bootstrap knowledge layer** | project root | project's `CLAUDE.md` + `AGENTS.md` | Once per new project — teaches the project's agents that Dome exists, what's already in it, how to read with `dome_search` / `tado-dome`, and how to write retros with `dome_note` / `tado-dome register`. |
+| **Bootstrap A2A tools** | Tado repo | project's `AGENTS.md` | Once per new project — installs Tado A2A docs (CLI tools, MCP bridges, real-time events, broadcast). |
+| **Bootstrap team awareness** | project root | project's `AGENTS.md` | After teams or roster change — re-injects roster + coordination patterns + Dome team-topic search. Disabled when no teams. |
+| **Bootstrap auto mode** | project root | project's `AGENTS.md` / `.codex/` profile docs | When configuring trusted Codex operation for terminal Agent OS runs. |
+| **Bootstrap knowledge layer** | project root | project's `AGENTS.md` | Once per new project — teaches the project's agents that Dome exists, what's already in it, how to read with `dome_search` / `tado-dome`, and how to write retros with `dome_note` / `tado-dome register`. |
 
 When you ship a tool, surface, or convention that agents should know
 about, refresh the corresponding `bootstrap*Prompt` function and bump
@@ -1266,19 +1285,19 @@ left-edge tab. Lives at `Sources/Tado/Views/TadoUsePanel.swift` (the
 view) and is backed by:
 
 - [TadoUseEngine.swift](Sources/Tado/Services/TadoUseEngine.swift)
-  — the streaming Claude API turn, off-actor parse, brand + settings
+  — the desktop Tado Use streaming turn, off-actor parse, brand + settings
   parity. Split per the v1.x Tado Use perf overhaul.
 - [TadoUseAutonomousHandlers.swift](Sources/Tado/Services/TadoUseAutonomousHandlers.swift)
   — the 44-tool autonomous control plane (project CRUD, todo CRUD,
   tile send/read, dispatch, eternal, knowledge writes, kanban,
-  settings, etc.). `todo_create` accepts an optional `engine`
-  (`claude` or `codex`), and `dispatch_intervene` routes follow-up
+  settings, etc.). Runtime-backed terminal package flows should use Codex;
+  `dispatch_intervene` routes follow-up
   prompts to the active Dispatch tile. Each tool is a typed handler invoked by
   the streaming engine.
 - [TadoUseBridge/main.swift](Sources/TadoUseBridge/main.swift) —
   the standalone CLI executable that backs external agents talking
   to Tado Use. Auto-registered as an MCP server so an external
-  Claude Code session can drive Tado the same way the in-app panel
+  external agent session can drive Tado the same way the in-app panel
   does.
 - [TadoUseBridgeAutoRegister.swift](Sources/Tado/Services/TadoUseBridgeAutoRegister.swift)
   — the boot-time MCP installer.
@@ -1293,144 +1312,6 @@ Tado Use was promoted from a v1.0 single-tool surface into a
 (commits `ffd15d3` and `1c2e74f`). The v1.x perf overhaul split the
 streaming turn so parse work runs off the main actor, restoring
 smooth typing during long completions.
-
-## Cowork engine + plugin (v1.4)
-
-Cowork is the **third Tado engine**, alongside Claude Code and
-Codex. Unlike its peers, Cowork has NO standalone CLI binary — it
-lives inside the Claude Desktop app
-(`com.anthropic.claudefordesktop`) and is driven through the
-documented `claude://cowork/new?q=…&folder=…&file=…` URL scheme.
-Tado launches Cowork via a bundled Rust CLI (`tado-cowork`) that
-builds the URL and shells `open(1)`; the `claude` binary path
-that other engines use is replaced by a one-shot URL-scheme
-launch.
-
-### The mental model
-
-Cowork has no PTY-attached output. The launcher's process exits
-the moment `open(1)` returns, so there is nothing for Tado's tile
-to read line-by-line. The bridge back to Tado's tile is a
-**file-convention round-trip**: Cowork writes its result markdown
-to `<projectRoot>/.tado/cowork/<runID>.md`, and a `CoworkOutput-
-Poller` watches that path with a DispatchSource file-system
-observer (debounced 500 ms, 30-min hard deadline). When the file
-appears with non-empty content, the poller renders it back into
-the originating canvas tile and transitions the session to
-`.completed`.
-
-The convention is taught to Cowork by the bundled
-`tado-cowork-plugin`'s `cowork-tado-tools` skill — the launcher
-ALSO seeds a `[Tado run <id>]` preamble into the prompt that
-explicitly names the result file Cowork should write to. The
-result-file dance is therefore robust to Cowork choosing to
-ignore the skill (the preamble alone is enough) but works
-better when both are in effect.
-
-### The bundled `tado-cowork-plugin`
-
-Tado ships a Claude plugin (`tado-cowork-plugin`) that exposes
-its full bundled MCP surface to Cowork:
-
-| Server | Tools | Purpose |
-|---|---|---|
-| `tado` | 12 | Per-session A2A: list/send/read across running tiles, broadcast, notifications, scoped config + memory |
-| `dome` | 18 | Knowledge vault: hybrid + code search, notes, retrieval recipes, lifecycle (supersede/verify/decay), code watch, agent status |
-| `tado-use-bridge` | 44 | Drive Tado itself: navigation, modal/sheet control, todo + project + Eternal + Dispatch lifecycle, Kanban, settings, extensions |
-
-Plus a teaching skill (`cowork-tado-tools`) that orients Cowork
-inside Tado's mental model (canvas, tiles, todos, projects,
-teams, Eternal/Dispatch, Dome, Kanban) and an agent
-persona (`cowork-canvas-coworker`) for the planning + knowledge-
-work-half-of-a-canvas pattern: Cowork reasons about the project
-and delegates executable work to running Claude Code / Codex
-tiles via `tado_send`.
-
-The plugin lives at `tado-core/crates/tado-cowork-plugin/`:
-
-```
-.claude-plugin/
-  plugin.json          # name, version, mcpServers, userConfig
-  marketplace.json     # local marketplace manifest (tado-local)
-skills/
-  cowork-tado-tools/
-    SKILL.md           # Tado mental model + tool reference
-agents/
-  cowork-canvas-coworker.md
-bin/
-  tado-mcp             # bundled MCP server (16 tools)
-  dome-mcp             # bundled MCP server (18 tools)
-  tado-use-bridge      # bundled MCP server (44 tools)
-```
-
-`make plugin` populates `bin/` from the release builds of the
-three Rust MCP servers + the Swift `tado-use-bridge` product.
-
-### "Bootstrap Cowork plugin" surface
-
-Two ways to install the plugin:
-
-1. **Settings → Engine → Cowork → "Bootstrap Cowork plugin"** —
-   in-process install via `CoworkPluginInstaller.install()`. Runs
-   `claude plugin marketplace add <bundled-path>` then
-   `claude plugin install tado-cowork-plugin@tado-local`. Mirrors
-   the `TadoMcpAutoRegister` pattern: shell out to the `claude`
-   CLI and let it own the file writes into `~/.claude/plugins/
-   cache/` and `~/.claude/settings.json`. Critical-style NSAlert
-   confirmation on both install and uninstall.
-
-2. **Project card → bootstrap row → "Cowork" button** — fifth
-   bootstrap action alongside A2A / Team / Auto / Knowledge.
-   Spawns a one-shot Claude Code agent tile with the
-   `bootstrapCoworkPluginPrompt` text (in
-   `Sources/Tado/Services/ProcessSpawner.swift`). The agent runs
-   the same install + verifies + smoke-tests + reports back. Same
-   end state, more visible feedback in the canvas.
-
-### Engine flag handling
-
-Cowork's `CoworkMode` / `CoworkModel` / `CoworkEffort` enums all
-emit `cliFlags = []`. There ARE no Cowork CLI flags; the picker
-selections ride into the prompt preamble as hints the bundled
-plugin's skill surfaces back to Cowork. `CoworkModel` selections
-do NOT override the Desktop app's configured model — they're
-informational only.
-
-### Eternal / Dispatch are NOT supported with Cowork
-
-Eternal and Dispatch depend on per-turn marker lines in the
-PTY output (`ETERNAL-DONE`, `[SCORE-OK]`, `[PERF-OK]`). Cowork
-has no PTY output at all, so the perf-gate / sprint-gate
-contracts can't fire. The New Eternal modal already filters
-Cowork out of the engine picker; `EternalService.startWorker`
-will spawn with Claude Code flags if a hand-edited state.json
-asks for `engine = cowork`, surfacing a clear error message
-through the Eternal architect's prompt.
-
-### Tado Use can NOT drive Cowork per-turn
-
-The Tado Use streaming engine spawns `claude -p ... --mcp-config
-<ephemeral.json>` on every turn — there's no Cowork analog for
-that ephemeral config (Cowork picks up MCP servers from the
-plugin model, not from a per-turn flag). Tado Use's
-`spawn(engine: .cowork, …)` surfaces an explanatory turn
-("Cowork doesn't accept a per-turn `--mcp-config`...") rather
-than failing in a confusing way. The user is told to either
-submit a Cowork todo from the canvas OR switch the header
-engine to Claude for in-bridge tool calling.
-
-### Critical files
-
-- [Sources/Tado/App/AppState.swift](Sources/Tado/App/AppState.swift) — `TerminalEngine.cowork` + `CoworkMode` / `CoworkEffort` / `CoworkModel` enums.
-- [Sources/Tado/Models/AppSettings.swift](Sources/Tado/Models/AppSettings.swift) — `coworkModeRaw` / `coworkEffortRaw` / `coworkModelRaw` SwiftData fields + computed properties.
-- [Sources/Tado/Services/ProcessSpawner.swift](Sources/Tado/Services/ProcessSpawner.swift) — `coworkCommand(...)` builds the `tado-cowork --prompt … --folder … --run-id …` invocation; `bootstrapCoworkPluginPrompt(...)` is the prose for the project bootstrap action.
-- [Sources/Tado/Services/CoworkOutputPoller.swift](Sources/Tado/Services/CoworkOutputPoller.swift) — file-convention round-trip; one-shot DispatchSource watcher with a 30-min hard deadline.
-- [Sources/Tado/Services/CoworkPluginInstaller.swift](Sources/Tado/Services/CoworkPluginInstaller.swift) — install / uninstall / status; shells `claude plugin install`.
-- [Sources/Tado/Services/ProjectActionsService.swift](Sources/Tado/Services/ProjectActionsService.swift) — `bootstrapCoworkPlugin(...)` spawns the bootstrap agent tile.
-- [Sources/Tado/Services/TerminalManager.swift](Sources/Tado/Services/TerminalManager.swift) — `coworkPollers` dictionary + `startCoworkPoller(...)` lifecycle wiring.
-- [Sources/Tado/Views/SettingsView.swift](Sources/Tado/Views/SettingsView.swift) — Cowork-specific Mode/Model/Effort sections + "Bootstrap Cowork plugin" / "Uninstall Cowork plugin" buttons.
-- [tado-core/crates/tado-cli/src/bin/tado-cowork.rs](tado-core/crates/tado-cli/src/bin/tado-cowork.rs) — Rust URL-scheme launcher (`claude://cowork/new`).
-- [tado-core/crates/tado-cowork-plugin/](tado-core/crates/tado-cowork-plugin/) — the Claude plugin tree (manifest, marketplace, skill, agent, bin/).
 
 ## Kanban (per-project board mirrored to disk)
 

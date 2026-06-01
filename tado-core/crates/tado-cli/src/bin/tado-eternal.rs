@@ -2,7 +2,7 @@
 //!
 //! Subcommands:
 //!   propose --project <name> --feature <feature> --task "<text>"
-//!           [--mode mega|sprint] [--engine claude|codex]
+//!           [--mode mega|sprint] [--engine codex]
 //!           --coordinator-todo-id <uuid> [--label <text>]
 //!   status <run_id>
 //!   crafted <run_id>
@@ -40,7 +40,7 @@ enum Command {
         task: String,
         #[arg(long, default_value = "sprint")]
         mode: String,
-        #[arg(long, default_value = "claude")]
+        #[arg(long, default_value = "codex")]
         engine: String,
         #[arg(long = "coordinator-todo-id")]
         coordinator_todo_id: String,

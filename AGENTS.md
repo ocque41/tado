@@ -162,7 +162,7 @@ Rust workspace:
 - `tado-core/crates/tado-ipc` - IPC paths, registry, external messages, event socket.
 - `tado-core/crates/tado-settings` - atomic JSON IO, storage paths, scope enum.
 - `tado-core/crates/tado-runtime` - profile-isolated CLI daemon `tadod`, runtime protocol, SQLite session/transcript store, PTY ownership, and Agent OS backing API.
-- `tado-core/crates/tado-cli` - typed CLIs such as `tado`, `tado-bootstrap`, `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-system`, `tado-cowork`, `tado-deploy`, `tado-tui`.
+- `tado-core/crates/tado-cli` - typed CLIs such as `tado`, `tado-bootstrap`, `tado-dispatch`, `tado-eternal`, `tado-kanban`, `tado-system`, `tado-projects`, `tado-deploy`, `tado-tui`.
 - `tado-core/crates/tado-mcp` - Rust MCP bridge for Tado canvas/tools.
 - `tado-core/crates/dome-mcp` - Rust MCP bridge for Dome tools.
 - `tado-core/crates/tado-dome` - Dome CLI.
@@ -503,13 +503,16 @@ When changing context generation, update both sides and run the Rust byte-equiva
 
 ## Process Spawning
 
-`ProcessSpawner.swift` is central. Treat it as a contract surface.
+`ProcessSpawner.swift` is central for the desktop app. Treat it as a contract surface.
+
+The public terminal Agent OS package is Codex-only. In `tado-runtime` and the
+runtime-backed `tado-cli` flows, `codex` is the only AI provider. `shell` and
+`raw` are utility session kinds. New terminal spawn/bootstrap/Dispatch/Eternal
+requests for `claude` or `cowork` must fail visibly instead of falling back.
 
 It handles:
 
-- Claude command construction
 - Codex command construction
-- Cowork URL-scheme launch
 - model and effort flags
 - permission modes
 - bootstrap prompts
@@ -522,8 +525,8 @@ Important constraints:
 - shell-escape model flags because some model names contain brackets.
 - `sanitizeFlags` protects auto-mode sentinels.
 - fallback is bounded and user-visible; it is not a watchdog.
-- Advisor mode is for normal todos only. It uses Claude/Codex role profiles,
-  excludes Cowork, spawns an executioner in the original todo slot plus an
+- Advisor mode is for normal terminal OS prompts only. It uses Codex role profiles,
+  spawns an executioner in the original todo slot plus an
   advisor in the next free slot, and communicates through existing Tado
   A2A CLI/MCP tools. Advisor instructions must stay small and one-step.
 - new A2A tools or agent instructions must be added to bootstrap prompt functions:
@@ -531,23 +534,6 @@ Important constraints:
   - `bootstrapTeamPrompt`
   - `bootstrapAutoModePrompt`
   - `bootstrapKnowledgePrompt`
-
-## Cowork Engine
-
-Cowork is a third engine, but it is not a normal PTY engine.
-
-Facts:
-
-- launched through `tado-cowork`
-- opens Claude Desktop with `claude://cowork/new?...`
-- no standalone Cowork CLI
-- no PTY output
-- output is watched from `<projectRoot>/.tado/cowork/<runID>.md`
-- `CoworkOutputPoller` maps file updates back into Tado
-- Cowork is not supported for Eternal or Dispatch execution
-- Tado Use cannot drive Cowork per turn
-
-Do not assume Cowork can be treated like Claude or Codex.
 
 ## Eternal, Dispatch, Perf, And Sprint
 
@@ -601,10 +587,10 @@ Key files:
 Constraints:
 
 - one subprocess at a time per turn.
-- Claude path uses `claude -p` with stream JSON and per-turn MCP config.
-- Codex is surfaced as unsupported for Tado Use until CLI MCP config support exists.
-- Cowork is surfaced as unsupported for Tado Use because it does not expose a per-turn MCP config path.
-- `tado_use.todo_create` accepts optional `engine: "claude" | "codex"` for explicit tile spawning.
+- Tado Use is a desktop-app surface. Do not treat it as part of the public
+  Codex-only terminal package unless the request explicitly targets it.
+- `tado_use.todo_create` accepts optional engine data for desktop tile spawning.
+  Runtime-backed terminal package flows should use Codex.
 - Dispatch follow-ups use `tado_use.dispatch_intervene`; the run must have a live current-phase or architect tile.
 - JSONL parsing and coalescing stay off the main actor.
 - per-token streaming should not mutate large SwiftUI arrays.
@@ -673,7 +659,6 @@ tado-eternal
 tado-kanban
 tado-projects
 tado-system
-tado-cowork
 ```
 
 Unified runtime-backed CLI:
@@ -693,7 +678,7 @@ tado board
 tado events
 ```
 
-`tado`, `tado-tui`, `tado-list`, `tado-read`, `tado-send`, `tado-events`, `tado-kanban`, `tado-bootstrap`, `tado-eternal`, and `tado-dispatch` use `tadod` for CLI profiles. `tado-deploy` preserves desktop IPC behavior when the desktop app is active, but uses `tadod` when a runtime profile/socket is active or no desktop IPC root exists.
+`tado`, `tado-tui`, `tado-list`, `tado-read`, `tado-send`, `tado-events`, `tado-kanban`, `tado-bootstrap`, `tado-eternal`, and `tado-dispatch` use `tadod` for CLI profiles. `tado-deploy` preserves desktop IPC behavior when the desktop app is active, but uses `tadod` when a runtime profile/socket is active or no desktop IPC root exists. Runtime-backed workflows default to Codex.
 
 Runtime-backed MCP:
 
@@ -731,7 +716,7 @@ You have CLI tools for inter-terminal communication. Use these when asked to mes
 tado-list
 tado-read <target> [--tail N] [--follow] [--raw]
 tado-send <target> <message>
-tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine claude|codex] [--cwd <path>]
+tado-deploy "<prompt>" [--agent <name>] [--team <name>] [--project <name>] [--engine codex|shell|raw] [--cwd <path>]
 ```
 
 Target resolution for `tado-read` and `tado-send`, in order:
@@ -917,9 +902,9 @@ Spawn failures:
 
 - stale CLI flags
 - model names not shell-escaped
-- missing Claude/Codex binary on login shell PATH
+- missing Codex binary on login shell PATH
 - invalid auto-mode sentinels
-- Cowork treated like PTY engine
+- legacy provider names accepted instead of visible Codex-only errors
 
 Terminal rendering failures:
 

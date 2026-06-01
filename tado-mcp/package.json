@@ -1,7 +1,8 @@
 {
   "name": "tado-mcp",
   "version": "0.1.0",
-  "description": "MCP server exposing Tado A2A inter-agent communication tools",
+  "description": "Legacy Node MCP reference; the public release uses the Rust tado-mcp binary.",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "bin": {

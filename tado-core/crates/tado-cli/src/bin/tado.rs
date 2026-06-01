@@ -99,8 +99,8 @@ struct ProjectCommand {
 
 #[derive(Args, Debug)]
 struct SpawnArgs {
-    /// Engine: shell, raw, claude, codex, cowork.
-    #[arg(long, default_value = "shell")]
+    /// Session kind: codex, shell, or raw. Shell/raw are terminal utilities, not AI providers.
+    #[arg(long, default_value = "codex")]
     engine: String,
     /// Working directory. Defaults to current directory.
     #[arg(long)]
@@ -172,11 +172,11 @@ struct BoardCommand {
 
 #[derive(Args, Debug)]
 struct BootstrapArgs {
-    /// Action: a2a, team, auto-mode, knowledge, cowork, or index.
+    /// Action: a2a, team, auto-mode, knowledge, or index.
     action: String,
     #[arg(long)]
     project_root: Option<String>,
-    #[arg(long, default_value = "claude")]
+    #[arg(long, default_value = "codex")]
     engine: String,
 }
 
@@ -448,30 +448,8 @@ fn spawn_payload(args: SpawnArgs) -> Result<Value> {
             "team_name": args.team,
             "flags": args.flags,
         }),
-        Engine::Claude => json!({
-            "engine": "claude",
-            "prompt": text,
-            "title": args.title,
-            "cwd": cwd,
-            "project_id": args.project_id,
-            "project_root": args.project_root,
-            "agent_name": args.agent,
-            "team_name": args.team,
-            "flags": args.flags,
-        }),
         Engine::Codex => json!({
             "engine": "codex",
-            "prompt": text,
-            "title": args.title,
-            "cwd": cwd,
-            "project_id": args.project_id,
-            "project_root": args.project_root,
-            "agent_name": args.agent,
-            "team_name": args.team,
-            "flags": args.flags,
-        }),
-        Engine::Cowork => json!({
-            "engine": "cowork",
             "prompt": text,
             "title": args.title,
             "cwd": cwd,
@@ -489,11 +467,12 @@ fn parse_engine(value: &str) -> Result<Engine> {
     match value.to_ascii_lowercase().as_str() {
         "raw" => Ok(Engine::Raw),
         "shell" => Ok(Engine::Shell),
-        "claude" => Ok(Engine::Claude),
         "codex" => Ok(Engine::Codex),
-        "cowork" => Ok(Engine::Cowork),
+        "claude" | "cowork" => Err(anyhow!(
+            "unsupported AI provider {value:?}; terminal Agent OS supports codex"
+        )),
         other => Err(anyhow!(
-            "unknown engine {other:?}; expected shell/raw/claude/codex/cowork"
+            "unknown session kind {other:?}; expected codex, shell, or raw"
         )),
     }
 }

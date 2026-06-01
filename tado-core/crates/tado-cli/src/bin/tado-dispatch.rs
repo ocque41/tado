@@ -32,7 +32,7 @@ enum Command {
         coordinator_todo_id: String,
         #[arg(long)]
         label: Option<String>,
-        #[arg(long, default_value = "claude")]
+        #[arg(long, default_value = "codex")]
         engine: String,
         #[arg(long = "type", default_value = "sequential", value_parser = ["sequential", "wave"])]
         execution_type: String,

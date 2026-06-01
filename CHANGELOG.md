@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Prepared the terminal Agent OS release as `@tt0/tado` 0.3.0.
+- Runtime-backed terminal flows now expose Codex as the only AI provider.
+- `shell` and `raw` remain terminal utility session kinds.
+- `claude` and `cowork` spawn/bootstrap/Dispatch/Eternal requests now fail
+  visibly in terminal runtime flows instead of falling back.
+- Terminal runtime agent definitions now resolve from `.codex/agents/`.
+- The npm package metadata, docs, binary list, and CI release checks now match
+  the Codex-only terminal package.
+
+### Removed
+
+- Removed `tado-cowork` from the terminal package build and npm binary surface.
+- Marked the legacy Node `tado-mcp` package private/reference-only; Rust
+  `tado-mcp` is the release MCP surface.
+
 ## [1.1.0] - 2026-05-14
 
 Tado v1.1.0 ships the operator-facing work layer: a native Agent View in

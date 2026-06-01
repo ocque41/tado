@@ -1346,7 +1346,7 @@ mod tests {
         tado_ipc::IpcSessionEntry {
             session_id: Uuid::new_v4(),
             name: name.to_string(),
-            engine: "claude".to_string(),
+            engine: "codex".to_string(),
             grid_label: grid.to_string(),
             status: "running".to_string(),
             project_name: project.map(str::to_string),

@@ -1,17 +1,12 @@
-use std::path::PathBuf;
-
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
     Raw,
     Shell,
-    Claude,
     Codex,
-    Cowork,
 }
 
 impl Default for Engine {
@@ -92,23 +87,6 @@ pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
                 None,
             )
         }
-        Engine::Claude => {
-            if prompt.trim().is_empty() {
-                return Err(anyhow!("claude spawn requires prompt"));
-            }
-            let mut flags = sanitize_flags(request.flags);
-            if let Some(agent) = request.agent_name.as_deref() {
-                flags.splice(0..0, ["--agent".to_string(), agent.to_string()]);
-            }
-            let mut parts = vec!["claude".to_string()];
-            parts.extend(flags.into_iter().map(|f| shell_escape(&f)));
-            parts.push(shell_escape(&prompt));
-            (
-                "/bin/zsh".to_string(),
-                vec!["-l".into(), "-c".into(), parts.join(" ")],
-                None,
-            )
-        }
         Engine::Codex => {
             if prompt.trim().is_empty() {
                 return Err(anyhow!("codex spawn requires prompt"));
@@ -124,34 +102,6 @@ pub fn plan_spawn(request: SpawnRequest) -> Result<SpawnPlan> {
                 "/bin/zsh".to_string(),
                 vec!["-l".into(), "-c".into(), parts.join(" ")],
                 None,
-            )
-        }
-        Engine::Cowork => {
-            if prompt.trim().is_empty() {
-                return Err(anyhow!("cowork spawn requires prompt"));
-            }
-            let folder = request
-                .project_root
-                .clone()
-                .or_else(|| cwd.clone())
-                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-            let run_id = Uuid::new_v4().to_string();
-            let result_path = PathBuf::from(&folder)
-                .join(".tado")
-                .join("cowork")
-                .join(format!("{run_id}.md"));
-            let binary = resolve_tado_cowork_binary();
-            let cmd = format!(
-                "{} --prompt {} --folder {} --run-id {}",
-                shell_escape(&binary),
-                shell_escape(&prompt),
-                shell_escape(&folder),
-                shell_escape(&run_id)
-            );
-            (
-                "/bin/zsh".to_string(),
-                vec!["-l".into(), "-c".into(), cmd],
-                Some(result_path.display().to_string()),
             )
         }
     };
@@ -212,26 +162,6 @@ fn title_from_prompt(prompt: &str) -> Option<String> {
     Some(title)
 }
 
-fn resolve_tado_cowork_binary() -> String {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("tado-cowork");
-            if sibling.exists() {
-                return sibling.display().to_string();
-            }
-        }
-    }
-    let user = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".local/bin/tado-cowork"));
-    if let Some(path) = user {
-        if path.exists() {
-            return path.display().to_string();
-        }
-    }
-    "tado-cowork".to_string()
-}
-
 fn default_cols() -> u16 {
     120
 }
@@ -265,9 +195,9 @@ mod tests {
     }
 
     #[test]
-    fn claude_plan_shell_escapes_flags_and_prompt() {
+    fn codex_plan_shell_escapes_flags_and_prompt() {
         let plan = plan_spawn(SpawnRequest {
-            engine: Engine::Claude,
+            engine: Engine::Codex,
             prompt: Some("hello 'world'".into()),
             command: None,
             args: Vec::new(),
@@ -284,7 +214,6 @@ mod tests {
         })
         .unwrap();
         assert_eq!(plan.executable, "/bin/zsh");
-        assert!(plan.args[2].contains("'--agent' 'reviewer'"));
         assert!(plan.args[2].contains("'opus[1m]'"));
         assert!(plan.args[2].contains("'hello '\\''world'\\'''"));
     }

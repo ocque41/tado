@@ -1,4 +1,4 @@
-//! tado-bootstrap — drive the four bootstrap actions per project.
+//! tado-bootstrap — drive Codex bootstrap actions per project.
 //!
 //! Subcommands:
 //!   a2a       --project <name>
@@ -24,7 +24,7 @@ struct Cli {
     human: bool,
     #[arg(long, global = true)]
     toon: bool,
-    #[arg(long, global = true, default_value = "claude")]
+    #[arg(long, global = true, default_value = "codex")]
     engine: String,
     #[command(subcommand)]
     command: Command,
@@ -32,8 +32,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Inject the Tado A2A CLI / MCP / events docs into the
-    /// project's CLAUDE.md + AGENTS.md.
+    /// Inject the Tado A2A CLI / MCP / events docs into the project's AGENTS.md.
     A2a {
         #[arg(long)]
         project: String,
@@ -43,7 +42,7 @@ enum Command {
         #[arg(long)]
         project: String,
     },
-    /// Configure Claude Code auto mode for the project.
+    /// Configure trusted Codex auto mode for the project.
     AutoMode {
         #[arg(long)]
         project: String,

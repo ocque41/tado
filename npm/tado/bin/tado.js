@@ -45,7 +45,7 @@ if (!binary) {
 if (!fs.existsSync(binary)) {
   fail(
     `missing prebuilt ${invoked} binary for ${target}. ` +
-      "Build it with `cargo build --release -p tado-runtime --bin tadod -p tado-cli --bin tado --bin tado-tui --bin tado-list --bin tado-read --bin tado-send --bin tado-events --bin tado-deploy --bin tado-bootstrap --bin tado-kanban --bin tado-eternal --bin tado-dispatch -p tado-mcp --bin tado-mcp` " +
+      "Build it with `cargo build --release -p tado-runtime --bin tadod -p tado-cli --bins -p tado-mcp --bin tado-mcp` " +
       "or the full release target documented in prebuilt/README.md, " +
       "and place the binaries under npm/tado/prebuilt/<target>/."
   );

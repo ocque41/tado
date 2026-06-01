@@ -1,10 +1,27 @@
 {
-  "name": "tado",
-  "version": "0.2.5",
-  "description": "CLI-first Tado runtime and Agent OS terminal UI.",
+  "name": "@tt0/tado",
+  "version": "0.3.0",
+  "description": "Codex-only terminal Agent OS for macOS.",
   "license": "MIT",
   "private": false,
   "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ocque41/tado.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ocque41/tado/issues"
+  },
+  "homepage": "https://github.com/ocque41/tado#readme",
+  "keywords": [
+    "codex",
+    "agent-os",
+    "terminal",
+    "tui",
+    "macos",
+    "mcp",
+    "ai-agents"
+  ],
   "bin": {
     "tado": "bin/tado.js",
     "tadod": "bin/tado.js",
@@ -17,12 +34,15 @@
     "tado-kanban": "bin/tado.js",
     "tado-eternal": "bin/tado.js",
     "tado-dispatch": "bin/tado.js",
-    "tado-mcp": "bin/tado.js"
+    "tado-mcp": "bin/tado.js",
+    "tado-projects": "bin/tado.js",
+    "tado-system": "bin/tado.js"
   },
   "files": [
     "bin/",
     "prebuilt/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "os": [

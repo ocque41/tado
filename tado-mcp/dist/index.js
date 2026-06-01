@@ -69,7 +69,7 @@ server.registerTool("tado_config_get", {
     description: "Read a dotted key from Tado's settings. Scope: 'global' (user-wide), 'project' (committed .tado/config.json), or 'project-local' (gitignored .tado/local.json). Project scope requires running inside a Tado project.",
     inputSchema: {
         scope: z.string().describe("global | project | project-local"),
-        key: z.string().describe("Dotted path, e.g. 'ui.bellMode' or 'engine.claude.effort'"),
+        key: z.string().describe("Dotted path, e.g. 'ui.bellMode' or 'provider.codex.effort'"),
     },
 }, async (args) => ({
     content: [{ type: "text", text: await tadoConfigGet(args) }],

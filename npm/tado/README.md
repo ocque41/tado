@@ -1,85 +1,80 @@
-# tado
+# @tt0/tado
 
-CLI-first Tado runtime and Agent OS terminal UI.
+Codex-only terminal Agent OS for macOS.
 
 ```bash
-npx tado
+npx @tt0/tado
 # or
-npm install -g tado
+npm install -g @tt0/tado
 tado
 ```
 
-Run `tado` to open the Agent OS TUI. It starts a profile-owned `tadod` runtime
-daemon when needed, so the macOS desktop app does not need to be running.
+`tado` opens the Agent OS TUI and starts a profile-owned `tadod` runtime
+daemon when needed. The desktop app is not required.
 
-`tadod` is also installed for explicit daemon control and diagnostics. Normal
-users should start from `tado`; the helper commands (`tado-list`, `tado-read`,
-`tado-send`, `tado-events`, `tado-deploy`, and the workflow aliases) route to
-the active CLI runtime profile.
+## Requirements
 
-## TUI controls
+- macOS on Apple Silicon or Intel.
+- Node.js 18 or newer for the npm launcher.
+- The Codex CLI installed and authenticated in your shell.
 
-The Use page is the command/control reference. Other pages are data-first views.
+Tado does not store Codex credentials. The runtime profile stores only
+non-secret provider preferences such as model, reasoning effort, permission
+mode, alternate-screen behavior, and the account label `default`, which uses
+your existing Codex CLI auth.
+
+## Commands
+
+The npm package installs these binaries:
+
+- `tado` - public TUI entrypoint.
+- `tadod` - profile daemon.
+- `tado-list`, `tado-read`, `tado-send`, `tado-events` - runtime A2A helpers.
+- `tado-deploy` - spawn a new runtime session.
+- `tado-bootstrap`, `tado-kanban`, `tado-eternal`, `tado-dispatch`.
+- `tado-mcp` - Rust MCP bridge.
+- `tado-projects`, `tado-system`.
+
+`codex` is the only public AI provider. `shell` and `raw` remain utility
+session kinds for terminal work. Legacy `claude` and `cowork` requests are
+rejected with clear errors.
+
+## TUI Controls
 
 - `Tab` / `Shift-Tab`: move between Agent OS pages.
-- `Shift+1`-`Shift+7`: jump directly to Work, Board, Mux, Events, Use, Projects, Settings.
-- Board mode renders a side-by-side Kanban board with one lane per column.
-- `PageUp` / `PageDown` or `Ctrl-U` / `Ctrl-D`: scroll the current page.
-- `End`: follow the selected agent transcript.
-- `/`: open command autocomplete, including `/project` and `/projects`.
-- `Enter`: complete the highlighted command first, then run/send once arguments are present.
-- Plain text + `Enter` on Work/Mux: send to the selected live PTY.
-- Plain text + `Enter` on Projects: spawn the default agent in the selected project.
+- `Shift+1`-`Shift+7`: jump to Work, Board, Mux, Events, Use, Projects, Settings.
+- `/`: open command autocomplete.
+- `/codex <prompt>`: spawn a Codex session.
+- `/spawn <command>`: spawn a shell PTY utility session.
+- Plain text + `Enter` on Projects: spawn the default Codex agent in that project.
 - `Shift+X`: kill and delete the selected runtime session.
-- Settings uses `Up` / `Down`, `Left` / `Right`, and `Space` to change choices instead of raw JSON.
-- Events defaults to a human-readable timeline; Settings can switch it back to JSON.
+- Settings uses arrows and `Space` instead of raw JSON.
 
-## Projects
+Agent definitions are read from `.codex/agents/`.
 
-Profiles can register and select projects without the desktop app.
+## Package Notes
 
-```bash
-tado project add ~/Code/my-app --name my-app
-tado project add ~/Code/new-app --name new-app --create
-tado project list
-tado project use my-app
-tado project status
-```
+This package ships prebuilt Rust binaries for `darwin-arm64` and `darwin-x64`.
+The Rust crates are internal to this release and are not published to crates.io.
 
-In the TUI, use the Projects page or prompt commands:
-
-```text
-/project add <existing-path> [name]
-/project create <new-path> [name]
-/project use <name|path|id>
-/project list
-```
-
-On the Projects page, `Up` / `Down` selects a project and `Space` makes it
-active. You do not need to type `/project use ...` before every agent prompt:
-typing a normal prompt on Projects spawns the configured default agent in the
-selected project and passes that project root into the runtime.
-
-Project paths typed without a leading slash are user-home relative, so
-`documents/gg`, `downloads/demo`, and `my-app` resolve under `~` instead of
-the current shell directory. Use `./local-app` or `../local-app` when you
-explicitly want a path relative to the current directory.
-
-New `/spawn`, `/claude`, `/codex`, `/cowork`, and `/bootstrap` commands use
-the active project as their working directory and `TADO_PROJECT_ROOT`.
-
-## Publishing
-
-Publish only with an npm token supplied through the environment, never from a
-checked-in config file:
+To verify a generated tarball:
 
 ```bash
 cd npm/tado
-npm pack --dry-run
+npm pack --dry-run --json
+npm pack
+prefix="$(mktemp -d)"
+npm install --prefix "$prefix" ./tt0-tado-0.3.0.tgz
+"$prefix/bin/tado" --help
+"$prefix/bin/tadod" --help
+```
+
+Publishing should use a temporary npm config or environment token only. Do not
+commit tokens:
+
+```bash
 tmp_config="$(mktemp)"
 printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$tmp_config"
 NPM_CONFIG_USERCONFIG="$tmp_config" npm publish --access public
 rm -f "$tmp_config"
 ```
-
-Set `NPM_TOKEN` or `NODE_AUTH_TOKEN` in the shell used for publishing.

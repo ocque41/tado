@@ -121,32 +121,18 @@ struct ProjectView {
 #[serde(default)]
 struct UiSettings {
     default_engine: usize,
-    claude_mode: usize,
-    claude_model: usize,
-    claude_effort: usize,
-    claude_no_flicker: bool,
-    claude_mouse_enabled: bool,
-    claude_scroll_speed: u8,
     codex_mode: usize,
     codex_model: usize,
     codex_effort: usize,
     codex_alternate_screen: bool,
-    cowork_mode: usize,
-    cowork_model: usize,
-    cowork_effort: usize,
+    codex_account_label: String,
     advisor_enabled: bool,
     advisor_defaults_initialized: bool,
     advisor_executioner_engine: usize,
-    advisor_executioner_claude_mode: usize,
-    advisor_executioner_claude_model: usize,
-    advisor_executioner_claude_effort: usize,
     advisor_executioner_codex_mode: usize,
     advisor_executioner_codex_model: usize,
     advisor_executioner_codex_effort: usize,
     advisor_advisor_engine: usize,
-    advisor_advisor_claude_mode: usize,
-    advisor_advisor_claude_model: usize,
-    advisor_advisor_claude_effort: usize,
     advisor_advisor_codex_mode: usize,
     advisor_advisor_codex_model: usize,
     advisor_advisor_codex_effort: usize,
@@ -168,32 +154,18 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             default_engine: 1,
-            claude_mode: 0,
-            claude_model: 0,
-            claude_effort: 0,
-            claude_no_flicker: false,
-            claude_mouse_enabled: true,
-            claude_scroll_speed: 3,
             codex_mode: 0,
             codex_model: 0,
             codex_effort: 0,
             codex_alternate_screen: false,
-            cowork_mode: 0,
-            cowork_model: 0,
-            cowork_effort: 0,
+            codex_account_label: "default".to_string(),
             advisor_enabled: false,
             advisor_defaults_initialized: false,
             advisor_executioner_engine: 0,
-            advisor_executioner_claude_mode: 0,
-            advisor_executioner_claude_model: 2,
-            advisor_executioner_claude_effort: 0,
             advisor_executioner_codex_mode: 0,
             advisor_executioner_codex_model: 1,
             advisor_executioner_codex_effort: 0,
             advisor_advisor_engine: 0,
-            advisor_advisor_claude_mode: 0,
-            advisor_advisor_claude_model: 0,
-            advisor_advisor_claude_effort: 3,
             advisor_advisor_codex_mode: 0,
             advisor_advisor_codex_model: 0,
             advisor_advisor_codex_effort: 3,
@@ -213,34 +185,8 @@ impl Default for UiSettings {
     }
 }
 
-const DEFAULT_ENGINES: &[&str] = &["shell", "claude", "codex", "cowork"];
-const ENGINE_LABELS: &[&str] = &["Shell", "Claude Code", "Codex", "Claude Cowork"];
-const ADVISOR_ENGINES: &[&str] = &["claude", "codex"];
-const ADVISOR_ENGINE_LABELS: &[&str] = &["Claude Code", "Codex"];
-const CLAUDE_MODES: &[(&str, &[&str])] = &[
-    ("Ask permissions", &["--permission-mode", "default"]),
-    ("Plan mode", &["--permission-mode", "plan"]),
-    ("Auto mode", &["--permission-mode", "auto"]),
-    (
-        "Bypass permissions",
-        &["--permission-mode", "bypassPermissions"],
-    ),
-];
-const CLAUDE_MODELS: &[(&str, &str)] = &[
-    ("Opus 4.7", "claude-opus-4-7"),
-    ("Opus 4.7 1M", "opus[1m]"),
-    ("Sonnet 4.6", "claude-sonnet-4-6"),
-    ("Sonnet 4.6 1M", "sonnet[1m]"),
-    ("Haiku 4.5", "claude-haiku-4-5"),
-];
-const CLAUDE_EFFORTS: &[(&str, Option<&str>)] = &[
-    ("Auto", None),
-    ("Low", Some("low")),
-    ("Medium", Some("medium")),
-    ("High", Some("high")),
-    ("Extra high", Some("xhigh")),
-    ("Max", Some("max")),
-];
+const DEFAULT_ENGINES: &[&str] = &["shell", "codex"];
+const ENGINE_LABELS: &[&str] = &["Shell", "Codex"];
 const CODEX_MODES: &[(&str, &[&str])] = &[
     ("Default permissions", &[]),
     (
@@ -268,13 +214,10 @@ const CODEX_EFFORTS: &[(&str, Option<&str>)] = &[
     ("High", Some("high")),
     ("Extra high", Some("xhigh")),
 ];
-const COWORK_MODES: &[&str] = &["Async task", "Interactive"];
-const COWORK_MODELS: &[&str] = &["Auto", "Opus 4.7", "Sonnet 4.6"];
-const COWORK_EFFORTS: &[&str] = &["Auto", "Standard", "Extended"];
 const THEMES: &[&str] = &[
     "Ember",
     "Tado Dark",
-    "Claude Copper",
+    "Copper",
     "Mac Pro",
     "Solarized Dark",
     "Dracula",
@@ -305,19 +248,9 @@ const COMMANDS: &[CommandSpec] = &[
         summary: "spawn a shell PTY",
     },
     CommandSpec {
-        verb: "/claude",
-        args: "<prompt>",
-        summary: "spawn Claude",
-    },
-    CommandSpec {
         verb: "/codex",
         args: "<prompt>",
         summary: "spawn Codex",
-    },
-    CommandSpec {
-        verb: "/cowork",
-        args: "<prompt>",
-        summary: "start Cowork run",
     },
     CommandSpec {
         verb: "/bootstrap",
@@ -1200,18 +1133,14 @@ fn run_operator_command(state: &mut AgentOsState, command: &str) -> Result<Strin
     let rest = parts.collect::<Vec<_>>().join(" ");
     match verb {
         "/spawn" => spawn_engine(state, "shell", &rest),
-        "/claude" => spawn_engine(state, "claude", &rest),
         "/codex" => spawn_engine(state, "codex", &rest),
-        "/cowork" => spawn_engine(state, "cowork", &rest),
         "/bootstrap" => {
             let mut args = rest.split_whitespace();
             let action = args.next().unwrap_or("");
             if action.is_empty() {
-                return Ok(
-                    "Usage: /bootstrap a2a|team|auto-mode|knowledge|cowork|index".to_string(),
-                );
+                return Ok("Usage: /bootstrap a2a|team|auto-mode|knowledge|index".to_string());
             }
-            let engine = args.next().unwrap_or("claude");
+            let engine = args.next().unwrap_or("codex");
             let response = state.client.call(
                 "bootstrap.request",
                 json!({ "action": action, "engine": engine, "project_root": state.active_project_root }),
@@ -1373,7 +1302,7 @@ fn dispatch_command(state: &mut AgentOsState, rest: &str) -> Result<String> {
             let engine = DEFAULT_ENGINES
                 .get(state.settings.default_engine)
                 .copied()
-                .unwrap_or("claude");
+                .unwrap_or("codex");
             let feature = workflow_title_from_brief(&brief);
             let coordinator_todo_id = format!(
                 "tui-{}",
@@ -1694,29 +1623,14 @@ fn save_settings(state: &AgentOsState) -> Result<()> {
 }
 
 fn clamp_settings(settings: &mut UiSettings) {
-    settings.default_engine = settings.default_engine.min(DEFAULT_ENGINES.len() - 1);
-    settings.claude_mode = settings.claude_mode.min(CLAUDE_MODES.len() - 1);
-    settings.claude_model = settings.claude_model.min(CLAUDE_MODELS.len() - 1);
-    settings.claude_effort = settings.claude_effort.min(CLAUDE_EFFORTS.len() - 1);
-    settings.claude_scroll_speed = settings.claude_scroll_speed.clamp(1, 20);
+    settings.default_engine = if settings.default_engine == 0 { 0 } else { 1 };
     settings.codex_mode = settings.codex_mode.min(CODEX_MODES.len() - 1);
     settings.codex_model = settings.codex_model.min(CODEX_MODELS.len() - 1);
     settings.codex_effort = settings.codex_effort.min(CODEX_EFFORTS.len() - 1);
-    settings.cowork_mode = settings.cowork_mode.min(COWORK_MODES.len() - 1);
-    settings.cowork_model = settings.cowork_model.min(COWORK_MODELS.len() - 1);
-    settings.cowork_effort = settings.cowork_effort.min(COWORK_EFFORTS.len() - 1);
-    settings.advisor_executioner_engine = settings
-        .advisor_executioner_engine
-        .min(ADVISOR_ENGINES.len() - 1);
-    settings.advisor_executioner_claude_mode = settings
-        .advisor_executioner_claude_mode
-        .min(CLAUDE_MODES.len() - 1);
-    settings.advisor_executioner_claude_model = settings
-        .advisor_executioner_claude_model
-        .min(CLAUDE_MODELS.len() - 1);
-    settings.advisor_executioner_claude_effort = settings
-        .advisor_executioner_claude_effort
-        .min(CLAUDE_EFFORTS.len() - 1);
+    if settings.codex_account_label.trim().is_empty() {
+        settings.codex_account_label = "default".to_string();
+    }
+    settings.advisor_executioner_engine = 0;
     settings.advisor_executioner_codex_mode = settings
         .advisor_executioner_codex_mode
         .min(CODEX_MODES.len() - 1);
@@ -1726,18 +1640,7 @@ fn clamp_settings(settings: &mut UiSettings) {
     settings.advisor_executioner_codex_effort = settings
         .advisor_executioner_codex_effort
         .min(CODEX_EFFORTS.len() - 1);
-    settings.advisor_advisor_engine = settings
-        .advisor_advisor_engine
-        .min(ADVISOR_ENGINES.len() - 1);
-    settings.advisor_advisor_claude_mode = settings
-        .advisor_advisor_claude_mode
-        .min(CLAUDE_MODES.len() - 1);
-    settings.advisor_advisor_claude_model = settings
-        .advisor_advisor_claude_model
-        .min(CLAUDE_MODELS.len() - 1);
-    settings.advisor_advisor_claude_effort = settings
-        .advisor_advisor_claude_effort
-        .min(CLAUDE_EFFORTS.len() - 1);
+    settings.advisor_advisor_engine = 0;
     settings.advisor_advisor_codex_mode = settings
         .advisor_advisor_codex_mode
         .min(CODEX_MODES.len() - 1);
@@ -1755,98 +1658,35 @@ fn clamp_settings(settings: &mut UiSettings) {
 
 fn spawn_flags_for_engine(settings: &UiSettings, engine: &str) -> Vec<String> {
     match engine {
-        "claude" => {
-            let mut flags = Vec::new();
-            flags.extend(
-                CLAUDE_MODES[settings.claude_mode]
-                    .1
-                    .iter()
-                    .map(|value| value.to_string()),
-            );
-            flags.extend([
-                "--model".to_string(),
-                CLAUDE_MODELS[settings.claude_model].1.to_string(),
-            ]);
-            if let Some(effort) = CLAUDE_EFFORTS[settings.claude_effort].1 {
-                flags.extend(["--effort".to_string(), effort.to_string()]);
-            }
-            flags
-        }
-        "codex" => {
-            let mut flags = Vec::new();
-            if !settings.codex_alternate_screen {
-                flags.push("--no-alt-screen".to_string());
-            }
-            flags.extend([
-                "-c".to_string(),
-                "shell_environment_policy.inherit=all".to_string(),
-            ]);
-            flags.extend(
-                CODEX_MODES[settings.codex_mode]
-                    .1
-                    .iter()
-                    .map(|value| value.to_string()),
-            );
-            flags.extend([
-                "-c".to_string(),
-                format!("model=\"{}\"", CODEX_MODELS[settings.codex_model].1),
-            ]);
-            if let Some(effort) = CODEX_EFFORTS[settings.codex_effort].1 {
-                flags.extend([
-                    "-c".to_string(),
-                    format!("model_reasoning_effort=\"{effort}\""),
-                ]);
-            }
-            flags
-        }
+        "codex" => codex_flags(
+            settings.codex_alternate_screen,
+            settings.codex_mode,
+            settings.codex_model,
+            settings.codex_effort,
+        ),
         _ => Vec::new(),
     }
 }
 
-fn advisor_engine(settings: &UiSettings, role: AdvisorRole) -> &'static str {
-    let index = match role {
-        AdvisorRole::Executioner => settings.advisor_executioner_engine,
-        AdvisorRole::Advisor => settings.advisor_advisor_engine,
-    };
-    ADVISOR_ENGINES.get(index).copied().unwrap_or("claude")
+fn advisor_engine(_settings: &UiSettings, _role: AdvisorRole) -> &'static str {
+    "codex"
 }
 
 fn spawn_flags_for_advisor_role(settings: &UiSettings, role: AdvisorRole) -> Vec<String> {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "claude") => claude_flags(
-            settings.advisor_executioner_claude_mode,
-            settings.advisor_executioner_claude_model,
-            settings.advisor_executioner_claude_effort,
-        ),
-        (AdvisorRole::Advisor, "claude") => claude_flags(
-            settings.advisor_advisor_claude_mode,
-            settings.advisor_advisor_claude_model,
-            settings.advisor_advisor_claude_effort,
-        ),
-        (AdvisorRole::Executioner, "codex") => codex_flags(
+    match role {
+        AdvisorRole::Executioner => codex_flags(
             settings.codex_alternate_screen,
             settings.advisor_executioner_codex_mode,
             settings.advisor_executioner_codex_model,
             settings.advisor_executioner_codex_effort,
         ),
-        (AdvisorRole::Advisor, "codex") => codex_flags(
+        AdvisorRole::Advisor => codex_flags(
             settings.codex_alternate_screen,
             settings.advisor_advisor_codex_mode,
             settings.advisor_advisor_codex_model,
             settings.advisor_advisor_codex_effort,
         ),
-        _ => Vec::new(),
     }
-}
-
-fn claude_flags(mode: usize, model: usize, effort: usize) -> Vec<String> {
-    let mut flags = Vec::new();
-    flags.extend(CLAUDE_MODES[mode].1.iter().map(|value| value.to_string()));
-    flags.extend(["--model".to_string(), CLAUDE_MODELS[model].1.to_string()]);
-    if let Some(effort) = CLAUDE_EFFORTS[effort].1 {
-        flags.extend(["--effort".to_string(), effort.to_string()]);
-    }
-    flags
 }
 
 fn codex_flags(alternate_screen: bool, mode: usize, model: usize, effort: usize) -> Vec<String> {
@@ -1872,69 +1712,19 @@ fn codex_flags(alternate_screen: bool, mode: usize, model: usize, effort: usize)
     flags
 }
 
-fn spawn_env_for_engine(settings: &UiSettings, engine: &str) -> Vec<(String, String)> {
-    match engine {
-        "claude" => {
-            let mut env = vec![(
-                "CLAUDE_CODE_AUTO_UPDATE_DISABLED".to_string(),
-                "1".to_string(),
-            )];
-            if settings.claude_no_flicker {
-                env.push(("CLAUDE_CODE_NO_FLICKER".to_string(), "1".to_string()));
-                if !settings.claude_mouse_enabled {
-                    env.push(("CLAUDE_CODE_DISABLE_MOUSE".to_string(), "1".to_string()));
-                }
-                env.push((
-                    "CLAUDE_CODE_SCROLL_SPEED".to_string(),
-                    settings.claude_scroll_speed.to_string(),
-                ));
-            }
-            env
-        }
-        "cowork" => vec![
-            (
-                "TADO_COWORK_MODE".to_string(),
-                option_label(COWORK_MODES, settings.cowork_mode),
-            ),
-            (
-                "TADO_COWORK_MODEL".to_string(),
-                option_label(COWORK_MODELS, settings.cowork_model),
-            ),
-            (
-                "TADO_COWORK_EFFORT".to_string(),
-                option_label(COWORK_EFFORTS, settings.cowork_effort),
-            ),
-        ],
-        _ => Vec::new(),
-    }
+fn spawn_env_for_engine(_settings: &UiSettings, _engine: &str) -> Vec<(String, String)> {
+    Vec::new()
 }
 
 fn initialize_advisor_defaults(settings: &mut UiSettings) {
     if settings.advisor_defaults_initialized {
         return;
     }
-    match DEFAULT_ENGINES
-        .get(settings.default_engine)
-        .copied()
-        .unwrap_or("claude")
-    {
-        "codex" => {
-            settings.advisor_executioner_engine = 1;
-            settings.advisor_executioner_codex_mode = settings.codex_mode;
-            settings.advisor_executioner_codex_model = settings.codex_model;
-            settings.advisor_executioner_codex_effort = settings.codex_effort;
-        }
-        _ => {
-            settings.advisor_executioner_engine = 0;
-            settings.advisor_executioner_claude_mode = settings.claude_mode;
-            settings.advisor_executioner_claude_model = settings.claude_model;
-            settings.advisor_executioner_claude_effort = settings.claude_effort;
-        }
-    }
+    settings.advisor_executioner_engine = 0;
+    settings.advisor_executioner_codex_mode = settings.codex_mode;
+    settings.advisor_executioner_codex_model = settings.codex_model;
+    settings.advisor_executioner_codex_effort = settings.codex_effort;
     settings.advisor_advisor_engine = 0;
-    settings.advisor_advisor_claude_mode = 0;
-    settings.advisor_advisor_claude_model = 0;
-    settings.advisor_advisor_claude_effort = 3;
     settings.advisor_advisor_codex_mode = 0;
     settings.advisor_advisor_codex_model = 0;
     settings.advisor_advisor_codex_effort = 3;
@@ -1979,7 +1769,7 @@ fn spawn_selected_project_prompt(state: &mut AgentOsState, text: &str) -> Result
     let engine = DEFAULT_ENGINES
         .get(state.settings.default_engine)
         .copied()
-        .unwrap_or("claude");
+        .unwrap_or("codex");
     if state.settings.advisor_enabled {
         initialize_advisor_defaults(&mut state.settings);
         save_settings(state)?;
@@ -2401,7 +2191,7 @@ fn format_runtime_status(data: &Value) -> String {
 }
 
 fn use_text() -> &'static str {
-    "Operator commands:\n\n/spawn <shell command>\n/claude <prompt>\n/codex <prompt>\n/cowork <prompt>\n/project or /projects status|list|add|create|use\n/bootstrap <action> [engine]\n/dispatch start --type wave --layout grid <brief>\n/dispatch list|status|crafted|accept|reject\n/move [session] <lane>\n/lane <key> <title>\n/broadcast <message>\n/notify <title>\n/stop [session]\n/hard-kill [session]\n/delete [session]\n/search <text>\n/power tado-power\n/shutdown\n/help\n\nPages:\nShift+1..7 jumps to a page. Tab and Shift-Tab move through pages.\nType / to open commands. Up/Down chooses a command. Enter completes it.\nPgUp/PgDn and Ctrl-U/Ctrl-D scroll. End follows the selected transcript.\nShift+X deletes the selected runtime session.\n\nProject workflow:\nOn Projects, Up/Down selects a project. Space makes it active.\nTyping normal prompt text on Projects spawns the default agent directly in the selected project. If Advisor mode is on, it spawns an executioner plus an advisor instead.\nPlain paths like Documents/app, downloads/app, or my-app resolve from your home folder.\n\nSettings:\nUp/Down selects a setting. Space or Right advances it. Left moves backward.\nEngine, model, effort, permission mode, Advisor role profiles, terminal display, board, events, and project prompt behavior are all changed here.\n\nPrompt behavior:\nOn Work and Mux, normal prompt text goes to the selected live PTY.\nOn a Dispatch or Eternal row, normal prompt text accepts or continues that workflow."
+    "Operator commands:\n\n/spawn <shell command>\n/codex <prompt>\n/project or /projects status|list|add|create|use\n/bootstrap <action> [engine]\n/dispatch start --type wave --layout grid <brief>\n/dispatch list|status|crafted|accept|reject\n/move [session] <lane>\n/lane <key> <title>\n/broadcast <message>\n/notify <title>\n/stop [session]\n/hard-kill [session]\n/delete [session]\n/search <text>\n/power tado-power\n/shutdown\n/help\n\nPages:\nShift+1..7 jumps to a page. Tab and Shift-Tab move through pages.\nType / to open commands. Up/Down chooses a command. Enter completes it.\nPgUp/PgDn and Ctrl-U/Ctrl-D scroll. End follows the selected transcript.\nShift+X deletes the selected runtime session.\n\nProject workflow:\nOn Projects, Up/Down selects a project. Space makes it active.\nTyping normal prompt text on Projects spawns the default Codex agent directly in the selected project. If Advisor mode is on, it spawns a Codex executioner plus a Codex advisor instead.\nPlain paths like Documents/app, downloads/app, or my-app resolve from your home folder.\n\nSettings:\nUp/Down selects a setting. Space or Right advances it. Left moves backward.\nCodex model, effort, permission mode, account label, Advisor role profiles, terminal display, board, events, and project prompt behavior are all changed here.\n\nPrompt behavior:\nOn Work and Mux, normal prompt text goes to the selected live PTY.\nOn a Dispatch or Eternal row, normal prompt text accepts or continues that workflow."
 }
 
 fn format_projects(data: &Value) -> String {
@@ -2442,7 +2232,7 @@ fn format_projects(data: &Value) -> String {
 }
 
 fn setting_count() -> usize {
-    34
+    25
 }
 
 fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
@@ -2452,15 +2242,6 @@ fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
             "Project prompt agent",
             option_label(ENGINE_LABELS, settings.default_engine),
         ),
-        setting_line("Claude mode", CLAUDE_MODES[settings.claude_mode].0),
-        setting_line("Claude model", CLAUDE_MODELS[settings.claude_model].0),
-        setting_line("Claude effort", CLAUDE_EFFORTS[settings.claude_effort].0),
-        setting_line("Claude no-flicker UI", on_off(settings.claude_no_flicker)),
-        setting_line("Claude mouse", on_off(settings.claude_mouse_enabled)),
-        setting_line(
-            "Claude scroll speed",
-            settings.claude_scroll_speed.to_string(),
-        ),
         setting_line("Codex mode", CODEX_MODES[settings.codex_mode].0),
         setting_line("Codex model", CODEX_MODELS[settings.codex_model].0),
         setting_line("Codex effort", CODEX_EFFORTS[settings.codex_effort].0),
@@ -2468,23 +2249,8 @@ fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
             "Codex alternate screen",
             on_off(settings.codex_alternate_screen),
         ),
-        setting_line(
-            "Cowork mode",
-            option_label(COWORK_MODES, settings.cowork_mode),
-        ),
-        setting_line(
-            "Cowork model",
-            option_label(COWORK_MODELS, settings.cowork_model),
-        ),
-        setting_line(
-            "Cowork effort",
-            option_label(COWORK_EFFORTS, settings.cowork_effort),
-        ),
+        setting_line("Codex account", settings.codex_account_label.clone()),
         setting_line("Advisor mode", on_off(settings.advisor_enabled)),
-        setting_line(
-            "Executioner engine",
-            option_label(ADVISOR_ENGINE_LABELS, settings.advisor_executioner_engine),
-        ),
         setting_line(
             "Executioner permission",
             advisor_permission_label(settings, AdvisorRole::Executioner),
@@ -2496,10 +2262,6 @@ fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
         setting_line(
             "Executioner effort",
             advisor_effort_label(settings, AdvisorRole::Executioner),
-        ),
-        setting_line(
-            "Advisor engine",
-            option_label(ADVISOR_ENGINE_LABELS, settings.advisor_advisor_engine),
         ),
         setting_line(
             "Advisor permission",
@@ -2535,6 +2297,7 @@ fn setting_lines(state: &AgentOsState) -> Vec<Line<'static>> {
             on_off(settings.follow_transcript),
         ),
         setting_line("Compact Kanban cards", on_off(settings.compact_board)),
+        setting_line("Show done cards", on_off(settings.show_done_cards)),
         setting_line(
             "Events view",
             if settings.human_events {
@@ -2563,53 +2326,33 @@ fn option_label(options: &[&str], selected: usize) -> String {
 }
 
 fn advisor_permission_label(settings: &UiSettings, role: AdvisorRole) -> String {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "codex") => CODEX_MODES[settings.advisor_executioner_codex_mode]
+    match role {
+        AdvisorRole::Executioner => CODEX_MODES[settings.advisor_executioner_codex_mode]
             .0
             .to_string(),
-        (AdvisorRole::Advisor, "codex") => CODEX_MODES[settings.advisor_advisor_codex_mode]
-            .0
-            .to_string(),
-        (AdvisorRole::Executioner, _) => CLAUDE_MODES[settings.advisor_executioner_claude_mode]
-            .0
-            .to_string(),
-        (AdvisorRole::Advisor, _) => CLAUDE_MODES[settings.advisor_advisor_claude_mode]
+        AdvisorRole::Advisor => CODEX_MODES[settings.advisor_advisor_codex_mode]
             .0
             .to_string(),
     }
 }
 
 fn advisor_model_label(settings: &UiSettings, role: AdvisorRole) -> String {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "codex") => CODEX_MODELS
-            [settings.advisor_executioner_codex_model]
+    match role {
+        AdvisorRole::Executioner => CODEX_MODELS[settings.advisor_executioner_codex_model]
             .0
             .to_string(),
-        (AdvisorRole::Advisor, "codex") => CODEX_MODELS[settings.advisor_advisor_codex_model]
-            .0
-            .to_string(),
-        (AdvisorRole::Executioner, _) => CLAUDE_MODELS[settings.advisor_executioner_claude_model]
-            .0
-            .to_string(),
-        (AdvisorRole::Advisor, _) => CLAUDE_MODELS[settings.advisor_advisor_claude_model]
+        AdvisorRole::Advisor => CODEX_MODELS[settings.advisor_advisor_codex_model]
             .0
             .to_string(),
     }
 }
 
 fn advisor_effort_label(settings: &UiSettings, role: AdvisorRole) -> String {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "codex") => CODEX_EFFORTS
-            [settings.advisor_executioner_codex_effort]
+    match role {
+        AdvisorRole::Executioner => CODEX_EFFORTS[settings.advisor_executioner_codex_effort]
             .0
             .to_string(),
-        (AdvisorRole::Advisor, "codex") => CODEX_EFFORTS[settings.advisor_advisor_codex_effort]
-            .0
-            .to_string(),
-        (AdvisorRole::Executioner, _) => CLAUDE_EFFORTS[settings.advisor_executioner_claude_effort]
-            .0
-            .to_string(),
-        (AdvisorRole::Advisor, _) => CLAUDE_EFFORTS[settings.advisor_advisor_claude_effort]
+        AdvisorRole::Advisor => CODEX_EFFORTS[settings.advisor_advisor_codex_effort]
             .0
             .to_string(),
     }
@@ -2636,95 +2379,52 @@ fn adjust_setting(state: &mut AgentOsState, delta: isize) {
                 cycle_index(state.settings.default_engine, DEFAULT_ENGINES.len(), delta);
         }
         1 => {
-            state.settings.claude_mode =
-                cycle_index(state.settings.claude_mode, CLAUDE_MODES.len(), delta);
-        }
-        2 => {
-            state.settings.claude_model =
-                cycle_index(state.settings.claude_model, CLAUDE_MODELS.len(), delta);
-        }
-        3 => {
-            state.settings.claude_effort =
-                cycle_index(state.settings.claude_effort, CLAUDE_EFFORTS.len(), delta);
-        }
-        4 => {
-            state.settings.claude_no_flicker = !state.settings.claude_no_flicker;
-        }
-        5 => {
-            state.settings.claude_mouse_enabled = !state.settings.claude_mouse_enabled;
-        }
-        6 => adjust_u8(&mut state.settings.claude_scroll_speed, delta, 1, 20),
-        7 => {
             state.settings.codex_mode =
                 cycle_index(state.settings.codex_mode, CODEX_MODES.len(), delta);
         }
-        8 => {
+        2 => {
             state.settings.codex_model =
                 cycle_index(state.settings.codex_model, CODEX_MODELS.len(), delta);
         }
-        9 => {
+        3 => {
             state.settings.codex_effort =
                 cycle_index(state.settings.codex_effort, CODEX_EFFORTS.len(), delta);
         }
-        10 => state.settings.codex_alternate_screen = !state.settings.codex_alternate_screen,
-        11 => {
-            state.settings.cowork_mode =
-                cycle_index(state.settings.cowork_mode, COWORK_MODES.len(), delta);
-        }
-        12 => {
-            state.settings.cowork_model =
-                cycle_index(state.settings.cowork_model, COWORK_MODELS.len(), delta);
-        }
-        13 => {
-            state.settings.cowork_effort =
-                cycle_index(state.settings.cowork_effort, COWORK_EFFORTS.len(), delta);
-        }
-        14 => {
+        4 => state.settings.codex_alternate_screen = !state.settings.codex_alternate_screen,
+        5 => {}
+        6 => {
             state.settings.advisor_enabled = !state.settings.advisor_enabled;
             if state.settings.advisor_enabled {
                 initialize_advisor_defaults(&mut state.settings);
             }
         }
-        15 => {
-            state.settings.advisor_executioner_engine = cycle_index(
-                state.settings.advisor_executioner_engine,
-                ADVISOR_ENGINES.len(),
-                delta,
-            );
-        }
-        16 => adjust_advisor_permission(&mut state.settings, AdvisorRole::Executioner, delta),
-        17 => adjust_advisor_model(&mut state.settings, AdvisorRole::Executioner, delta),
-        18 => adjust_advisor_effort(&mut state.settings, AdvisorRole::Executioner, delta),
-        19 => {
-            state.settings.advisor_advisor_engine = cycle_index(
-                state.settings.advisor_advisor_engine,
-                ADVISOR_ENGINES.len(),
-                delta,
-            );
-        }
-        20 => adjust_advisor_permission(&mut state.settings, AdvisorRole::Advisor, delta),
-        21 => adjust_advisor_model(&mut state.settings, AdvisorRole::Advisor, delta),
-        22 => adjust_advisor_effort(&mut state.settings, AdvisorRole::Advisor, delta),
-        23 => state.settings.random_tile_color = !state.settings.random_tile_color,
-        24 => {
+        7 => adjust_advisor_permission(&mut state.settings, AdvisorRole::Executioner, delta),
+        8 => adjust_advisor_model(&mut state.settings, AdvisorRole::Executioner, delta),
+        9 => adjust_advisor_effort(&mut state.settings, AdvisorRole::Executioner, delta),
+        10 => adjust_advisor_permission(&mut state.settings, AdvisorRole::Advisor, delta),
+        11 => adjust_advisor_model(&mut state.settings, AdvisorRole::Advisor, delta),
+        12 => adjust_advisor_effort(&mut state.settings, AdvisorRole::Advisor, delta),
+        13 => state.settings.random_tile_color = !state.settings.random_tile_color,
+        14 => {
             state.settings.default_theme =
                 cycle_index(state.settings.default_theme, THEMES.len(), delta);
         }
-        25 => adjust_u8(&mut state.settings.terminal_font_size, delta, 9, 24),
-        26 => state.settings.cursor_blink = !state.settings.cursor_blink,
-        27 => {
+        15 => adjust_u8(&mut state.settings.terminal_font_size, delta, 9, 24),
+        16 => state.settings.cursor_blink = !state.settings.cursor_blink,
+        17 => {
             state.settings.bell_mode =
                 cycle_index(state.settings.bell_mode, BELL_MODES.len(), delta)
         }
-        28 => adjust_u8(&mut state.settings.grid_columns, delta, 1, 8),
-        29 => state.settings.code_indexing_enabled = !state.settings.code_indexing_enabled,
-        30 => state.settings.auto_activate_project = !state.settings.auto_activate_project,
-        31 => {
+        18 => adjust_u8(&mut state.settings.grid_columns, delta, 1, 8),
+        19 => state.settings.code_indexing_enabled = !state.settings.code_indexing_enabled,
+        20 => state.settings.auto_activate_project = !state.settings.auto_activate_project,
+        21 => {
             state.settings.follow_transcript = !state.settings.follow_transcript;
             state.follow_output = state.settings.follow_transcript;
         }
-        32 => state.settings.compact_board = !state.settings.compact_board,
-        33 => state.settings.human_events = !state.settings.human_events,
+        22 => state.settings.compact_board = !state.settings.compact_board,
+        23 => state.settings.show_done_cards = !state.settings.show_done_cards,
+        24 => state.settings.human_events = !state.settings.human_events,
         _ => {}
     }
     let line = setting_lines(state)
@@ -2743,32 +2443,18 @@ fn adjust_setting(state: &mut AgentOsState, delta: isize) {
 }
 
 fn adjust_advisor_permission(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "codex") => {
+    match role {
+        AdvisorRole::Executioner => {
             settings.advisor_executioner_codex_mode = cycle_index(
                 settings.advisor_executioner_codex_mode,
                 CODEX_MODES.len(),
                 delta,
             );
         }
-        (AdvisorRole::Advisor, "codex") => {
+        AdvisorRole::Advisor => {
             settings.advisor_advisor_codex_mode = cycle_index(
                 settings.advisor_advisor_codex_mode,
                 CODEX_MODES.len(),
-                delta,
-            );
-        }
-        (AdvisorRole::Executioner, _) => {
-            settings.advisor_executioner_claude_mode = cycle_index(
-                settings.advisor_executioner_claude_mode,
-                CLAUDE_MODES.len(),
-                delta,
-            );
-        }
-        (AdvisorRole::Advisor, _) => {
-            settings.advisor_advisor_claude_mode = cycle_index(
-                settings.advisor_advisor_claude_mode,
-                CLAUDE_MODES.len(),
                 delta,
             );
         }
@@ -2776,32 +2462,18 @@ fn adjust_advisor_permission(settings: &mut UiSettings, role: AdvisorRole, delta
 }
 
 fn adjust_advisor_model(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "codex") => {
+    match role {
+        AdvisorRole::Executioner => {
             settings.advisor_executioner_codex_model = cycle_index(
                 settings.advisor_executioner_codex_model,
                 CODEX_MODELS.len(),
                 delta,
             );
         }
-        (AdvisorRole::Advisor, "codex") => {
+        AdvisorRole::Advisor => {
             settings.advisor_advisor_codex_model = cycle_index(
                 settings.advisor_advisor_codex_model,
                 CODEX_MODELS.len(),
-                delta,
-            );
-        }
-        (AdvisorRole::Executioner, _) => {
-            settings.advisor_executioner_claude_model = cycle_index(
-                settings.advisor_executioner_claude_model,
-                CLAUDE_MODELS.len(),
-                delta,
-            );
-        }
-        (AdvisorRole::Advisor, _) => {
-            settings.advisor_advisor_claude_model = cycle_index(
-                settings.advisor_advisor_claude_model,
-                CLAUDE_MODELS.len(),
                 delta,
             );
         }
@@ -2809,32 +2481,18 @@ fn adjust_advisor_model(settings: &mut UiSettings, role: AdvisorRole, delta: isi
 }
 
 fn adjust_advisor_effort(settings: &mut UiSettings, role: AdvisorRole, delta: isize) {
-    match (role, advisor_engine(settings, role)) {
-        (AdvisorRole::Executioner, "codex") => {
+    match role {
+        AdvisorRole::Executioner => {
             settings.advisor_executioner_codex_effort = cycle_index(
                 settings.advisor_executioner_codex_effort,
                 CODEX_EFFORTS.len(),
                 delta,
             );
         }
-        (AdvisorRole::Advisor, "codex") => {
+        AdvisorRole::Advisor => {
             settings.advisor_advisor_codex_effort = cycle_index(
                 settings.advisor_advisor_codex_effort,
                 CODEX_EFFORTS.len(),
-                delta,
-            );
-        }
-        (AdvisorRole::Executioner, _) => {
-            settings.advisor_executioner_claude_effort = cycle_index(
-                settings.advisor_executioner_claude_effort,
-                CLAUDE_EFFORTS.len(),
-                delta,
-            );
-        }
-        (AdvisorRole::Advisor, _) => {
-            settings.advisor_advisor_claude_effort = cycle_index(
-                settings.advisor_advisor_claude_effort,
-                CLAUDE_EFFORTS.len(),
                 delta,
             );
         }
@@ -3175,18 +2833,16 @@ mod tests {
         assert_eq!(settings.advisor_executioner_codex_mode, 1);
         assert_eq!(settings.advisor_executioner_codex_model, 2);
         assert_eq!(settings.advisor_executioner_codex_effort, 3);
-        assert_eq!(advisor_engine(&settings, AdvisorRole::Advisor), "claude");
+        assert_eq!(advisor_engine(&settings, AdvisorRole::Advisor), "codex");
     }
 
     #[test]
     fn advisor_role_flags_use_role_profile() {
         let settings = UiSettings {
-            advisor_executioner_engine: 1,
             advisor_executioner_codex_model: 0,
             advisor_executioner_codex_effort: 3,
-            advisor_advisor_engine: 0,
-            advisor_advisor_claude_model: 0,
-            advisor_advisor_claude_effort: 3,
+            advisor_advisor_codex_model: 1,
+            advisor_advisor_codex_effort: 2,
             ..UiSettings::default()
         };
         let exec_flags = spawn_flags_for_advisor_role(&settings, AdvisorRole::Executioner);
@@ -3195,17 +2851,8 @@ mod tests {
         assert!(exec_flags.contains(&"model_reasoning_effort=\"high\"".to_string()));
 
         let advisor_flags = spawn_flags_for_advisor_role(&settings, AdvisorRole::Advisor);
-        assert_eq!(
-            advisor_flags,
-            vec![
-                "--permission-mode".to_string(),
-                "default".to_string(),
-                "--model".to_string(),
-                "claude-opus-4-7".to_string(),
-                "--effort".to_string(),
-                "high".to_string(),
-            ]
-        );
+        assert!(advisor_flags.contains(&"model=\"gpt-5.4\"".to_string()));
+        assert!(advisor_flags.contains(&"model_reasoning_effort=\"medium\"".to_string()));
     }
 
     #[test]

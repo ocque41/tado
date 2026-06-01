@@ -1,131 +1,108 @@
 # Tado
 
-A macOS app that turns your todo list into a terminal multiplexer for AI coding agents.
+Tado is a Codex-first terminal Agent OS for macOS.
 
-[![Swift 5.10+](https://img.shields.io/badge/Swift-5.10+-F05138.svg)](https://swift.org)
-[![macOS 14+](https://img.shields.io/badge/macOS-14+-000000.svg)](https://www.apple.com/macos)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+The public terminal package is `@tt0/tado`. It ships prebuilt Rust binaries,
+starts a local profile daemon, and gives Codex a terminal workspace with
+sessions, transcripts, projects, Kanban, events, and MCP/A2A tools.
 
-<!-- Add a screenshot: ![Tado Screenshot](docs/screenshot.png) -->
+```bash
+npx @tt0/tado
+# or
+npm install -g @tt0/tado
+tado
+```
 
-## What It Does
+## Terminal Agent OS
 
-Type a task, press Enter, and Tado spawns a terminal running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/openai-codex/) with your task as the prompt. Every terminal lives as a tile on a pannable, zoomable canvas. Agents can even message each other through a built-in IPC system.
+- `codex` is the only public AI provider in the terminal package.
+- `shell` and `raw` remain terminal utility session kinds.
+- Agent definitions are read from `.codex/agents/`.
+- Runtime profiles keep non-secret provider preferences: model, reasoning
+  effort, permission mode, alternate-screen behavior, and account label.
+- The default account label is `default` and uses the user's existing Codex CLI
+  authentication. Tado does not store Codex tokens.
+- Rust `tado-mcp` is the release MCP bridge. The legacy Node MCP package is
+  private/reference-only.
 
-## Features
+The npm package installs:
 
-- **Projects** -- organize todos under a directory; agents are auto-discovered from `.claude/agents/` and `.codex/agents/`
-- **Teams** -- group agents into named teams for coordinated multi-agent work
-- **Dispatch Architect** -- write a markdown brief and an architect agent designs a multi-phase plan, creates per-phase skills, and auto-chains the execution
-- **Model selection** -- pick the exact Claude or Codex model per session (Opus 4.6, Sonnet 4.6, Haiku 4.5, GPT-5.4, GPT-5.3-Codex, etc.)
-- **Random tile colors** -- 15 curated terminal themes (Claude, macOS classics, Solarized, Dracula, Nord, Monokai, Tokyo Night, Gruvbox)
-- **Harness display knobs** -- Claude no-flicker mode, mouse, scroll speed; Codex alt-screen toggle
-- **Todo-driven terminal spawning** -- one terminal per task, powered by the AI agent of your choice
-- **Pannable/zoomable canvas** -- drag, scroll, and zoom across all your running agents
-- **Resizable and moveable tiles** -- drag edges to resize, drag title bar to reposition
-- **Claude Code and Codex support** -- switch engines from Settings
-- **Mode and effort settings** -- configure permission mode and thinking/reasoning effort per engine
-- **Prompt queueing** -- queue follow-up prompts that auto-send when the agent goes idle
-- **MCP Server** -- `tado-mcp` exposes A2A tools to any MCP-compatible AI agent; auto-registered on launch
-- **Agent-to-agent IPC** -- agents can discover peers, read output, broadcast, and send messages via CLI tools
-- **Pub/sub topics** -- `tado-publish`, `tado-subscribe`, `tado-unsubscribe` for topic-based messaging
-- **Project bootstrap** -- one-click injection of A2A docs and team structure into any project's CLAUDE.md/AGENTS.md
-- **`tado-deploy`** -- agents can spawn other agents on the canvas programmatically; engine auto-detected from agent source
-- **Multiline input with renaming** -- grow-to-fit editor with Cmd+Enter submit; right-click todos to rename
-- **External CLI tools** -- message any Tado session from an outside terminal
-- **Forward mode** -- route your next typed input directly into a specific terminal
-- **Done and Trash lists** -- move completed or discarded todos out of the main list
-- **Activity detection** -- cursor monitoring detects when an agent is idle (5-second threshold)
-- **Persistent state** -- todos, projects, teams, and settings survive restarts via SwiftData
-- **Session sidebar** -- live status indicators for all running sessions
+```text
+tado
+tadod
+tado-list
+tado-read
+tado-send
+tado-events
+tado-deploy
+tado-bootstrap
+tado-kanban
+tado-eternal
+tado-dispatch
+tado-mcp
+tado-projects
+tado-system
+```
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later
-- Swift 5.10+ / Xcode 15.3+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI and/or [Codex](https://github.com/openai/codex) CLI installed and available on your `PATH`
+- macOS 14 or later.
+- Node.js 18 or later for the npm launcher.
+- Rust stable for source builds.
+- Swift 5.10+ / Xcode 15.3+ for the desktop app.
+- Codex CLI installed and authenticated for Codex sessions.
 
-## Building
+## Build From Source
 
 ```bash
 git clone https://github.com/ocque41/tado.git
 cd tado
 swift build
-swift run Tado
+cd tado-core && cargo test -p tado-runtime -p tado-cli -p tado-mcp
 ```
 
-No Xcode project is included. The project uses Swift Package Manager as its build system. You can also open `Package.swift` directly in Xcode.
+Build release binaries for the npm package:
 
-## Usage
-
-1. Launch Tado and type a task in the input field (multiline supported, grows up to 8 lines)
-2. Press **Cmd+Enter** (`⌘↩`) -- a terminal tile spawns on the canvas with your AI agent working on it
-3. Press **Ctrl+Tab** to cycle between Todos, Canvas, Projects, and Teams
-4. **Shift+Scroll** to zoom the canvas, **Scroll** to pan
-5. Click the arrow icon on a todo row to enter **forward mode** (your next input goes to that terminal)
-6. Press **Cmd+B** to open the sidebar and see all session statuses
-7. Press **Cmd+M** to open Settings and change the AI engine or grid layout
-
-### IPC (Inter-Process Communication)
-
-Agents running inside Tado can communicate with each other:
-
-| Command | Description |
-|---------|-------------|
-| `tado-list [--project X] [--team Y]` | List all peer sessions, optionally filtered by project or team |
-| `tado-read <target> [--tail N] [--follow] [--raw]` | Read terminal output from a session |
-| `tado-send [--project X] <target> <message>` | Send a message to another session (by name, grid coords like `1,1`, or UUID) |
-| `tado-deploy "<prompt>" [--agent N] [--team T] [--project P] [--engine E] [--cwd D]` | Spawn a new agent session on the canvas |
-| `tado-broadcast [--project X] [--team Y] <message>` | Send a message to all matching sessions |
-| `tado-recv [--wait]` | Read messages from the inbox (`--wait` polls for up to 30 seconds) |
-| `tado-publish <topic> <message>` | Publish a message to a topic |
-| `tado-subscribe <topic>` | Subscribe the current session to a topic |
-| `tado-unsubscribe <topic>` | Unsubscribe from a topic |
-| `tado-topics` | List all active topics and their subscribers |
-| `tado-team` | List teammates in the current session's team |
-
-From **any external terminal**, CLI tools are installed to `~/.local/bin`. The **tado-mcp** MCP server is also auto-registered so MCP-compatible agents can use Tado tools natively.
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| Cmd+Enter | Submit todo / send message |
-| Right-click on todo | Context menu (Rename, Mark as Done, Move to Trash) |
-| Ctrl+Tab | Cycle through Todos, Canvas, Projects, Teams |
-| Cmd+M | Open Settings |
-| Cmd+B | Toggle Sidebar |
-| Cmd+D | Done list |
-| Cmd+T | Trash list |
-| Shift+Scroll | Zoom canvas |
-| Scroll | Pan canvas |
-
-## Architecture
-
-```
-tado-mcp/         TypeScript MCP server (list, read, send, broadcast tools)
-Sources/Tado/
-  App/          TadoApp (entry point), AppState (UI state)
-  Models/       TodoItem, TerminalSession, AppSettings, CanvasLayout, IPCMessage, Project, Team, AgentDefinition, TerminalTheme
-  Services/     TerminalManager, ProcessSpawner, IPCBroker, AgentDiscoveryService, DispatchPlanService
-  Views/        ContentView, TodoListView, DoneListView, TrashListView, CanvasView, ProjectsView, TeamsView, TerminalTileView, SidebarView, SettingsView, DispatchFileModal
+```bash
+cd tado-core
+cargo build --release -p tado-runtime --bin tadod -p tado-cli --bins -p tado-mcp --bin tado-mcp
+cargo build --release --target x86_64-apple-darwin -p tado-runtime --bin tadod -p tado-cli --bins -p tado-mcp --bin tado-mcp
 ```
 
-**State management**: `AppState` and `TerminalManager` are `@Observable` singletons injected via SwiftUI environment. `SwiftData` persists `TodoItem`, `Project`, `Team`, and `AppSettings`.
+## Runtime Basics
 
-**Terminal bridge**: `TerminalNSViewRepresentable` wraps [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)'s `LocalProcessTerminalView` into SwiftUI. All four page views stay mounted simultaneously via opacity toggling, so terminal processes are never destroyed when switching views.
+```bash
+tado --help
+tado daemon status
+tado project add ~/Code/my-app --name my-app
+tado project use my-app
+tado spawn --engine codex "implement the next task"
+tado list
+tado read <session>
+tado send <session> "follow-up prompt"
+```
 
-**Agent discovery**: `AgentDiscoveryService` scans a project's `.claude/agents/` and `.codex/agents/` directories for `.md` agent definition files, making them available for team assignment and todo routing.
+In the TUI:
 
-**Dispatch Architect**: `DispatchPlanService` orchestrates the multi-phase planning workflow. The architect agent reads `.tado/dispatch/dispatch.md`, designs phases, creates per-phase skills, writes `plan.json` and `phases/<order>-<id>.json`, and injects "Dispatch System" awareness into the project's CLAUDE.md/AGENTS.md. Phase agents auto-chain to the next via `tado-deploy`.
+- `/codex <prompt>` spawns a Codex session.
+- `/spawn <command>` spawns a shell utility PTY.
+- `/project` and `/projects` manage profile projects.
+- `Shift+X` kills and deletes the selected runtime session.
+- Settings is an interactive list, not raw JSON.
 
-**IPC**: `IPCBroker` manages a file-based message queue under `/tmp/tado-ipc-<pid>/` with per-session inboxes, outboxes, and a pub/sub topics directory, watched via `DispatchSource`.
+## Repository Map
 
-**MCP Server**: `tado-mcp/` is a TypeScript MCP server built on `@modelcontextprotocol/sdk` that exposes `tado_list`, `tado_read`, `tado_send`, and `tado_broadcast` as MCP tools. Auto-registered in `~/.claude.json` on app launch.
+- `npm/tado/` - public npm package for `@tt0/tado`.
+- `tado-core/crates/tado-runtime/` - profile daemon, runtime protocol, SQLite
+  session/transcript store, PTY ownership, and Agent OS API.
+- `tado-core/crates/tado-cli/` - `tado`, helper CLIs, workflow CLIs, and TUI.
+- `tado-core/crates/tado-mcp/` - Rust MCP bridge for runtime A2A tools.
+- `tado-core/crates/bt-core/` and `dome-mcp/` - Dome knowledge backend.
+- `Sources/Tado/` - macOS SwiftUI desktop app.
 
-## Contributing
+## Release Notes
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CHANGELOG.md](CHANGELOG.md) and [npm/tado/CHANGELOG.md](npm/tado/CHANGELOG.md).
 
 ## License
 

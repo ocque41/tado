@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| `@tt0/tado` 0.3.x | Yes |
+| 0.1.x   | No        |
 
 ## Reporting a Vulnerability
 
@@ -18,7 +19,8 @@ You should receive an acknowledgment within 7 days. We will work with you to und
 
 ## Scope
 
-This policy covers the Tado macOS application itself. It does **not** cover the third-party CLI tools it invokes (Claude Code, Codex) or their respective APIs.
+This policy covers Tado, including the `@tt0/tado` terminal package and the
+macOS app. It does **not** cover the third-party Codex CLI or the APIs it uses.
 
 ## IPC Security Note
 

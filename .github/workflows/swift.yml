@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   push:
@@ -7,9 +7,51 @@ on:
     branches: [master]
 
 jobs:
-  build:
+  verify:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: swift build -v
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Rust format
+        run: cd tado-core && cargo fmt --all --check
+
+      - name: Rust terminal tests
+        run: cd tado-core && cargo test -p tado-runtime -p tado-cli -p tado-mcp
+
+      - name: Swift build
+        run: swift build
+
+      - name: Swift tests
+        run: swift test
+
+      - name: npm pack dry run
+        run: cd npm/tado && npm pack --dry-run --json
+
+      - name: Check binary modes
+        run: |
+          bad="$(find npm/tado/prebuilt/darwin-* -type f ! -perm -111 -print)"
+          if [ -n "$bad" ]; then
+            echo "$bad"
+            exit 1
+          fi
+
+      - name: npm tarball smoke
+        run: |
+          set -euo pipefail
+          cd npm/tado
+          tarball="$(npm pack --json | node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(0,"utf8")); console.log(p[0].filename)')"
+          prefix="$(mktemp -d)"
+          npm install --prefix "$prefix" -g "./$tarball"
+          "$prefix/bin/tado" --help
+          "$prefix/bin/tadod" --help
+          "$prefix/bin/tado-mcp" --help || true
+          storage="$(mktemp -d)"
+          TADO_STORAGE_ROOT="$storage" "$prefix/bin/tado" --profile ci daemon start
+          TADO_STORAGE_ROOT="$storage" "$prefix/bin/tado" --profile ci daemon status
+          TADO_STORAGE_ROOT="$storage" "$prefix/bin/tado" --profile ci daemon stop
