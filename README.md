@@ -1,6 +1,8 @@
 # Tado
 
-Tado is a Codex-first terminal Agent OS for macOS.
+1. Desktop application that turns your todo list into a terminal multiplexer of coding agents.
+
+2. Tado `npm i @tt0/tado` is a Codex-first orchestration system
 
 The public terminal package is `@tt0/tado`. It ships prebuilt Rust binaries,
 starts a local profile daemon, and gives Codex a terminal workspace with
